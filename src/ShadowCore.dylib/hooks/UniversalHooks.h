@@ -6,6 +6,27 @@
 
 void shdw_universal_dyld(SHDWHookSession *hooks);
 void shdw_universal_filesystem_c(SHDWHookSession *hooks);
+void shdw_universal_url_resources(SHDWHookSession *hooks);
+void shdw_universal_file_attributes(SHDWHookSession *hooks);
+void shdw_fingerprint_sysctl_value(const char *name, void *value, size_t length, const void *caller);
+struct utsname;
+void shdw_fingerprint_uname_value(struct utsname *value, const void *caller);
+BOOL shdw_fingerprint_sysctl_query(const char *name, void *value, size_t *length,
+    void *newp, size_t newlen, const void *caller, int *result);
+BOOL shdw_fingerprint_sysctl_mib_query(const int *mib, u_int count, void *value, size_t *length,
+    void *newp, size_t newlen, const void *caller, int *result);
+void shdw_universal_fingerprint(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_receipts(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_receipts_prepare(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_interfaces(SHDWHookSession *hooks);
+NSString *shdw_fingerprint_bundle_identifier_for_caller(const void *caller);
+void shdw_universal_fingerprint_prepare(SHDWHookSession *hooks);
+BOOL shdw_fingerprint_is_enabled(void);
+BOOL shdw_fingerprint_app_caller(const void *caller);
+void shdw_universal_fingerprint_webkit_prepare(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_system_version_prepare(SHDWHookSession *hooks);
+void *shdw_sym_policy_lookup_system_version(const char *name);
+void shdw_universal_network_queries(SHDWHookSession *hooks);
 void shdw_universal_envvars_c(SHDWHookSession *hooks);
 void shdw_universal_envpolicy(SHDWHookSession *hooks);
 void shdw_universal_nsprocessinfo(SHDWHookSession *hooks);

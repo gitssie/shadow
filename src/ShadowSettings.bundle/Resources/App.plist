@@ -64,6 +64,24 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>id</key>
+			<string>AppFingerprintGroup</string>
+			<key>footerText</key>
+			<string>FINGERPRINT_REFRESH_DESC</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>id</key>
+			<string>AppRefreshFingerprint</string>
+			<key>label</key>
+			<string>REFRESH_FINGERPRINT</string>
+			<key>action</key>
+			<string>refreshFingerprintData:</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>id</key>
 			<string>AppResetGroup</string>
 		</dict>
 		<dict>

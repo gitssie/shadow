@@ -322,7 +322,10 @@ void SHDWHookMessage(Class objcClass, SEL selector, IMP replacement,
 static BOOL shdw_apply_hook_spec_once(
     const hk_hook_spec_t *spec, void **oldPtr, const char *backendOverride,
     SHDWHKRuntimeCreateWithBackendOverride createWithOverride,
-    BOOL *outCleanRefusal) {
+    BOOL *outCleanRefusal, BOOL *outRetryWithSubsets, BOOL *outCacheScopeUnavailable,
+    hk_runtime_t *borrowedRuntime) {
+  if (outRetryWithSubsets) *outRetryWithSubsets = NO;
+  if (outCacheScopeUnavailable) *outCacheScopeUnavailable = NO;
   if (outCleanRefusal) {
     *outCleanRefusal = NO;
   }
@@ -342,15 +345,16 @@ static BOOL shdw_apply_hook_spec_once(
   config.struct_version = HK_ABI_VERSION_3_0;
   config.install_context = HK_INSTALL_CONTEXT_EARLY_PROCESS;
 
-  hk_runtime_t *runtime = NULL;
+  hk_runtime_t *runtime = borrowedRuntime;
   hk_plan_t *plan = NULL;
   hk_hook_t *hook = NULL;
   hk_report_t *commitReport = NULL;
   BOOL installed = NO;
 
   hk_status_t runtimeStatus =
-      backendOverride ? createWithOverride(&config, backendOverride, &runtime)
-                      : hk_runtime_create(&config, &runtime);
+      borrowedRuntime ? HK_STATUS_OK :
+      (backendOverride ? createWithOverride(&config, backendOverride, &runtime)
+                       : hk_runtime_create(&config, &runtime));
 
   if (runtimeStatus != HK_STATUS_OK || !runtime ||
       hk_plan_create(runtime, NULL, &plan) != HK_STATUS_OK || !plan ||
@@ -420,13 +424,35 @@ static BOOL shdw_apply_hook_spec_once(
   installed = YES;
 
 done:
+  if (!installed && (outRetryWithSubsets || outCacheScopeUnavailable) && hook) {
+    hk_hook_result_t failure;
+    if (hk_hook_copy_result(hook, &failure) == HK_STATUS_OK &&
+        hk_hook_result_refused_cleanly(&failure)) {
+      // Splitting an entirely absent import only repeats the same miss.
+      // Unknown diagnostics still take the safe subset fallback.
+      const char absent[] = "the image imports no such symbol";
+      BOOL missing = failure.error_message.length == sizeof(absent) - 1 &&
+                     failure.error_message.data &&
+                     memcmp(failure.error_message.data, absent, sizeof(absent) - 1) == 0;
+      if (outRetryWithSubsets) *outRetryWithSubsets = !missing;
+      const char sharedScope[] = "shared-cache GOT uses cannot represent the requested caller scope";
+      if (outCacheScopeUnavailable) {
+        *outCacheScopeUnavailable =
+            failure.error_message.length == sizeof(sharedScope) - 1 &&
+            failure.error_message.data &&
+            memcmp(failure.error_message.data, sharedScope, sizeof(sharedScope) - 1) == 0;
+      }
+    }
+  }
   hk_report_release(commitReport);
   hk_plan_release(plan);
-  hk_runtime_release(runtime);
+  if (!borrowedRuntime) hk_runtime_release(runtime);
   return installed;
 }
 
-static BOOL shdw_apply_hook_spec(const hk_hook_spec_t *spec, void **oldPtr) {
+static BOOL shdw_apply_hook_spec_with_subsets(const hk_hook_spec_t *spec, void **oldPtr,
+                                              BOOL *outRetryWithSubsets,
+                                              BOOL *outCacheScopeUnavailable) {
   // An override is strict for its first attempt. A clean refusal proves that
   // no target changed, so Shadow may retry normal automatic routing once.
   SHDWHKRuntimeCreateWithBackendOverride createWithOverride =
@@ -439,14 +465,18 @@ static BOOL shdw_apply_hook_spec(const hk_hook_spec_t *spec, void **oldPtr) {
   // Commit can enter a newly rebound replacement; publish its continuation
   // into caller storage before the first mutation.
   BOOL installed = shdw_apply_hook_spec_once(spec, oldPtr, backendOverride,
-                                             createWithOverride, &cleanRefusal);
+                                             createWithOverride, &cleanRefusal, outRetryWithSubsets, outCacheScopeUnavailable, NULL);
 
   if (!installed && backendOverride && cleanRefusal &&
       spec->target_kind != HK_TARGET_OBJC_METHOD) {
     installed =
-        shdw_apply_hook_spec_once(spec, oldPtr, NULL, createWithOverride, NULL);
+        shdw_apply_hook_spec_once(spec, oldPtr, NULL, createWithOverride, NULL, outRetryWithSubsets, outCacheScopeUnavailable, NULL);
   }
   return installed;
+}
+
+static BOOL shdw_apply_hook_spec(const hk_hook_spec_t *spec, void **oldPtr) {
+  return shdw_apply_hook_spec_with_subsets(spec, oldPtr, NULL, NULL);
 }
 
 static void shdw_init_spec(hk_hook_spec_t *spec, const char *stableID,
@@ -465,6 +495,25 @@ static void shdw_init_spec(hk_hook_spec_t *spec, const char *stableID,
   spec->continuation_policy = HK_CONTINUATION_ANY;
   spec->availability = HK_AVAILABILITY_REQUIRED_NOW;
   spec->role = HK_OPERATION_MANDATORY;
+}
+
+static void shdw_init_rebind_spec(hk_hook_spec_t *spec, NSString *symbolName,
+                                  void *replacement, void **oldPtr) {
+  shdw_init_spec(spec, "shadow.rebind", HK_TARGET_FUNCTION_SYMBOL, replacement,
+                 HK_REACH_EXISTING_IMPORTS,
+                 oldPtr ? HK_ORIGINAL_DIRECT_PREDECESSOR : HK_ORIGINAL_NONE);
+  spec->target.symbol.struct_size = sizeof(spec->target.symbol);
+  spec->target.symbol.struct_version = HK_ABI_VERSION_3_0;
+  spec->target.symbol.name = symbolName.UTF8String;
+  spec->target.symbol.name_convention = [symbolName hasPrefix:@"$s"]
+                                           ? HK_SYMBOL_NAME_SWIFT_MANGLED
+                                           : HK_SYMBOL_NAME_C;
+  spec->target.symbol.defining_image.struct_size = sizeof(spec->target.symbol.defining_image);
+  spec->target.symbol.defining_image.struct_version = HK_ABI_VERSION_3_0;
+  spec->target.symbol.defining_image.kind = HK_IMAGE_ANY_LOADED;
+  spec->target.symbol.caller_image_scope.struct_size = sizeof(spec->target.symbol.caller_image_scope);
+  spec->target.symbol.caller_image_scope.struct_version = HK_ABI_VERSION_3_0;
+  spec->target.symbol.alias_policy = HK_SYMBOL_ALIAS_EXACT_ONLY;
 }
 
 @implementation SHDWHookSession {
@@ -668,27 +717,140 @@ static void shdw_init_spec(hk_hook_spec_t *spec, const char *stableID,
   }
 
   hk_hook_spec_t spec;
-  shdw_init_spec(&spec, "shadow.rebind", HK_TARGET_FUNCTION_SYMBOL, replacement,
-                 HK_REACH_EXISTING_IMPORTS,
-                 oldPtr ? HK_ORIGINAL_DIRECT_PREDECESSOR : HK_ORIGINAL_NONE);
-  spec.target.symbol.struct_size = sizeof(spec.target.symbol);
-  spec.target.symbol.struct_version = HK_ABI_VERSION_3_0;
-  spec.target.symbol.name = symbolName.UTF8String;
-  spec.target.symbol.name_convention = [symbolName hasPrefix:@"$s"]
-                                           ? HK_SYMBOL_NAME_SWIFT_MANGLED
-                                           : HK_SYMBOL_NAME_C;
-  spec.target.symbol.defining_image.struct_size =
-      sizeof(spec.target.symbol.defining_image);
-  spec.target.symbol.defining_image.struct_version = HK_ABI_VERSION_3_0;
-  spec.target.symbol.defining_image.kind = HK_IMAGE_ANY_LOADED;
-  spec.target.symbol.caller_image_scope.struct_size =
-      sizeof(spec.target.symbol.caller_image_scope);
-  spec.target.symbol.caller_image_scope.struct_version = HK_ABI_VERSION_3_0;
+  shdw_init_rebind_spec(&spec, symbolName, replacement, oldPtr);
   spec.target.symbol.caller_image_scope.kind =
       imageHeader ? HK_IMAGE_EXACT_HEADER : HK_IMAGE_ANY_LOADED;
   spec.target.symbol.caller_image_scope.header = imageHeader;
   spec.target.symbol.alias_policy = HK_SYMBOL_ALIAS_EXACT_ONLY;
   return shdw_apply_hook_spec(&spec, oldPtr);
+}
+
+- (BOOL)replayRebindEntries:(const SHDWRebindEntry *)entries
+                     count:(NSUInteger)count
+             inCallerImage:(const void *)imageHeader {
+  if (!imageHeader || (count && !entries) || count > SIZE_MAX / sizeof(*entries)) return NO;
+  if (!count) return YES;
+  SHDWRebindEntry *single = malloc(count * sizeof(*single));
+  if (!single) return NO;
+  for (NSUInteger i = 0; i < count; i++) {
+    single[i] = entries[i];
+    single[i].imageMask = 1;
+  }
+  @try {
+    return [self replayRebindEntries:single count:count inCallerImages:&imageHeader
+                   imageCount:1 cachedMask:0];
+  } @finally {
+    free(single);
+  }
+}
+
+- (BOOL)replayRebindEntries:(const SHDWRebindEntry *)entries
+                     count:(NSUInteger)count
+            inCallerImages:(const void *const *)imageHeaders
+                imageCount:(NSUInteger)imageCount
+                cachedMask:(uint64_t)cachedMask {
+  if (!imageHeaders || !imageCount || imageCount > 64 || (count && !entries)) return NO;
+  for (NSUInteger j = 0; j < imageCount; j++) if (!imageHeaders[j]) return NO;
+  uint64_t validMask = imageCount == 64 ? UINT64_MAX : (UINT64_C(1) << imageCount) - 1;
+  cachedMask &= validMask;
+  BOOL hasWork = NO;
+  for (NSUInteger i = 0; i < count; i++) {
+    uint64_t scope = entries[i].imageMask & validMask;
+    if (entries[i].cacheScopeUnavailable &&
+        __atomic_load_n(entries[i].cacheScopeUnavailable, __ATOMIC_ACQUIRE))
+      scope &= ~cachedMask;
+    if (scope) { hasWork = YES; break; }
+  }
+  if (!hasWork) return YES;
+  hk_runtime_config_t config = {0};
+  config.struct_size = sizeof(config);
+  config.struct_version = HK_ABI_VERSION_3_0;
+  config.install_context = HK_INSTALL_CONTEXT_EARLY_PROCESS;
+  SHDWHKRuntimeCreateWithBackendOverride createWithOverride =
+      (SHDWHKRuntimeCreateWithBackendOverride)dlsym(
+          RTLD_DEFAULT, "hk_runtime_create_with_backend_override");
+  const char *backendOverride = gSHDWBackendOverride[0] && createWithOverride
+      ? gSHDWBackendOverride : NULL;
+  const char *runtimeBackend = backendOverride ?: (createWithOverride ? "fishhook" : NULL);
+  hk_runtime_t *runtime = NULL;
+  hk_status_t status = runtimeBackend
+      ? createWithOverride(&config, runtimeBackend, &runtime)
+      : hk_runtime_create(&config, &runtime);
+  if (status != HK_STATUS_OK || !runtime) {
+    hk_runtime_release(runtime);
+    return NO;
+  }
+  @try {
+    for (NSUInteger i = 0; i < count; i++) {
+      const SHDWRebindEntry *entry = &entries[i];
+      NSString *name = entry->name ? [NSString stringWithUTF8String:entry->name] : nil;
+      if (!name.length || !entry->replacement) continue;
+      uint64_t applicable = entry->imageMask & validMask;
+      BOOL cacheUnavailableKnown = entry->cacheScopeUnavailable &&
+          __atomic_load_n(entry->cacheScopeUnavailable, __ATOMIC_ACQUIRE);
+      if (cacheUnavailableKnown) applicable &= ~cachedMask;
+      if (!applicable) continue;
+      uint64_t subsets[64];
+      size_t pending = 0;
+      subsets[pending++] = applicable;
+      while (pending) {
+        uint64_t scope = subsets[--pending];
+        if (cacheUnavailableKnown) scope &= ~cachedMask;
+        if (!scope) continue;
+        hk_image_selector_t selectors[64];
+        const hk_image_selector_t *set[64];
+        size_t selected = 0;
+        for (NSUInteger j = 0; j < imageCount; j++) {
+          if (!(scope & (UINT64_C(1) << j))) continue;
+          hk_image_selector_t *selector = &selectors[selected];
+          memset(selector, 0, sizeof(*selector));
+          selector->struct_size = sizeof(*selector);
+          selector->struct_version = HK_ABI_VERSION_3_0;
+          selector->kind = HK_IMAGE_EXACT_HEADER;
+          selector->header = imageHeaders[j];
+          set[selected++] = selector;
+        }
+        void **cell = entry->originalCell;
+        if (cell && *cell) cell = NULL;
+        hk_hook_spec_t spec;
+        shdw_init_rebind_spec(&spec, name, entry->replacement, cell);
+        spec.target.symbol.caller_image_scope.kind = HK_IMAGE_EXPLICIT_SET;
+        spec.target.symbol.caller_image_scope.explicit_set = set;
+        spec.target.symbol.caller_image_scope.explicit_set_count = selected;
+        BOOL cleanRefusal = NO, retryWithSubsets = NO, cacheUnavailable = NO;
+        BOOL installed = shdw_apply_hook_spec_once(&spec, cell, backendOverride,
+            createWithOverride, &cleanRefusal, &retryWithSubsets, &cacheUnavailable, runtime);
+        if (!installed && backendOverride && cleanRefusal) {
+          installed = shdw_apply_hook_spec_once(&spec, cell, NULL, createWithOverride,
+              &cleanRefusal, &retryWithSubsets, &cacheUnavailable, NULL);
+        }
+        if (installed || !cleanRefusal) continue;
+        if (cacheUnavailable) {
+          cacheUnavailableKnown = YES;
+          if (entry->cacheScopeUnavailable)
+            __atomic_store_n(entry->cacheScopeUnavailable, YES, __ATOMIC_RELEASE);
+          uint64_t remaining = scope & ~cachedMask;
+          if (remaining != scope) {
+            if (remaining) subsets[pending++] = remaining;
+            continue;
+          }
+        }
+        if (retryWithSubsets && selected > 1) {
+          uint64_t left = 0;
+          size_t kept = 0;
+          for (NSUInteger j = 0; j < imageCount && kept < selected / 2; j++) {
+            uint64_t bit = UINT64_C(1) << j;
+            if (scope & bit) { left |= bit; kept++; }
+          }
+          subsets[pending++] = scope & ~left;
+          subsets[pending++] = left;
+        }
+      }
+    }
+  } @finally {
+    hk_runtime_release(runtime);
+  }
+  return YES;
 }
 
 - (SHDWImageRef)openImage:(NSString *)path {

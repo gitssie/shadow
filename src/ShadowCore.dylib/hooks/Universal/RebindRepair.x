@@ -4,6 +4,7 @@
 #include <mach-o/dyld.h>
 #include <string.h>
 #include <stdlib.h>
+#include "rebind_import_index.h"
 
 // Rebind-spec journal + event-driven repair (anti-fishhook).
 //
@@ -21,10 +22,6 @@
 // no-journal HookKit variant, so an image event never feeds the journal it
 // is repairing (75 specs x N images would otherwise explode it).
 //
-// Triggers (event-only, no timer): dyld add-image (slots sync, image replay
-// async on main when a detector is engaged), detector escalation entry
-// (slots sync), vm_protect-guard deny (trip + coalesced async slots repair).
-
 #define SHDW_REBIND_SPECS_MAX 320
 
 typedef struct {
@@ -33,6 +30,7 @@ typedef struct {
     // Caller-owned original cell, or NULL. Must be process-lifetime: replay
     // dereferences it on later image loads, after the installer returned.
     void** originalCell;
+    BOOL cacheScopeUnavailable;
 } shdw_rebind_spec_t;
 
 static shdw_rebind_spec_t gSHDWRebindSpecs[SHDW_REBIND_SPECS_MAX];
@@ -61,51 +59,69 @@ void SHDWRebindJournalNote(const char* symbolName, void* replacement, void** ori
     if(!copy) {
         return;
     }
-    gSHDWRebindSpecs[count] = (shdw_rebind_spec_t){ copy, replacement, originalCell };
+    gSHDWRebindSpecs[count] = (shdw_rebind_spec_t){ .name = copy,
+        .replacement = replacement, .originalCell = originalCell };
     __atomic_store_n(&gSHDWRebindSpecCount, count + 1, __ATOMIC_RELEASE);
 }
 
-// Scoped replay of one journal entry. Failures are routine (the image does
-// not import the symbol) and stay silent; the global verify pass already
-// covers install-time failures. When no install has established an original,
-// the caller's cell is passed so this first import captures its predecessor;
-// a cell that already holds a live original is left alone.
-static void shdw_rebind_replay_one(SHDWHookSession* session,
-                                   const shdw_rebind_spec_t* spec,
-                                   const void* imageHeader) {
-    NSString* name = [NSString stringWithUTF8String:spec->name];
-    if(!name) {
-        return;
-    }
-    void** cell = spec->originalCell;
-    [session hookRebindSymbol:name
-              withReplacement:spec->replacement
-                     outOldPtr:(cell && *cell == NULL) ? cell : NULL
-                 inCallerImage:imageHeader
-                       journal:NO];
-}
+extern const void *_dyld_get_shared_cache_range(size_t *length)
+    __attribute__((weak_import));
 
-// Exported (like the header declares): late-image validation and the
-// detector-gated loader path both resolve it from outside this image.
-__attribute__((visibility("default")))
-void SHDWRebindRepairImage(SHDWHookSession* session, const void* imageHeader) {
-    if(!session || !imageHeader) {
-        return;
+static BOOL shdw_rebind_replay_images(SHDWHookSession *session,
+    const void *const *headers, size_t imageCount, uint32_t count) {
+    const char *names[SHDW_REBIND_SPECS_MAX];
+    uint64_t imported[64][(SHDW_REBIND_SPECS_MAX + 63) / 64];
+    for(uint32_t i = 0; i < count; i++) names[i] = gSHDWRebindSpecs[i].name;
+    size_t cacheSize = 0;
+    const void *cacheBase = _dyld_get_shared_cache_range
+        ? _dyld_get_shared_cache_range(&cacheSize) : NULL;
+    uint64_t cached = 0;
+    for(size_t j = 0; j < imageCount; j++) {
+        if(cacheBase && (uintptr_t)headers[j] >= (uintptr_t)cacheBase &&
+           (uintptr_t)headers[j] - (uintptr_t)cacheBase < cacheSize)
+            cached |= UINT64_C(1) << j;
+        if(!shdw_rebind_import_mask(headers[j], names, count, imported[j]))
+            for(size_t w = 0; w < (count + 63) / 64; w++) imported[j][w] = UINT64_MAX;
     }
-    uint32_t count = __atomic_load_n(&gSHDWRebindSpecCount, __ATOMIC_ACQUIRE);
-    // Pass 1: the vm_protect import-slot guard first, so the remaining
-    // replay is itself protected against a concurrent unhook. Pass 2:
-    // everything else. (The guard is one symbol; the string compare is free
-    // next to a HookKit commit.)
+    SHDWRebindEntry entries[SHDW_REBIND_SPECS_MAX];
+    size_t selected = 0;
     for(uint32_t pass = 0; pass < 2; pass++) {
         for(uint32_t i = 0; i < count; i++) {
-            BOOL isGuard = strcmp(gSHDWRebindSpecs[i].name, "vm_protect") == 0;
-            if((pass == 0) != isGuard) {
-                continue;
-            }
-            shdw_rebind_replay_one(session, &gSHDWRebindSpecs[i], imageHeader);
+            shdw_rebind_spec_t *spec = &gSHDWRebindSpecs[i];
+            if((pass == 0) != (strcmp(spec->name, "vm_protect") == 0)) continue;
+            uint64_t mask = 0;
+            for(size_t j = 0; j < imageCount; j++)
+                if(imported[j][i / 64] & (UINT64_C(1) << (i % 64))) mask |= UINT64_C(1) << j;
+            if(__atomic_load_n(&spec->cacheScopeUnavailable, __ATOMIC_ACQUIRE)) mask &= ~cached;
+            if(mask) entries[selected++] = (SHDWRebindEntry){spec->name, spec->replacement,
+                spec->originalCell, &spec->cacheScopeUnavailable, mask};
         }
     }
+    return !selected || [session replayRebindEntries:entries count:selected
+        inCallerImages:headers imageCount:imageCount cachedMask:cached];
+}
+
+__attribute__((visibility("default")))
+void SHDWRebindRepairImage(SHDWHookSession* session, const void* imageHeader) {
+    if(!session || !imageHeader) return;
+    uint32_t count = __atomic_load_n(&gSHDWRebindSpecCount, __ATOMIC_ACQUIRE);
+    shdw_rebind_replay_images(session, &imageHeader, 1, count);
+}
+
+void SHDWRebindRepairImages(SHDWHookSession *session,
+    const struct mach_header *const *images, size_t imageCount) {
+    if(!session || !images || !imageCount) return;
+    uint32_t rules = __atomic_load_n(&gSHDWRebindSpecCount, __ATOMIC_ACQUIRE);
+    const void *headers[64];
+    size_t count = 0;
+    for(size_t i = 0; i < imageCount; i++) {
+        if(images[i]) headers[count++] = images[i];
+        if(count == 64) {
+            shdw_rebind_replay_images(session, headers, count, rules);
+            count = 0;
+        }
+    }
+    if(count) shdw_rebind_replay_images(session, headers, count, rules);
 }
 
 static uint32_t gSHDWRepairPending;
@@ -121,28 +137,5 @@ void SHDWRequestRebindRepair(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         __atomic_store_n(&gSHDWRepairPending, 0, __ATOMIC_RELEASE);
         SHDWRebindRepairSlots();
-    });
-}
-
-void SHDWRequestRebindRepairImage(const void* imageHeader) {
-    if(!imageHeader) {
-        return;
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // The image may have unloaded while queued; HookKit on a stale
-        // EXACT_HEADER is at best a refusal, so re-resolve first.
-        BOOL stillMapped = NO;
-        uint32_t n = _dyld_image_count();
-        for(uint32_t i = 0; i < n; i++) {
-            if(_dyld_get_image_header(i) == (const struct mach_header*)imageHeader) {
-                stillMapped = YES;
-                break;
-            }
-        }
-        if(!stillMapped) {
-            return;
-        }
-        SHDWHookSession* session = [SHDWHookCoordinator shdw_sharedHookSession];
-        SHDWRebindRepairImage(session, imageHeader);
     });
 }

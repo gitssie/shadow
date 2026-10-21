@@ -6,7 +6,9 @@
 #import <mach/vm_region.h>
 #import <CoreFoundation/CoreFoundation.h>
 
+#include "ImageHeaderIndex.h"
 static NSMutableArray<NSDictionary *>* _shdw_dyld_collection = nil;
+static shdw_image_header_index_t _shdw_visible_headers = SHDW_IMAGE_HEADER_INDEX_INITIALIZER;
 static NSMutableArray<NSValue *>* _shdw_dyld_add_image = nil;
 static NSMutableArray<NSValue *>* _shdw_dyld_remove_image = nil;
 // TLS loader-error state (plan Wave 1c): cleared at the start of each loader
@@ -1175,10 +1177,35 @@ static void shdw_dyld_set_error(const char* fmt, const char* arg) {
     }
 }
 
+void SHDWRebindRepairImages(SHDWHookSession *, const struct mach_header *const *, size_t);
+static void shdw_dyld_deliver_external(dispatch_block_t callback) {
+    NSUInteger depth = 0;
+    while([Shadow shdwIsInternalRead]) {
+        [Shadow shdwExitInternalRead];
+        depth++;
+    }
+    @try {
+        callback();
+    } @finally {
+        while(depth) {
+            depth--;
+            [Shadow shdwEnterInternalRead];
+        }
+    }
+}
+
+static SHDWHookSession *_shdw_dyld_rebind_session;
+static BOOL _shdw_dyld_bulk_repair_available;
+static BOOL _shdw_dyld_bulk_registration_replay;
+static NSMutableDictionary<NSValue *, NSNumber *> *_shdw_dyld_pending_image_loads;
+
 void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmaddr_slide) {
     if(!mh) {
         return;
     }
+
+    SHDWRebindRepairSlots();
+    NSArray *handlers = nil;
 
     const char* image_path = dyld_image_path_containing_address(mh);
 
@@ -1222,6 +1249,7 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
                 @"mach_header" : [NSValue valueWithPointer:mh],
                 @"slide" : [NSValue valueWithPointer:(void *)vmaddr_slide]
             }];
+            shdw_image_header_index_add(&_shdw_visible_headers, mh);
 
             // Retain the path for the mirror's imageFilePath pointers (the
             // collection may release it again on remove). Capped at
@@ -1238,17 +1266,7 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
                 shadowhook_dyld_rebuild_dyldinfo();
             }
 
-            // Call event handlers.
-            NSArray* _dyld_add_image = [_shdw_dyld_add_image copy];
-
-            if([_dyld_add_image count]) {
-                NSLog(@"dyld: add_image calling handlers");
-
-                for(NSValue* func_ptr in _dyld_add_image) {
-                    void (*func)(const struct mach_header*, intptr_t) = [func_ptr pointerValue];
-                    func(mh, vmaddr_slide);
-                }
-            }
+            handlers = [_shdw_dyld_add_image copy];
         } else if(!_shdw_dyld_replay_in_progress) {
             // dyld republishes its real arrays for every load. Re-apply our
             // unchanged filtered collection when the new image is hidden too.
@@ -1256,16 +1274,19 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
         }
     }
 
-    // Anti-fishhook repair (event-only, no timer). The slot scan is O(slots)
-    // pointer reads — negligible next to the mirror rebuild above — and
-    // reverts any direct-store unhook of an existing rebind. A brand-new
-    // image's own imports are covered by the scoped HookKit replay, but only
-    // once a detector is engaged (normal launches pay nothing): before that
-    // the adapter install-time rebinds stand alone, as before.
-    SHDWRebindRepairSlots();
-    if(shdw_detector_present && !_shdw_dyld_replay_in_progress) {
-        SHDWRequestRebindRepairImage(mh);
+    if(!_shdw_dyld_bulk_repair_available && shdw_detector_present && !_shdw_dyld_replay_in_progress) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
+            SHDWRebindRepairImage(_shdw_dyld_rebind_session, mh);
+        }
     }
+    if(_shdw_dyld_bulk_repair_available) return;
+    shdw_dyld_deliver_external(^{
+        for(NSValue *func_ptr in handlers) {
+            void (*func)(const struct mach_header*, intptr_t) = [func_ptr pointerValue];
+            func(mh, vmaddr_slide);
+        }
+    });
 }
 
 // Forward decl: ObjC unmapped-notifier fan-out (defined with the notifier
@@ -1277,6 +1298,8 @@ void shdw_universal_dyld_updatelibs_r(const struct mach_header* mh, intptr_t vma
     if(!mh) {
         return;
     }
+
+    [_shdw_dyld_pending_image_loads removeObjectForKey:[NSValue valueWithPointer:mh]];
 
     // The dyld image list changed: refresh the app-bundle spans, if this image
     // is one that can change them. On the remove path the image is already
@@ -1313,6 +1336,14 @@ void shdw_universal_dyld_updatelibs_r(const struct mach_header* mh, intptr_t vma
             NSLog(@"%@: %@: %@", @"dyld", @"removing lib", dylibToRemove[@"name"]);
         }
         [_shdw_dyld_collection removeObject:dylibToRemove];
+        // Keep membership equivalent to the authoritative array even if a
+        // repeated notification previously inserted a duplicate header.
+        BOOL headerRemains = NO;
+        for(NSDictionary* remaining in _shdw_dyld_collection) {
+            if([remaining[@"mach_header"] pointerValue] == mh) { headerRemains = YES; break; }
+        }
+        if(!headerRemains) shdw_image_header_index_remove(&_shdw_visible_headers, mh);
+
 
         // Keep dyld_all_image_infos filtered arrays in sync.
         shadowhook_dyld_rebuild_dyldinfo();
@@ -1582,12 +1613,13 @@ static void* replaced_dlsym(void* handle, const char* symbol) {
         }
 
         if(!extra) {
-            extra = shdw_sym_policy_lookup_mem(symbol);
-        }
-
-        if(!extra) {
             extra = shdw_sym_policy_lookup_iokit(symbol);
         }
+
+        if(!extra) extra = shdw_sym_policy_lookup_network(symbol);
+        if(!extra) extra = shdw_sym_policy_lookup_system_version(symbol);
+        if(!extra) extra = shdw_sym_policy_lookup_fingerprint(symbol);
+        if(!extra) extra = shdw_sym_policy_lookup_syscall(symbol);
 
         if(extra) {
             return extra;
@@ -1788,6 +1820,11 @@ static void* shdw_cfbundle_attributed(void* addr, CFStringRef symbolName) {
                 extra = shdw_sym_policy_lookup_iokit(name);
             }
 
+            if(!extra) extra = shdw_sym_policy_lookup_network(name);
+            if(!extra) extra = shdw_sym_policy_lookup_system_version(name);
+            if(!extra) extra = shdw_sym_policy_lookup_fingerprint(name);
+            if(!extra) extra = shdw_sym_policy_lookup_syscall(name);
+
             if(extra) {
                 return extra;
             }
@@ -1858,6 +1895,11 @@ static BOOL shdw_dyld_image_is_hidden(const struct mach_header* mh) {
     if(!mh) {
         return NO;
     }
+
+    // Registration may replay the whole image list. Avoid copying and scanning
+    // that same collection once per callback; preserve the array fallback.
+    int membership = shdw_image_header_index_contains(&_shdw_visible_headers, mh);
+    if(membership >= 0) return membership == 0;
 
     NSArray* _dyld_collection = [_shdw_dyld_collection copy];
 
@@ -2023,20 +2065,30 @@ static void replaced_objc_addLoadImageFunc(shdw_objc_func_load_image func) {
 
 #define SHADOW_MAX_IMAGE_LOAD_CBS 8
 static void (*shdw_image_load_cbs[SHADOW_MAX_IMAGE_LOAD_CBS])(const struct mach_header* mh, const char* path, bool unloadable);
-static void shdw_image_load_handler(const struct mach_header* mh, const char* path, bool unloadable) {
+static void shdw_forward_image_load(const struct mach_header* mh, const char* path, bool unloadable) {
     if(shdw_dyld_image_is_hidden(mh)) {
         return;
     }
 
-    for(int i = 0; i < SHADOW_MAX_IMAGE_LOAD_CBS; i++) {
-        if(shdw_image_load_cbs[i]) {
-            shdw_image_load_cbs[i](mh, path, unloadable);
+    shdw_dyld_deliver_external(^{
+        for(int i = 0; i < SHADOW_MAX_IMAGE_LOAD_CBS; i++) {
+            if(shdw_image_load_cbs[i]) {
+                shdw_image_load_cbs[i](mh, path, unloadable);
+            }
         }
-    }
 
-    // ObjC-mapped notifier fan-out (visible images only — the hidden check
-    // above already excluded protected images).
-    shdw_objc_notify_image(mh, path);
+        // ObjC-mapped notifier fan-out (visible images only — the hidden check
+        // above already excluded protected images).
+        shdw_objc_notify_image(mh, path);
+    });
+}
+static void shdw_image_load_handler(const struct mach_header* mh, const char* path, bool unloadable) {
+    if(_shdw_dyld_bulk_repair_available) {
+        if(!shdw_dyld_image_is_hidden(mh))
+            _shdw_dyld_pending_image_loads[[NSValue valueWithPointer:mh]] = @(unloadable);
+        return;
+    }
+    shdw_forward_image_load(mh, path, unloadable);
 }
 static void (*original_dyld_register_for_image_loads)(void (*func)(const struct mach_header* mh, const char* path, bool unloadable));
 static void replaced_dyld_register_for_image_loads(void (*func)(const struct mach_header* mh, const char* path, bool unloadable)) {
@@ -2066,26 +2118,58 @@ static void replaced_dyld_register_for_image_loads(void (*func)(const struct mac
 #define SHADOW_MAX_BULK_LOAD_CBS 8
 static void (*shdw_bulk_load_cbs[SHADOW_MAX_BULK_LOAD_CBS])(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]);
 static void shdw_bulk_load_handler(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]) {
-    const struct mach_header* visible_mhs[SHADOW_DYLD_MIRROR_CAPACITY];
-    const char* visible_paths[SHADOW_DYLD_MIRROR_CAPACITY];
-    unsigned n = 0;
-    unsigned cap = MIN(imageCount, (unsigned) SHADOW_DYLD_MIRROR_CAPACITY);
-
-    for(unsigned i = 0; i < cap; i++) {
-        if(shdw_dyld_image_is_hidden(mhs[i])) {
-            continue;
-        }
-
-        visible_mhs[n] = mhs[i];
-        visible_paths[n] = paths ? paths[i] : NULL;
-        n++;
-    }
-
-    for(int i = 0; i < SHADOW_MAX_BULK_LOAD_CBS; i++) {
-        if(shdw_bulk_load_cbs[i]) {
-            shdw_bulk_load_cbs[i](n, visible_mhs, visible_paths);
+    if(_shdw_dyld_bulk_registration_replay) return;
+    SHDWRebindRepairSlots();
+    if(shdw_detector_present && !_shdw_dyld_replay_in_progress) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
+            SHDWRebindRepairImages(_shdw_dyld_rebind_session, mhs, imageCount);
         }
     }
+    shdw_dyld_deliver_external(^{
+        NSArray *collection = [_shdw_dyld_collection copy];
+        for(unsigned j = 0; j < imageCount; j++) {
+            if(shdw_dyld_image_is_hidden(mhs[j])) continue;
+            for(NSDictionary *image in collection) {
+                if([image[@"mach_header"] pointerValue] != mhs[j]) continue;
+                intptr_t slide = (intptr_t)[image[@"slide"] pointerValue];
+                NSArray *handlers = [_shdw_dyld_add_image copy];
+                for(NSValue *value in handlers) {
+                    void (*callback)(const struct mach_header *, intptr_t) = value.pointerValue;
+                    callback(mhs[j], slide);
+                }
+                break;
+            }
+        }
+        for(unsigned j = 0; j < imageCount; j++) {
+            NSValue *key = [NSValue valueWithPointer:mhs[j]];
+            NSNumber *event = _shdw_dyld_pending_image_loads[key];
+            if(!event) continue;
+            [_shdw_dyld_pending_image_loads removeObjectForKey:key];
+            shdw_forward_image_load(mhs[j], paths ? paths[j] : NULL, event.boolValue);
+        }
+
+        const struct mach_header* visible_mhs[SHADOW_DYLD_MIRROR_CAPACITY];
+        const char* visible_paths[SHADOW_DYLD_MIRROR_CAPACITY];
+        unsigned n = 0;
+        unsigned cap = MIN(imageCount, (unsigned) SHADOW_DYLD_MIRROR_CAPACITY);
+
+        for(unsigned i = 0; i < cap; i++) {
+            if(shdw_dyld_image_is_hidden(mhs[i])) {
+                continue;
+            }
+
+            visible_mhs[n] = mhs[i];
+            visible_paths[n] = paths ? paths[i] : NULL;
+            n++;
+        }
+
+        for(int i = 0; i < SHADOW_MAX_BULK_LOAD_CBS; i++) {
+            if(shdw_bulk_load_cbs[i]) {
+                shdw_bulk_load_cbs[i](n, visible_mhs, visible_paths);
+            }
+        }
+    });
 }
 static void (*original_dyld_register_for_bulk_image_loads)(void (*func)(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]));
 static void replaced_dyld_register_for_bulk_image_loads(void (*func)(unsigned imageCount, const struct mach_header* mhs[], const char* paths[])) {
@@ -2704,6 +2788,9 @@ void shdw_universal_rebind_image(SHDWHookSession* hooks, const void* imageHeader
 }
 
 void shdw_universal_dyld(SHDWHookSession* hooks) {
+    _shdw_dyld_rebind_session = hooks;
+    _shdw_dyld_pending_image_loads = [NSMutableDictionary new];
+    shdw_image_header_index_init(&_shdw_visible_headers);
     _shdw_dyld_collection = [NSMutableArray new];
     _shdw_dyld_add_image = [NSMutableArray new];
     _shdw_dyld_remove_image = [NSMutableArray new];
@@ -2912,7 +2999,13 @@ void shdw_universal_dyld(SHDWHookSession* hooks) {
 
         if(!bulkLoadsHandlerRegistered) {
             bulkLoadsHandlerRegistered = YES;
-            shdw_real_register_for_bulk_image_loads(shdw_bulk_load_handler);
+            _shdw_dyld_bulk_registration_replay = YES;
+            @try {
+                shdw_real_register_for_bulk_image_loads(shdw_bulk_load_handler);
+                _shdw_dyld_bulk_repair_available = YES;
+            } @finally {
+                _shdw_dyld_bulk_registration_replay = NO;
+            }
         }
 
         [hooks hookFunction:register_for_bulk_ptr withReplacement:replaced_dyld_register_for_bulk_image_loads outOldPtr:(void **) &original_dyld_register_for_bulk_image_loads];

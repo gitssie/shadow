@@ -619,11 +619,28 @@ static long shdw_raw_getfsstat_filtered_count(int number, int flags, long rawCou
     return filtered;
 }
 
+static long shdw_raw_sysctl_fingerprint_forward(int number, va_list args,
+    const int *mib, u_int count, void *oldp, size_t *oldlenp,
+    void *newp, size_t newlen, const void *caller) {
+    BOOL memoryRead = mib && count == 2 && mib[0] == CTL_HW && mib[1] == HW_MEMSIZE &&
+        !newp && !newlen;
+    if(!memoryRead) return shdw_syscall_forward(number, args);
+    long result;
+    SHADOW_INTERNAL_SCOPE {
+        result = shdw_syscall_forward(number, args);
+    }
+    int saved = errno;
+    if(result == 0 && oldp && oldlenp)
+        shdw_fingerprint_sysctl_value("hw.memsize", oldp, *oldlenp, caller);
+    errno = saved;
+    return result;
+}
+
 // Post-passthrough dispatch: inspection, policy, forwarding, and
 // after-success sanitization for the intercepted set. Shared by the syscall
 // and __syscall hooks; called only after the hook's own OR-chain passthrough
 // has run.
-static long shdw_syscall_dispatch(int number, BOOL ext, va_list args) {
+static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void *caller) {
     // Read the decision args from a COPY so the forward trampoline below
     // still sees the full, unadvanced argument list.
     va_list inspect;
@@ -641,6 +658,7 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args) {
     void* sysctl_oldp = NULL;
     size_t* sysctl_oldlenp = NULL;
     void* sysctl_newp = NULL;
+    size_t sysctl_newlen = 0;
 
     // Raw getdirentries64 policy args (hoisted; used after the forward).
     int gd_fd = -1;
@@ -947,6 +965,13 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args) {
                 sysctl_oldp = (void *) va_arg(inspect, intptr_t);
                 sysctl_oldlenp = (size_t *) va_arg(inspect, intptr_t);
                 sysctl_newp = (void *) va_arg(inspect, intptr_t);
+                sysctl_newlen = (size_t) va_arg(inspect, intptr_t);
+                int versionResult;
+                if(shdw_fingerprint_sysctl_mib_query(sysctl_mib, sysctl_miblen,
+                   sysctl_oldp, sysctl_oldlenp, sysctl_newp, sysctl_newlen, caller, &versionResult)) {
+                    va_end(inspect);
+                    return versionResult;
+                }
 
                 shdw_proc_mib_kind_t kind = shdw_proc_mib_kind(sysctl_mib, sysctl_miblen);
 
@@ -1173,7 +1198,10 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args) {
 
     va_end(inspect);
 
-    long result = shdw_syscall_forward(number, args);
+    long result = ext && cat == SHADW_RAW_CAT_SYSCTL
+        ? shdw_raw_sysctl_fingerprint_forward(number, args, sysctl_mib, sysctl_miblen,
+            sysctl_oldp, sysctl_oldlenp, sysctl_newp, sysctl_newlen, caller)
+        : shdw_syscall_forward(number, args);
 
     // After-success policies — same as the typed hooks, only on valid
     // success and only for app-origin callers.
@@ -1383,7 +1411,8 @@ static long replaced_syscall(int number, ...) {
 
     va_list args;
     va_start(args, number);
-    long result = shdw_syscall_dispatch(number, ext, args);
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    long result = shdw_syscall_dispatch(number, ext, args, caller);
     va_end(args);
 
     return result;
@@ -1393,6 +1422,7 @@ static long replaced_syscall(int number, ...) {
 // convention and (number, ...) shape. Hooked with the same dispatcher.
 // Runtime-resolved; skipped cleanly when absent.
 static long (*original___syscall)(int number, ...);
+static void *shdw_syscall_c_aliases[2];
 static long replaced___syscall(int number, ...) {
     // Same def-generated passthrough chain as replaced_syscall: it must
     // remain the first thing this function does, as a chain of compares on
@@ -1410,7 +1440,8 @@ static long replaced___syscall(int number, ...) {
 
     va_list args;
     va_start(args, number);
-    long result = shdw_syscall_dispatch(number, ext, args);
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    long result = shdw_syscall_dispatch(number, ext, args, caller);
     va_end(args);
 
     return result;
@@ -1665,12 +1696,43 @@ static int shdw_sysctlbyname_policy(const char* name, void* oldp, size_t* oldlen
 
 static int (*original_sysctlbyname)(const char* name, void* oldp, size_t* oldlenp, void* newp, size_t newlen);
 static int replaced_sysctlbyname(const char* name, void* oldp, size_t* oldlenp, void* newp, size_t newlen) {
-    return shdw_sysctlbyname_policy(name, oldp, oldlenp, newp, newlen, original_sysctlbyname);
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    int versionResult;
+    if(shdw_fingerprint_sysctl_query(name, oldp, oldlenp, newp, newlen, caller, &versionResult))
+        return versionResult;
+    int result = shdw_sysctlbyname_policy(name, oldp, oldlenp, newp, newlen, original_sysctlbyname);
+    int saved = errno;
+    if(result == 0 && !newp && oldp && oldlenp)
+        shdw_fingerprint_sysctl_value(name, oldp, *oldlenp, caller);
+    errno = saved;
+    return result;
 }
 
 static int (*original___sysctlbyname)(const char* name, void* oldp, size_t* oldlenp, void* newp, size_t newlen);
 static int replaced___sysctlbyname(const char* name, void* oldp, size_t* oldlenp, void* newp, size_t newlen) {
-    return shdw_sysctlbyname_policy(name, oldp, oldlenp, newp, newlen, original___sysctlbyname);
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    int versionResult;
+    if(shdw_fingerprint_sysctl_query(name, oldp, oldlenp, newp, newlen, caller, &versionResult))
+        return versionResult;
+    int result = shdw_sysctlbyname_policy(name, oldp, oldlenp, newp, newlen, original___sysctlbyname);
+    int saved = errno;
+    if(result == 0 && !newp && oldp && oldlenp)
+        shdw_fingerprint_sysctl_value(name, oldp, *oldlenp, caller);
+    errno = saved;
+    return result;
+}
+
+void *shdw_sym_policy_lookup_syscall(const char *name) {
+    if(name && !strcmp(name, "syscall") && original_syscall)
+        return (void *)&replaced_syscall;
+    void *alias = NULL;
+    if(name && !strcmp(name, "__syscall")) alias = shdw_syscall_c_aliases[0];
+    if(name && !strcmp(name, "___syscall")) alias = shdw_syscall_c_aliases[1];
+    if(alias && alias == (void *)original_syscall) return (void *)&replaced_syscall;
+    if(alias && alias == (void *)original___syscall) return (void *)&replaced___syscall;
+    if(name && !strcmp(name, "sysctlbyname") && original_sysctlbyname)
+        return (void *)&replaced_sysctlbyname;
+    return NULL;
 }
 
 // --- _NSGetEnviron: returns the ADDRESS of the caller's environ variable.
@@ -1707,22 +1769,26 @@ static char*** replaced_NSGetEnviron(void) {
 
 // syscall/__syscall/csops are hooked on a REBIND-ONLY lane, not `hooks`.
 void shdw_universal_syscall(SHDWHookSession* hooks) {
-    [hooks hookRebindSymbol:@"syscall" withReplacement:replaced_syscall outOldPtr:(void **) &original_syscall];
+    original_syscall = (long (*)(int, ...))shdw_resolve_libsystem("_syscall");
+    [hooks hookRebindSymbol:@"syscall" withReplacement:replaced_syscall outOldPtr:NULL];
     [hooks hookRebindSymbol:@"csops" withReplacement:replaced_csops outOldPtr:(void **) &original_csops];
 
     // Runtime-resolve __syscall; skipped cleanly when absent.
-    void* sym___syscall = shdw_resolve_libsystem("___syscall");
+    shdw_syscall_c_aliases[0] = shdw_resolve_libsystem("___syscall");
+    shdw_syscall_c_aliases[1] = shdw_resolve_libsystem("____syscall");
+    void* sym___syscall = shdw_syscall_c_aliases[0];
     // Some iOS builds export syscall and __syscall as the same entry point.
     // Address-based rebinders already cover every slot for that address; a
     // second replacement cannot coexist and only reports a false failure.
     if(sym___syscall && sym___syscall != (void *)syscall) {
-        [hooks hookRebindSymbol:@"___syscall" withReplacement:replaced___syscall outOldPtr:(void **) &original___syscall];
+        original___syscall = (long (*)(int, ...))sym___syscall;
+        [hooks hookRebindSymbol:@"___syscall" withReplacement:replaced___syscall outOldPtr:NULL];
     }
 
     // Misc sibling surfaces: runtime-resolved, skipped cleanly when absent.
     void* sym_misc = shdw_resolve_libsystem("_sysctlbyname");
     if(sym_misc) {
-        [hooks hookRebindSymbol:@"_sysctlbyname" withReplacement:replaced_sysctlbyname outOldPtr:(void **) &original_sysctlbyname];
+        [hooks hookRebindSymbol:@"sysctlbyname" withReplacement:replaced_sysctlbyname outOldPtr:(void **) &original_sysctlbyname];
     }
 
     sym_misc = shdw_resolve_libsystem("___sysctlbyname");

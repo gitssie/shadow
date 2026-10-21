@@ -2,6 +2,8 @@
 #import "../../policy/PathPolicy.h"
 #import <fcntl.h>
 
+static BOOL shdw_file_attributes_paths_enabled;
+
 static char* _NSDirectoryEnumerator_shdw_key = "shdw";
 static char* _NSDirectoryEnumerator_shdw_state_key = "shdw_state";
 
@@ -616,18 +618,6 @@ static NSString* _shdw_resolveLinkDestination(NSString* linkPath, NSString* dest
 
 - (NSString *)displayNameAtPath:(NSString *)path __attribute__((annotate("hookkit:allow_inherited"))) {
     if(isCallerExternal() && [_shadow isPathRestricted:path options:_shdw_optionsForAbsolute(self, [path isAbsolutePath])]) {
-        return nil;
-    }
-
-    return %orig;
-}
-
-- (NSDictionary<NSFileAttributeKey, id> *)attributesOfItemAtPath:(NSString *)path error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [_shadow isPathRestricted:path options:_shdw_optionsForAbsolute(self, [path isAbsolutePath])]) {
-        if(error) {
-            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:path url:nil];
-        }
-
         return nil;
     }
 
@@ -1283,6 +1273,8 @@ static void *gShadowReadableOrig = NULL;
 void* shdw_universal_readable_file_original(void) { return gShadowReadableOrig; }
 
 void shdw_universal_filesystem_objc(SHDWHookSession* hooks) {
+    shdw_file_attributes_paths_enabled = YES;
+    shdw_universal_file_attributes(hooks);
     Class fmCls = objc_getClass("NSFileManager");
     SEL fmSel = sel_registerName("fileExistsAtPath:");
     Method fm = class_getInstanceMethod(fmCls, fmSel);
@@ -1308,4 +1300,26 @@ void shdw_universal_filesystem_objc(SHDWHookSession* hooks) {
     && class_getInstanceMethod(fileManager, @selector(linkPath:toPath:handler:))) {
         %init(shadowhook_NSFileManagerDeprecatedPaths);
     }
+}
+
+%group shadowhook_NSFileAttributes
+%hook NSFileManager
+- (NSDictionary<NSFileAttributeKey, id> *)attributesOfItemAtPath:(NSString *)path error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
+    if(shdw_file_attributes_paths_enabled && isCallerExternal() && [_shadow isPathRestricted:path options:_shdw_optionsForAbsolute(self, [path isAbsolutePath])]) {
+        if(error) {
+            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:path url:nil];
+        }
+
+        return nil;
+    }
+
+    return %orig;
+}
+
+%end
+%end
+void shdw_universal_file_attributes(SHDWHookSession *hooks) {
+    static dispatch_once_t once;
+    (void)hooks;
+    dispatch_once(&once, ^{ %init(shadowhook_NSFileAttributes); });
 }

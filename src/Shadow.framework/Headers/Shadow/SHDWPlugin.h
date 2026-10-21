@@ -25,6 +25,8 @@
 #define SHDWUniversalIOKitID @"Universal_IOKit"
 #define SHDWUniversalLowLevelCID @"Universal_LowLevelC"
 #define SHDWUniversalAntiDebuggingID @"Universal_AntiDebugging"
+#define SHDWUniversalFingerprintID @"Universal_Fingerprint"
+#define SHDWUniversalNetworkQueriesID @"Universal_NetworkQueries"
 #define SHDWUniversalCodeSigningID @"Universal_CodeSigning"
 #define SHDWUniversalDynamicLibrariesExtraID @"Universal_DynamicLibrariesExtra"
 #define SHDWUniversalSyscallID @"Universal_Syscall"

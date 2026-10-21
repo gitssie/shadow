@@ -121,6 +121,8 @@ static void shdw_plugin_policy_nop(SHDWHookSession* hooks) { (void)hooks; }
 static const SHDWPluginInstaller kSHDWPluginInstallers[] = {
     { "Universal_Dyld",                       shdw_universal_dyld },
     { "Universal_Filesystem_C",               shdw_universal_filesystem_c },
+    { "Universal_Fingerprint",                shdw_universal_fingerprint },
+    { "Universal_NetworkQueries",             shdw_universal_network_queries },
     { "Universal_EnvVars_C",                  shdw_coord_envvars_c },
     { "Universal_EnvVars_ObjC",               shdw_universal_nsprocessinfo },
     { "Adapter_DeviceCheck",                   shdw_adapter_devicecheck },

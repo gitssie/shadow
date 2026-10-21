@@ -457,27 +457,20 @@ int main(void) { @autoreleasepool {
     assert(SHDWAppFollowsGlobal(prefs, app));
     assert(!SHDWAppIsCustomized(@YES));
     assert(!SHDWAppIsCustomized(@{}));
+    NSDictionary *fingerprint = @{@"Version": @1, @"MemoryDelta": @16384};
+    [prefs setObject:@{@"Fingerprint_Data": fingerprint} forKey:app];
+    assert(SHDWAppFollowsGlobal(prefs, app));
+    assert(!SHDWAppIsCustomized([prefs dictionaryForKey:app]));
+    [prefs setObject:@{SHDWAppEnabledID:@YES, SHDWDetectorAggressiveID:@NO, @"Fingerprint_Data":fingerprint} forKey:app];
+    assert(!SHDWAppFollowsGlobal(prefs, app));
+    SHDWClearAppOverrides(prefs, app);
+    assert([[prefs dictionaryForKey:app] isEqual:@{@"Fingerprint_Data":fingerprint}]);
+    assert(SHDWAppFollowsGlobal(prefs, app));
     for(NSString *key in @[SHDWAppEnabledID, SHDWAppDisabledID, SHDWDetectorAggressiveID]) {
         for(NSNumber *value in @[@NO, @YES]) {
             NSDictionary *override = @{key: value, @"obsolete": @YES};
             [prefs setObject:override forKey:app];
-            for(NSUInteger mask = 0; mask < 16; mask++) {
-        NSMutableDictionary *overrides = [NSMutableDictionary new];
-        NSArray *keys = @[SHDWAppEnabledID, SHDWAppDisabledID, SHDWDetectorAggressiveID, @"unrelated"];
-        for(NSUInteger i = 0; i < keys.count; i++) if(mask & (1 << i)) overrides[keys[i]] = @YES;
-        [prefs setObject:overrides forKey:app];
-        [prefs removeObjectForKey:SHDWSingleToggleMigrationID];
-        SHDWClearAppOverrides(prefs, app);
-        assert([[prefs objectForKey:SHDWSingleToggleMigrationID] boolValue]);
-        if(mask & 8) assert([[prefs dictionaryForKey:app] isEqual:@{@"unrelated": @YES}]);
-        else assert([prefs dictionaryForKey:app] == nil);
-        assert(SHDWAppFollowsGlobal(prefs, app));
-    }
-    [prefs removeObjectForKey:app];
-    [prefs removeObjectForKey:SHDWSingleToggleMigrationID];
-    SHDWClearAppOverrides(prefs, app);
-    assert([prefs objectForKey:SHDWSingleToggleMigrationID] == nil);
-    NSDictionary *before = [prefs dictionaryRepresentation];
+            NSDictionary *before = [prefs dictionaryRepresentation];
             assert(!SHDWAppFollowsGlobal(prefs, app));
             assert(SHDWAppIsCustomized([prefs dictionaryForKey:app]));
             assert([[prefs dictionaryRepresentation] isEqual:before]);

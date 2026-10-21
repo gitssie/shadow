@@ -1,6 +1,8 @@
 #import "UniversalHooks.h"
 #import "../../policy/PathPolicy.h"
 
+static BOOL shdw_url_resources_paths_enabled;
+
 static BOOL _shdw_urlPathHidden(NSString* path) {
     if(!path) return NO;
     if(SHDWAdapterPathIsHidden(path)) return YES;
@@ -140,34 +142,6 @@ static BOOL _shdw_resultURLRestricted(NSURL* result) {
     if(isCallerExternal() && [_shadow isURLRestricted:bookmarkFileURL]) {
         if(error) {
             *error = [Shadow fileNoSuchFileErrorForURL:bookmarkFileURL];
-        }
-
-        return nil;
-    }
-
-    return %orig;
-}
-
-- (BOOL)getResourceValue:(id _Nullable *)value forKey:(NSURLResourceKey)key error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && _shdw_resultURLRestricted(self)) {
-        if(value) {
-            *value = nil;
-        }
-
-        if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
-        }
-
-        return NO;
-    }
-
-    return %orig;
-}
-
-- (NSDictionary<NSURLResourceKey, id> *)resourceValuesForKeys:(NSArray<NSURLResourceKey> *)keys error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && _shdw_resultURLRestricted(self)) {
-        if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
         }
 
         return nil;
@@ -473,6 +447,8 @@ static const char* const kShadowURLSessionSelectors[] = {
 };
 
 void shdw_universal_nsurl(SHDWHookSession* hooks) {
+    shdw_url_resources_paths_enabled = YES;
+    shdw_universal_url_resources(hooks);
     Class sessionCls = objc_getClass("NSURLSession");
     void* originals[sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0])] = {0};
     Method methods[sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0])] = {0};
@@ -495,4 +471,43 @@ void shdw_universal_nsurl(SHDWHookSession* hooks) {
             }
         }
     }
+}
+
+%group shadowhook_NSURLResources
+%hook NSURL
+- (BOOL)getResourceValue:(id _Nullable *)value forKey:(NSURLResourceKey)key error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
+    if(shdw_url_resources_paths_enabled && isCallerExternal() && _shdw_resultURLRestricted(self)) {
+        if(value) {
+            *value = nil;
+        }
+
+        if(error) {
+            *error = [Shadow fileNoSuchFileErrorForURL:self];
+        }
+
+        return NO;
+    }
+
+    return %orig;
+}
+
+- (NSDictionary<NSURLResourceKey, id> *)resourceValuesForKeys:(NSArray<NSURLResourceKey> *)keys error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
+    if(shdw_url_resources_paths_enabled && isCallerExternal() && _shdw_resultURLRestricted(self)) {
+        if(error) {
+            *error = [Shadow fileNoSuchFileErrorForURL:self];
+        }
+
+        return nil;
+    }
+
+    return %orig;
+}
+
+%end
+%end
+
+void shdw_universal_url_resources(SHDWHookSession *hooks) {
+    static dispatch_once_t once;
+    (void)hooks;
+    dispatch_once(&once, ^{ %init(shadowhook_NSURLResources); });
 }

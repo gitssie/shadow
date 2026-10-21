@@ -32,6 +32,10 @@ static BOOL shdwDetectorPathRestricted(const char *path) {
   return fn && fn(path);
 }
 
+static BOOL shdwReceiptPathRestricted(const char *path) {
+  return [Shadow shdwIsReceiptPathRestricted:path];
+}
+
 // How long a cached decision is honored (see the cache notes below).
 // Trimmed from 2.0s (plan C0-1): a "not restricted" verdict for a
 // nonexistent path is cached, and if the jailbreak file appears within the
@@ -454,6 +458,7 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
     }
 
     NSString *path = query.path;
+    if(path && shdwReceiptPathRestricted(path.fileSystemRepresentation)) return YES;
     ShadowPseudoSandboxMode pseudoMode = pseudoSandboxMode;
     // ponytail: per-thread last-path cache for tight loops. Most probes hit
     // same 2-3 paths. Isolated per-engine: TestNonSandboxed creates two engines
@@ -581,6 +586,10 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
     }
 
     const char *detectorPath = [path fileSystemRepresentation];
+    if (detectorPath && shdwReceiptPathRestricted(detectorPath)) {
+      restricted = YES;
+      goto done;
+    }
     if (detectorPath && shdwDetectorPathRestricted(detectorPath)) {
       restricted = YES;
       goto done;
@@ -707,7 +716,8 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
 
     BOOL checkable = [path hasPrefix:@"/var"] ||
                      [path hasPrefix:@"/private/preboot"] ||
-                     [path hasPrefix:@"/usr/lib"];
+                     [path hasPrefix:@"/usr/lib"] ||
+                     shdwPathIsWithin(path, @"/System/Developer");
 
     if (!checkable) {
       if (!isWrite) {

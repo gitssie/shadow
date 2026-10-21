@@ -2,9 +2,9 @@
 
 // Raw svc interception: inline `svc` syscalls never pass through libc
 // wrappers, so the syscall(2)/__syscall(2) hooks in syscall.x cannot see
-// them. This file scans loaded images' __TEXT for svc sites and redirects
-// each site to a trampoline applying the same path policy as the syscall(2)
-// dispatch. System images are never patched (re-entrancy); Shadow's own
+// them. This file redirects only complete, recognized constant-number leaf
+// wrappers in instruction sections. Other inline sites remain untouched.
+// System images are never patched (re-entrancy); Shadow's own
 // images are skipped too. Arm64 only: the !__arm64__ (armv7, rootful-legacy)
 // lane is an intentionally empty stub — inline svc sites on 32-bit are NOT
 // intercepted, only the syscall(2)/__syscall(2) rebind lane in syscall.x
@@ -289,37 +289,28 @@ static inline BOOL shdw_svc_is_instruction(uint32_t insn) {
     return (insn & SHDW_SVC_OPCODE_MASK) == SHDW_SVC_OPCODE;
 }
 
-// Constant-x16 recovery for one svc site: scans back at most 6 instructions
-// for the movz w16/x16,#imm that establishes the syscall number (the
-// compiler idiom for a constant-sysno wrapper: mov plastered just above the
-// svc, verified across the harness + detector images). Returns the number,
-// or -1 when x16 is dynamic (mov x16,xN, ldr, movk-first, ...) or not found
-// within the window. Reads only inside [words, words+nwords).
-static long shdw_svc_site_const_sysno(const uint32_t* words, size_t nwords, size_t w) {
-    for(int back = 1; back <= 6; back++) {
-        if((size_t)back > w) {
+// Only a complete three-instruction function has a known syscall number and
+// a return path the shared trampoline can preserve without relocating code.
+static long shdw_svc_leaf_sysno(const uint32_t* words, size_t nwords) {
+    if(!words || nwords != 3 || words[1] != 0xD4001001U ||
+       words[2] != 0xD65F03C0U) return -1;
+
+    uint32_t insn = words[0];
+    if((insn & 0xFFE0001FU) != 0x52800010U &&
+       (insn & 0xFFE0001FU) != 0xD2800010U) return -1;
+    int sysno = (int)((insn >> 5) & 0xFFFFU);
+    switch(shdw_raw_syscall_category(sysno)) {
+        case SHADW_RAW_CAT_PATH:
+        case SHADW_RAW_CAT_AT:
+#ifdef SYS_freadlink
+        case SHADW_RAW_CAT_FREADLINK:
+#endif
+        case SHADW_RAW_CAT_KEVENT:
+        case SHADW_RAW_CAT_KEVENT64:
+            return sysno;
+        default:
             return -1;
-        }
-
-        uint32_t insn = words[w - back];
-
-        // movz w16,#imm16 / movz x16,#imm16 (any hw shift): the value is the
-        // full shifted immediate — a shifted 26 stays 26 only when the
-        // upper chunks are zero, which the shift math below captures.
-        if((insn & 0xFFE0001F) == 0x52800010 || (insn & 0xFFE0001F) == 0xD2800010) {
-            uint32_t hw = (insn >> 21) & 0x3;
-            uint64_t val = (uint64_t)((insn >> 5) & 0xFFFF) << (hw * 16);
-            return (long)val;
-        }
-
-        // movk w16/x16 first: the low chunk came from elsewhere (or a movz
-        // outside the window) — value unknown at patch time.
-        if((insn & 0xFFE0001F) == 0x72800010 || (insn & 0xFFE0001F) == 0xF2800010) {
-            return -1;
-        }
     }
-
-    return -1;
 }
 
 // Images that must never be patched (see the file header: recursion safety
@@ -377,16 +368,9 @@ static _Atomic BOOL shdw_svc_far_site_seen = NO;
 #define SHDW_SVC_B 0x14000000U
 #define SHDW_SVC_BL 0x94000000U
 
-// Pick the branch encoding for one site. The trampoline takes its return
-// address from lr, which BL sets to site+4 — but BL also destroys x30, and x30
-// is live at the site whenever the enclosing function is a frameless leaf.
-// Such a leaf is exactly `... svc; ret`, so for those, `B` is equivalent and
-// safe: x30 survives into the trampoline, which restores it, and its own `ret`
-// lands where the app's `ret` would have gone. Anywhere else the prologue
-// spilled x30 (the site is mid-function), lr is dead, and BL is required so the
-// trampoline returns to the instruction after the svc.
+// An unknown continuation cannot prove x30 is dead. Never emit BL here.
 static uint32_t shdw_svc_site_branch_opcode(uint32_t fallthrough) {
-    return fallthrough == SHDW_SVC_RET ? SHDW_SVC_B : SHDW_SVC_BL;
+    return fallthrough == SHDW_SVC_RET ? SHDW_SVC_B : 0;
 }
 
 static void shdw_svc_try_patch_site(uintptr_t site, uint32_t insn,
@@ -394,7 +378,8 @@ static void shdw_svc_try_patch_site(uintptr_t site, uint32_t insn,
     (void)where;
     uintptr_t target = 0;
 
-    if(!shdw_svc_is_instruction(insn)) return;
+    uint32_t opcode = shdw_svc_site_branch_opcode(fallthrough);
+    if(!shdw_svc_is_instruction(insn) || !opcode) return;
     target = (uintptr_t)shdw_svc_trampoline_80;
 
     // A64 B/BL immediates are relative to the branch instruction's address.
@@ -409,7 +394,7 @@ static void shdw_svc_try_patch_site(uintptr_t site, uint32_t insn,
     }
 
     *(uint32_t*)site =
-        shdw_svc_site_branch_opcode(fallthrough) |
+        opcode |
         ((uint32_t)(delta >> 2) & 0x3FFFFFF);
     sys_icache_invalidate((void*)site, 4);
 }
@@ -418,23 +403,6 @@ static void shdw_svc_try_patch_site(uintptr_t site, uint32_t insn,
 // same-thread callback without deadlocking; nested stop/resume pairs preserve
 // the outer suspension counts.
 static pthread_mutex_t shdw_svc_patch_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
-
-static BOOL shdw_svc_range_has_site(uintptr_t addr, size_t size) {
-    if(size < 4 || addr > UINTPTR_MAX - size) {
-        return NO;
-    }
-
-    const uint32_t* words = (const uint32_t*)addr;
-    size_t nwords = size / 4;
-
-    for(size_t w = 0; w < nwords; w++) {
-        if(shdw_svc_is_instruction(words[w])) {
-            return YES;
-        }
-    }
-
-    return NO;
-}
 
 static void shdw_svc_dispose_thread_list(thread_act_array_t threads,
                                          mach_msg_type_number_t count,
@@ -525,14 +493,14 @@ static void shdw_svc_resume_others(thread_act_array_t threads,
 static void shdw_svc_patch_memory(uintptr_t addr, size_t scan_size,
                                   size_t protect_size, vm_prot_t original_prot,
                                   const char* where) {
-    if(!shdw_svc_range_has_site(addr, scan_size)) {
+    if(shdw_svc_leaf_sysno((const uint32_t*)addr, scan_size / 4) < 0) {
         return;
     }
 
     pthread_mutex_lock(&shdw_svc_patch_lock);
 
     // Another scanner may have patched the site while this caller waited.
-    if(!shdw_svc_range_has_site(addr, scan_size)) {
+    if(shdw_svc_leaf_sysno((const uint32_t*)addr, scan_size / 4) < 0) {
         pthread_mutex_unlock(&shdw_svc_patch_lock);
         return;
     }
@@ -563,6 +531,15 @@ static void shdw_svc_patch_memory(uintptr_t addr, size_t scan_size,
         mach_port_deallocate(mach_task_self(), current_object);
     }
 
+    if(current_kr != KERN_SUCCESS ||
+       current_info_count < VM_REGION_BASIC_INFO_COUNT_64 ||
+       current_region > addr || addr - current_region > current_region_size ||
+       scan_size > current_region_size - (addr - current_region)) {
+        shdw_svc_resume_others(threads, thread_count, current);
+        shdw_svc_dispose_thread_list(threads, thread_count, current);
+        pthread_mutex_unlock(&shdw_svc_patch_lock);
+        return;
+    }
     if(current_kr == KERN_SUCCESS) {
         if(!(current_info.protection & VM_PROT_EXECUTE)) {
             shdw_svc_resume_others(threads, thread_count, current);
@@ -600,36 +577,9 @@ static void shdw_svc_patch_memory(uintptr_t addr, size_t scan_size,
 
     if(protected_for_write) {
         uint32_t* words = (uint32_t*)addr;
-        size_t nwords = scan_size / 4;
-
-        for(size_t w = 0; w < nwords; w++) {
-            uint32_t insn = words[w];
-
-            if(shdw_svc_is_instruction(insn)) {
-                // Never redirect a constant-x16 ptrace site. The svc helper
-                // can only allow a ptrace call or synthesize an errno — it
-                // cannot neutralize PT_DENY_ATTACH the way the syscall(2)
-                // dispatch does — and redirecting an early anti-debug
-                // initializer's deny_attach through the trampoline hangs
-                // process init (measured iPhone7/iOS 15.8.3: init stalls
-                // with the main binary's deny_attach site redirected,
-                // completes with it left alone). Leaving the site also
-                // matches every prior build's behavior (the helper never
-                // policed PTRACE). Register-x16 sites always patch: their
-                // number is unknowable statically and the kevent probe path
-                // is one of them.
-                if(shdw_svc_site_const_sysno(words, nwords, w) == SYS_ptrace) {
-                    continue;
-                }
-
-                // The instruction after the site decides the branch encoding:
-                // a following `ret` means x30 is live at the site (frameless
-                // leaf), where BL would destroy the caller's return address and
-                // leave the leaf's own `ret` jumping to itself.
-                uint32_t fallthrough = (w + 1 < nwords) ? words[w + 1] : 0;
-
-                shdw_svc_try_patch_site(addr + w * 4, insn, fallthrough, where);
-            }
+        // Revalidate after stopping the other threads; only the svc word changes.
+        if(shdw_svc_leaf_sysno(words, scan_size / 4) >= 0) {
+            shdw_svc_try_patch_site(addr + 4, words[1], words[2], where);
         }
 
         // Restore execute permission before any other thread can run again.
@@ -656,46 +606,124 @@ static void shdw_svc_patch_memory(uintptr_t addr, size_t scan_size,
     }
 }
 
-// Scans one image's __TEXT for svc sites and redirects them to the matching
-// trampoline. vm_protect fail-soft dance mirrors dyld.x's memory-hiding
-// patch: query the original protection, add write, patch, invalidate the
-// icache, restore. Idempotent: patched sites are bl instructions, so a
-// re-scan never matches them.
-static void shdw_svc_patch_image(const struct mach_header* mh, intptr_t slide, const char* path) {
-    if(mh->magic != MH_MAGIC_64 || mh->cputype != CPU_TYPE_ARM64) {
-        return;
+// Decode one nonzero LC_FUNCTION_STARTS delta. Truncated, overflowing or
+// unterminated tables are not evidence of a safe function boundary.
+static BOOL shdw_svc_next_function_offset(const uint8_t** cursor,
+                                           const uint8_t* end,
+                                           uint64_t* offset) {
+    uint64_t delta = 0;
+    unsigned shift = 0;
+    while(*cursor < end) {
+        uint8_t byte = *(*cursor)++;
+        if(shift >= 64 || (shift == 63 && (byte & 0x7E))) return NO;
+        delta |= (uint64_t)(byte & 0x7F) << shift;
+        if(!(byte & 0x80)) {
+            if(!delta || delta > UINT64_MAX - *offset) return NO;
+            *offset += delta;
+            return YES;
+        }
+        shift += 7;
     }
+    return NO;
+}
 
-    const struct load_command* lc = (const struct load_command*)((const char*)mh + sizeof(struct mach_header_64));
+static BOOL shdw_svc_slid_address(uint64_t vmaddr, intptr_t slide, uintptr_t* out) {
+    if(vmaddr > UINTPTR_MAX) return NO;
+    if(slide >= 0) {
+        if(vmaddr > UINTPTR_MAX - (uintptr_t)slide) return NO;
+        *out = (uintptr_t)vmaddr + (uintptr_t)slide;
+    } else {
+        uintptr_t magnitude = (uintptr_t)(-(slide + 1)) + 1;
+        if(vmaddr < magnitude) return NO;
+        *out = (uintptr_t)vmaddr - magnitude;
+    }
+    return YES;
+}
 
-    for(uint32_t i = 0; i < mh->ncmds; i++) {
+// Admit only whole functions identified by the image's own boundary table,
+// contained in an instruction section. Missing metadata leaves code untouched.
+static void shdw_svc_patch_image(const struct mach_header* mh, intptr_t slide, const char* path) {
+    if(mh->magic != MH_MAGIC_64 || mh->cputype != CPU_TYPE_ARM64) return;
+    const struct mach_header_64* header = (const struct mach_header_64*)mh;
+    const uint8_t* command = (const uint8_t*)(header + 1);
+    size_t remaining = header->sizeofcmds;
+    const struct segment_command_64* text = NULL;
+    const struct segment_command_64* linkedit = NULL;
+    const struct linkedit_data_command* starts = NULL;
+
+    for(uint32_t i = 0; i < header->ncmds; i++) {
+        if(remaining < sizeof(struct load_command)) return;
+        const struct load_command* lc = (const struct load_command*)command;
+        if(lc->cmdsize < sizeof(*lc) || lc->cmdsize > remaining) return;
         if(lc->cmd == LC_SEGMENT_64) {
+            if(lc->cmdsize < sizeof(struct segment_command_64)) return;
             const struct segment_command_64* seg = (const struct segment_command_64*)lc;
+            if(seg->nsects > (lc->cmdsize - sizeof(*seg)) / sizeof(struct section_64)) return;
+            if(strncmp(seg->segname, "__TEXT", 16) == 0) text = seg;
+            if(strncmp(seg->segname, "__LINKEDIT", 16) == 0) linkedit = seg;
+        } else if(lc->cmd == LC_FUNCTION_STARTS) {
+            if(lc->cmdsize < sizeof(struct linkedit_data_command)) return;
+            starts = (const struct linkedit_data_command*)lc;
+        }
+        remaining -= lc->cmdsize;
+        command += lc->cmdsize;
+    }
+    if(!text || !linkedit || !starts || !starts->datasize ||
+       starts->dataoff < linkedit->fileoff) return;
+    uint64_t dataDelta = starts->dataoff - linkedit->fileoff;
+    if(dataDelta > linkedit->filesize || starts->datasize > linkedit->filesize - dataDelta) return;
+    uintptr_t dataBase = 0;
+    if(!shdw_svc_slid_address(linkedit->vmaddr, slide, &dataBase) ||
+       dataDelta > UINTPTR_MAX - dataBase) return;
+    dataBase += dataDelta;
+    if(starts->datasize > UINTPTR_MAX - dataBase) return;
+    const uint8_t* cursor = (const uint8_t*)dataBase;
+    const uint8_t* end = cursor + starts->datasize;
+    uint64_t offset = 0;
+    if(!shdw_svc_next_function_offset(&cursor, end, &offset)) return;
+    uint64_t previous = offset;
 
-            if(strcmp(seg->segname, "__TEXT") == 0 && seg->filesize >= 4) {
-                uintptr_t base = (uintptr_t)seg->vmaddr + (uintptr_t)slide;
-                size_t size = seg->filesize;
-
-                vm_region_basic_info_data_64_t info;
-                mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
-                vm_address_t region = base;
-                vm_size_t region_size = 0;
-                mach_port_t object_name = MACH_PORT_NULL;
-                vm_prot_t original_prot = VM_PROT_READ | VM_PROT_EXECUTE;
-
-                kern_return_t region_kr = vm_region_64(mach_task_self(), &region, &region_size, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &info_count, &object_name);
-                shdw_svc_dispose_object(&object_name);
-
-                if(region_kr == KERN_SUCCESS) {
-                    original_prot = info.protection;
+    while(shdw_svc_next_function_offset(&cursor, end, &offset)) {
+        if(offset - previous == 3 * sizeof(uint32_t) &&
+           previous <= text->vmsize && offset <= text->vmsize) {
+            uint64_t vmaddr = text->vmaddr + previous;
+            if(vmaddr < text->vmaddr) return;
+            const struct section_64* sections = (const struct section_64*)(text + 1);
+            BOOL instructions = NO;
+            for(uint32_t i = 0; i < text->nsects; i++) {
+                const struct section_64* section = &sections[i];
+                if((section->flags & SECTION_TYPE) == S_REGULAR &&
+                   (section->flags & S_ATTR_PURE_INSTRUCTIONS) &&
+                   vmaddr >= section->addr && vmaddr - section->addr <= section->size &&
+                   12 <= section->size - (vmaddr - section->addr)) {
+                    instructions = YES;
+                    break;
                 }
-
-                shdw_svc_patch_memory(base, size, seg->vmsize, original_prot, path);
-                return;
+            }
+            uintptr_t address = 0;
+            // One protection query/restore must describe the entire write page.
+            if(instructions && shdw_svc_slid_address(vmaddr, slide, &address) &&
+               address % 4 == 0 && vm_page_size >= 12 &&
+               address % vm_page_size <= vm_page_size - 12 &&
+               shdw_svc_leaf_sysno((const uint32_t*)address, 3) >= 0) {
+                vm_region_basic_info_data_64_t info;
+                mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
+                vm_address_t region = address;
+                vm_size_t regionSize = 0;
+                mach_port_t object = MACH_PORT_NULL;
+                kern_return_t result = vm_region_64(mach_task_self(), &region,
+                    &regionSize, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info,
+                    &infoCount, &object);
+                shdw_svc_dispose_object(&object);
+                if(result == KERN_SUCCESS && infoCount >= VM_REGION_BASIC_INFO_COUNT_64 &&
+                   region <= address && address - region <= regionSize &&
+                   12 <= regionSize - (address - region) &&
+                   (info.protection & VM_PROT_EXECUTE)) {
+                    shdw_svc_patch_memory(address, 12, 12, info.protection, path);
+                }
             }
         }
-
-        lc = (const struct load_command*)((const char*)lc + lc->cmdsize);
+        previous = offset;
     }
 }
 

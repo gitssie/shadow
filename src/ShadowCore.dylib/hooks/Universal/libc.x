@@ -3328,7 +3328,6 @@ static const shdw_hook_desc_t shdw_libc_hooks[] = {
     // Phase 4 pass-throughs (dlsym-policy agreement only — bodies forward
     // untouched; see libc_antidebugging.x rationale per symbol).
     { "uname",                  (void*)&replaced_uname,                   (void**)&original_uname,                   ANTIDBG,  0 },
-    { "getifaddrs",             (void*)&replaced_getifaddrs,              (void**)&original_getifaddrs,              ANTIDBG,  0 },
     { "ioctl",                  (void*)&replaced_ioctl,                   (void**)&original_ioctl,                   ANTIDBG,  0 },
 };
 
@@ -3358,6 +3357,7 @@ static void shdw_libc_rebind_proclist(SHDWHookSession* hooks, const shdw_hook_de
         "proc_pidinfo", "proc_name", "proc_listpidspath", "proc_regionfilename",
         "proc_pidpath", "proc_pidpath_audittoken",
         "kevent", "kevent64",
+        "uname",
         NULL,
     };
 

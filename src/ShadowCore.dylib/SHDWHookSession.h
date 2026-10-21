@@ -4,8 +4,17 @@
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <objc/runtime.h>
+#include <stdint.h>
 
 typedef NSString *SHDWImageRef;
+
+typedef struct {
+  const char *name;
+  void *replacement;
+  void **originalCell;
+  BOOL *cacheScopeUnavailable;
+  uint64_t imageMask;
+} SHDWRebindEntry;
 
 // Shadow's only HookKit boundary. Each request uses the native HK3 lifecycle;
 // keeping it here avoids leaking HK3 request structs through every hook file.
@@ -42,6 +51,16 @@ typedef NSString *SHDWImageRef;
                outOldPtr:(void **)oldPtr
            inCallerImage:(const void *)imageHeader
                  journal:(BOOL)journal;
+// Synchronous scoped replay; entries share one short-lived runtime catalog.
+// YES means traversal completed, including clean refusals; it is not hook success.
+- (BOOL)replayRebindEntries:(const SHDWRebindEntry *)entries
+                     count:(NSUInteger)count
+             inCallerImage:(const void *)imageHeader;
+- (BOOL)replayRebindEntries:(const SHDWRebindEntry *)entries
+                     count:(NSUInteger)count
+            inCallerImages:(const void *const *)imageHeaders
+                imageCount:(NSUInteger)imageCount
+                cachedMask:(uint64_t)cachedMask;
 
 - (SHDWImageRef)openImage:(NSString *)path;
 - (void)closeImage:(SHDWImageRef)image;
@@ -97,10 +116,8 @@ FOUNDATION_EXPORT uint32_t SHDWRebindRepairSlots(void);
 // images). No-ops on a NULL session/header.
 FOUNDATION_EXPORT void SHDWRebindRepairImage(SHDWHookSession *session,
                                              const void *imageHeader);
-// Coalesced async repair requests (safe to call from inside hooks):
-// slots-only, and slots + image replay for a fresh header.
+// Coalesced slots-only repair request (safe to call from inside hooks).
 FOUNDATION_EXPORT void SHDWRequestRebindRepair(void);
-FOUNDATION_EXPORT void SHDWRequestRebindRepairImage(const void *imageHeader);
 // Drop journaled slots owned by an unmapped address range, so repair never
 // dereferences stale slot addresses after an image unloads.
 FOUNDATION_EXPORT void SHDWRebindForgetRange(uintptr_t base, uintptr_t end);

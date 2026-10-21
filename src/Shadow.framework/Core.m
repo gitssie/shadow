@@ -11,6 +11,7 @@
 #import <objc/runtime.h>
 #import <pwd.h>
 #import <stdlib.h>
+#import <stdatomic.h>
 
 #import "../../vendor/apple/dyld_priv.h"
 #import "../common.h"
@@ -31,6 +32,8 @@
 // through the PLT is still far cheaper than the objc_msgSend the class
 // methods cost, and it crosses the .tbd cleanly.
 static _Thread_local NSUInteger shdw_internal_busy = 0;
+typedef BOOL (*SHDWReceiptPathPredicate)(const char *);
+static _Atomic(SHDWReceiptPathPredicate) shdw_receipt_path_predicate;
 
 @interface Shadow () {
   ShadowRestrictionEngine *engine;
@@ -71,6 +74,15 @@ shdwInstallHarnessSDKFallback(void) {
 
 + (BOOL)shdwIsInternalRead {
   return shdw_internal_busy > 0;
+}
+
++ (void)shdwSetReceiptPathPredicate:(BOOL (*)(const char *))predicate {
+  atomic_store_explicit(&shdw_receipt_path_predicate, predicate, memory_order_release);
+}
+
++ (BOOL)shdwIsReceiptPathRestricted:(const char *)path {
+  SHDWReceiptPathPredicate predicate = atomic_load_explicit(&shdw_receipt_path_predicate, memory_order_acquire);
+  return predicate && predicate(path);
 }
 
 + (NSString *)shdwMCMContainerPathForBundleID:(NSString *)bid

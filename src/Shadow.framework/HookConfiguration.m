@@ -14,6 +14,10 @@ static const SHDWPlugin kSHDWPlugins[] = {
     {"Universal_Dyld", NULL, SHDWPhaseAlways, SHDWCapabilityFunction, 1, 1},
     {"Universal_Filesystem_C", SHDWUniversalFilesystemID, SHDWPhaseTier1,
      SHDWCapabilityFunction, 1, 1},
+    {"Universal_Fingerprint", SHDWUniversalFingerprintID, SHDWPhaseTier1,
+     SHDWCapabilityMessage, 1, 0},
+    {"Universal_NetworkQueries", SHDWUniversalFingerprintID, SHDWPhaseTier1,
+     SHDWCapabilityFunction, 1, 1},
     {"Universal_EnvVars_C", SHDWUniversalEnvVarsID, SHDWPhaseTier1,
      SHDWCapabilityFunction, 1, 1},
     {"Universal_EnvVars_ObjC", SHDWUniversalEnvVarsID, SHDWPhaseTier1,
@@ -115,6 +119,7 @@ NSDictionary<NSString *, id> *SHDWDefaultHookSettings(void) {
   return @{
     SHDWUniversalFilesystemID : @(YES),
     SHDWUniversalURLSchemeID : @(YES),
+    SHDWUniversalFingerprintID : @(YES),
     SHDWUniversalEnvVarsID : @(YES),
     SHDWUniversalFoundationID : @(YES),
     SHDWUniversalMachBootstrapID : @(YES),

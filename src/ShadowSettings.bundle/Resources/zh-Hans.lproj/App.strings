@@ -17,3 +17,10 @@
 "FOLLOW_GLOBAL" = "跟随全局设置";
 "APP_USES_GLOBAL" = "正在跟随全局设置。关闭以自定义此应用。";
 
+
+"REFRESH_FINGERPRINT" = "刷新指纹数据";
+"FINGERPRINT_REFRESH_DESC" = "仅重新生成此应用的指纹数据。完全退出并重新启动应用后生效。应用设置和固定配置值保持不变。";
+"FINGERPRINT_REFRESHED" = "指纹数据已刷新";
+"FINGERPRINT_REFRESHED_DESC" = "请完全退出此应用，再重新打开以使用新数据。";
+"FINGERPRINT_REFRESH_FAILED" = "刷新未保存";
+"FINGERPRINT_REFRESH_FAILED_DESC" = "无法保存新的指纹数据，请再次尝试刷新。";

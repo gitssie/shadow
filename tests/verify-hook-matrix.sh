@@ -398,7 +398,7 @@ fi
 # A rebind commit may call the replacement before it returns. Its continuation
 # must therefore be written directly to the caller's output cell, not staged
 # in a local that is copied out after the mutation.
-session_apply=$(sed -n '/^static BOOL shdw_apply_hook_spec(/,/^}/p' src/ShadowCore.dylib/SHDWHookSession.m)
+session_apply=$(sed -n '/^static BOOL shdw_apply_hook_spec_with_subsets(/,/^}/p' src/ShadowCore.dylib/SHDWHookSession.m)
 if has_tokens "$session_apply" 'attemptOldPtr' || has_tokens "$session_apply" 'spec, &original,'; then
  echo 'HOOK SESSION DRIFT: continuation output is staged across commit'
  exit 1

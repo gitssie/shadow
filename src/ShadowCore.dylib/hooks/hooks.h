@@ -658,6 +658,10 @@ extern int replaced_ioctl(int fd, unsigned long request, ...);
 // callers — the GOT-vs-dlsym comparison then agrees. Each returns the
 // replacement only when that hook actually installed (original != NULL), so
 // runtime-conditional symbols that are absent on a given OS stay absent.
+void *shdw_sym_policy_lookup_network(const char *name);
+void *shdw_sym_policy_lookup_fingerprint(const char *name);
+void *shdw_sym_policy_lookup_syscall(const char *name);
+BOOL shdw_fingerprint_receipt_path_is_restricted(const char *path);
 void *shdw_sym_policy_lookup_libc(const char *name);
 void *shdw_sym_policy_lookup_mach(const char *name);
 void *shdw_sym_policy_lookup_sandbox(const char *name);

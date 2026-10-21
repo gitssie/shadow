@@ -18,3 +18,10 @@
 "AGGRESSIVE" = "Aggressive Mode";
 "APP_AGGRESSIVE_DESC" = "Natural bypass presents a stock-looking environment; aggressive mode also forces known detectors' checks to report clean for this app.";
 
+
+"REFRESH_FINGERPRINT" = "Refresh Fingerprint Data";
+"FINGERPRINT_REFRESH_DESC" = "Regenerate only this app’s generated fingerprint data. Restart the app to apply the changes. App settings and fixed profile values stay unchanged.";
+"FINGERPRINT_REFRESHED" = "Fingerprint Data Refreshed";
+"FINGERPRINT_REFRESHED_DESC" = "Close this app completely, then reopen it to use the new data.";
+"FINGERPRINT_REFRESH_FAILED" = "Refresh Not Saved";
+"FINGERPRINT_REFRESH_FAILED_DESC" = "Could not save the new fingerprint data. Try refreshing again.";

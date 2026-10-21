@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BlacklistExactPaths</key>
+	<array>
+		<string>/System/Developer</string>
+	</array>
 	<key>BlacklistPaths</key>
 	<array>
 		<string>/tmp/</string>
@@ -10,6 +14,10 @@
 		<string>/var/mobile/Library/SplashBoard/Snapshots/</string>
 		<string>/var/root/</string>
 		<string>/var/log/</string>
+	</array>
+	<key>BlacklistPredicates</key>
+	<array>
+		<string>SELF BEGINSWITH "/System/Developer/"</string>
 	</array>
 	<key>FileSystemStructure</key>
 	<dict>
@@ -141,6 +149,7 @@
 			<string>/var/mobile/Library/Caches/PassKit</string>
 			<string>/var/mobile/Library/Caches/VoiceServices</string>
 			<string>/var/mobile/Library/Caches/VoiceTrigger</string>
+			<string>/var/mobile/Library/Caches/com.apple.Pasteboard</string>
 			<string>/var/mobile/Library/Caches/mediaanalysisd-service</string>
 			<string>/var/mobile/Library/Caches/rtcreportingd</string>
 			<string>/var/mobile/Library/Caches/sharedCaches</string>

@@ -13,6 +13,8 @@ __attribute__((visibility("default")))
 
 - (NSDictionary<NSString *, id> *)getPreferencesForIdentifier:
     (NSString *)bundleIdentifier;
+- (NSDictionary *)fingerprintDataForIdentifier:(NSString *)bundleIdentifier;
+- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier;
 - (void)reset;
 @end
 #endif

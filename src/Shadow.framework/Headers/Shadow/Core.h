@@ -56,6 +56,8 @@ __attribute__((visibility("default")))
 + (void)shdwEnterInternalRead;
 + (void)shdwExitInternalRead;
 + (BOOL)shdwIsInternalRead;
++ (void)shdwSetReceiptPathPredicate:(BOOL (*)(const char *))predicate;
++ (BOOL)shdwIsReceiptPathRestricted:(const char *)path;
 
 + (NSString *)shdwMCMContainerPathForBundleID:(NSString *)bid
                                      dataRoot:(NSString *)dataRoot;

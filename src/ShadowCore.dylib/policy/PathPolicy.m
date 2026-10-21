@@ -274,6 +274,8 @@ BOOL shdw_path_is_external_hidden_lexical(const char *path) {
   // Compare the standardized spelling: detectors routinely probe
   // "//", "/./" and "/../" variants of the same object.
   const char *std = shdw_standardize_lexical(path);
+  if (shdw_fingerprint_receipt_path_is_restricted(std))
+    return YES;
   // Classification names the object, and a trailing slash never changes
   // which object that is: match the exact list with one trailing slash
   // ignored so a directory spelling of a hidden file hides like the file.
@@ -512,6 +514,8 @@ BOOL shdw_path_is_main_bundle_exempt(const char *pathname) {
   // Compare the standardized spelling so "//" and "/./" variants of an
   // exempt location resolve exactly like the canonical form.
   pathname = shdw_standardize_lexical(pathname);
+  if (shdw_fingerprint_receipt_path_is_restricted(pathname))
+    return NO;
   static NSString *cachedBundle = nil;
   static NSString *cachedExe = nil;
   static dispatch_once_t once = 0;

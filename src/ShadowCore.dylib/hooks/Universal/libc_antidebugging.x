@@ -53,6 +53,10 @@ struct shdw_proc_bsdinfo_prefix {
 int (*original_sysctl)(int* name, u_int namelen, void* oldp, size_t* oldlenp, void* newp, size_t newlen);
 
 int replaced_sysctl(int* name, u_int namelen, void* oldp, size_t* oldlenp, void* newp, size_t newlen) {
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    int versionResult;
+    if(shdw_fingerprint_sysctl_mib_query(name, namelen, oldp, oldlenp, newp, newlen, caller, &versionResult))
+        return versionResult;
     if(name == NULL || namelen == 0) {
         return original_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
     }
@@ -109,6 +113,11 @@ int replaced_sysctl(int* name, u_int namelen, void* oldp, size_t* oldlenp, void*
         shdw_procargs2_filter(oldp, oldlenp);
     }
 
+    if(ret == 0 && !newp && name && namelen == 2 && name[0] == CTL_HW && name[1] == HW_MEMSIZE && oldp && oldlenp) {
+        int saved = errno;
+        shdw_fingerprint_sysctl_value("hw.memsize", oldp, *oldlenp, caller);
+        errno = saved;
+    }
     return ret;
 }
 
@@ -699,23 +708,12 @@ int replaced_kevent64(int kq, const struct kevent64_s* changelist, int nchanges,
     return original_kevent64(kq, changelist, nchanges, eventlist, nevents, flags, timeout);
 }
 
-// uname: stock answer, no fabrication. The kernel version carries no
-// jailbreak signal on its own (detectors pair it with other evidence),
-// and forging it would contradict every other version channel
-// (NSProcessInfo, UIDevice, dyld). Hooked only to keep the symbol in the
-// dlsym policy table (GOT-vs-dlsym agreement) — body is pass-through.
 int (*original_uname)(struct utsname* buf);
 int replaced_uname(struct utsname* buf) {
-    return original_uname(buf);
-}
-
-// getifaddrs: pass-through (conservative). Interface enumeration is not a
-// file-evidence channel — jailbreaks add no interfaces stock lacks, and
-// filtering a real interface would break networking. Hooked only for
-// dlsym-policy agreement, like getrlimit above.
-int (*original_getifaddrs)(struct ifaddrs** ifap);
-int replaced_getifaddrs(struct ifaddrs** ifap) {
-    return original_getifaddrs(ifap);
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    int result = original_uname(buf);
+    if(result == 0) shdw_fingerprint_uname_value(buf, caller);
+    return result;
 }
 
 // ioctl: pass-through (conservative). The request space is unbounded and
@@ -733,6 +731,8 @@ int replaced_ioctl(int fd, unsigned long request, ...) {
 
 void shdw_universal_antidebugging_rebind_image(SHDWHookSession* hooks, const void* imageHeader) {
     if(!imageHeader) return;
+    if(original_uname)
+        [hooks hookRebindSymbol:@"uname" withReplacement:replaced_uname outOldPtr:NULL inCallerImage:imageHeader];
     if(original_sysctl)
         [hooks hookRebindSymbol:@"sysctl" withReplacement:replaced_sysctl outOldPtr:NULL inCallerImage:imageHeader];
     if(!resolved_getppid)

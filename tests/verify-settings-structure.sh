@@ -180,6 +180,7 @@ specifier_ids = {
 full = [
     "AppSettingsGroup", "App_FollowGlobal", "App_Enabled",
     "AppAggressiveGroup", "Detector_Aggressive",
+    "AppFingerprintGroup", "AppRefreshFingerprint",
     "AppResetGroup", "AppReset",
 ]
 assert plist_ids == full, "App.plist specifier order changed"
@@ -199,13 +200,30 @@ def apply(specifiers, calls):
     return specifiers
 
 
-following = ["AppSettingsGroup", "App_FollowGlobal", "AppResetGroup", "AppReset"]
+following = ["AppSettingsGroup", "App_FollowGlobal", "AppFingerprintGroup",
+             "AppRefreshFingerprint", "AppResetGroup", "AppReset"]
 assert apply(full, initial_ops) == following
 for _ in range(2):
     assert apply(full, on_ops) == following
     assert apply(following, off_ops) == full
     following = apply(full, on_ops)
 print("PASS: app controller follow-global visibility transitions (static call sequence)")
+
+with open(sys.argv[2], 'rb') as stream:
+    rows = {row['id']: row for row in plistlib.load(stream)['items']}
+refresh_row = rows['AppRefreshFingerprint']
+assert refresh_row['cell'] == 'PSButtonCell'
+assert refresh_row['action'] == 'refreshFingerprintData:'
+assert refresh_row['label'] == 'REFRESH_FINGERPRINT'
+assert rows['AppFingerprintGroup']['footerText'] == 'FINGERPRINT_REFRESH_DESC'
+refresh = block(source, '- (void)refreshFingerprintData:')
+assert has(refresh, 'refreshFingerprintDataForIdentifier:[self applicationID]')
+assert refresh.count('refreshFingerprintDataForIdentifier:') == 1
+assert has(block(refresh, 'if(saved)'), 'SHDWToggleHaptic();')
+assert has(refresh, 'FINGERPRINT_REFRESHED_DESC') and has(refresh, 'FINGERPRINT_REFRESH_FAILED_DESC')
+assert has(refresh, '[self presentViewController:alert animated:YES completion:nil];')
+assert 'SHDWResetApp' not in refresh
+print("PASS: per-app refresh remains visible following global settings and uses isolated refresh API")
 
 reset = block(source, '- (void)resetAppSettings:')
 assert has(reset, 'style:UIAlertActionStyleCancel handler:nil')
