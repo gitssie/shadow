@@ -157,6 +157,15 @@ case "$1" in
                 || "$LAUNCHCTL_BIN" load -w "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.watcher.plist" 2>/dev/null \
                 || true
         fi
+
+        app_path="$DPKG_ROOT/Applications/ShadowManager.app"
+        if [ -d "$app_path" ]; then
+            uicache_bin=${SHADOW_UICACHE_BIN:-$DPKG_ROOT/usr/bin/uicache}
+            if [ ! -x "$uicache_bin" ]; then
+                uicache_bin=$(command -v uicache) || exit 1
+            fi
+            "$uicache_bin" -p "$app_path" || exit 1
+        fi
     ;;
     triggered)
         "$DPKG_ROOT/usr/local/bin/shdw" -g >/dev/null 2>&1 || true

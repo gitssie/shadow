@@ -58,7 +58,14 @@ CORE=$(find_one -type f -path '*/usr/lib/ShadowCore.dylib')
 SETTINGS=$(find_one -type f -path '*/PreferenceBundles/ShadowSettings.bundle/ShadowSettings')
 SHDW=$(find_one -type f -path '*/usr/local/bin/shdw')
 
-"$(dirname "$0")/check-binary-compat.sh" "$PROFILE" "$SHADOW" "$TWEAK" "$CORE" "$SETTINGS" "$SHDW"
+BINARIES=("$SHADOW" "$TWEAK" "$CORE" "$SETTINGS" "$SHDW")
+if [ "$PROFILE" != rootful-legacy ]; then
+    APP=$(find_one -type f -path '*/Applications/ShadowManager.app/ShadowManager')
+    APP_INFO=$(find_one -type f -path '*/Applications/ShadowManager.app/Info.plist')
+    [ -s "$APP_INFO" ] || { echo "manager app metadata is empty" >&2; exit 1; }
+    BINARIES+=("$APP")
+fi
+"$(dirname "$0")/check-binary-compat.sh" "$PROFILE" "${BINARIES[@]}"
 
 WATCHER=$(find_one -type f -name me.jjolano.shadow.watcher.plist)
 [ -n "$WATCHER" ]

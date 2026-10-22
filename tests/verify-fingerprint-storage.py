@@ -30,9 +30,11 @@ helpers += function(settings, "static NSDictionary *SHDWRepairedFingerprintVendo
 helpers += function(settings, "static NSDictionary *SHDWNewFingerprintData(")
 methods = function(settings, "- (NSDictionary *)fingerprintDataForIdentifier:") + "\n"
 methods += function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:")
+methods += function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                            lockOnSuccess:")
 customized = function((root / "src/ShadowSettings.bundle/SHDWPrefs.m").read_text(), "BOOL SHDWAppIsCustomized(")
 source = r'''
 #import <Foundation/Foundation.h>
+#import <Shadow/FingerprintState.h>
 #include <assert.h>
 #include <math.h>
 #include <sys/time.h>
@@ -78,11 +80,13 @@ static NSString *fallbackPath;
 @property(nonatomic, strong) NSMutableDictionary *values;
 - (id)objectForKey:(NSString *)key;
 - (void)setObject:(id)object forKey:(NSString *)key;
+- (void)removeObjectForKey:(NSString *)key;
 - (BOOL)synchronize;
 @end
 @implementation FileDefaults
 - (id)objectForKey:(NSString *)key { return self.values[key]; }
 - (void)setObject:(id)object forKey:(NSString *)key { self.values[key] = object; }
+- (void)removeObjectForKey:(NSString *)key { [self.values removeObjectForKey:key]; }
 - (BOOL)synchronize { return [self.values writeToFile:self.path atomically:YES]; }
 @end
 @interface ShadowSettings : NSObject
@@ -90,6 +94,7 @@ static NSString *fallbackPath;
 + (instancetype)sharedInstance;
 - (NSDictionary *)fingerprintDataForIdentifier:(NSString *)identifier;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier;
+- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier lockOnSuccess:(BOOL)lockOnSuccess;
 @end
 static ShadowSettings *sharedSettings;
 '''
@@ -119,6 +124,11 @@ int main(int argc, const char **argv) { @autoreleasepool {
         maximumEntropy = NO;
         store.values[@"Global_Enabled"] = @YES;
         store.values[@"a.app"] = @{@"App_Enabled":@YES, @"Detector_Aggressive":@NO, @"Unrelated":@"keep"};
+        assert(![sharedSettings fingerprintDataForIdentifier:@"a.app"]);
+        assert(![sharedSettings fingerprintDataForIdentifier:@"b.app"]);
+        assert(!store.values[@"b.app"]);
+        assert([sharedSettings refreshFingerprintDataForIdentifier:@"a.app"]);
+        assert([sharedSettings refreshFingerprintDataForIdentifier:@"b.app"]);
         NSDictionary *a = SHDWFingerprintData(@"a.app");
         NSDictionary *b = SHDWFingerprintData(@"b.app");
         assert(SHDWValidFingerprintData(a) && SHDWValidFingerprintData(b) && ![a isEqual:b]);
@@ -174,6 +184,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(SHDWFingerprintData(@"failure.app").count == 0);
         assert([beforeFailure isEqual:store.values]);
         nativeBoot = originalBoot;
+        assert(![sharedSettings fingerprintDataForIdentifier:@"failure.app"]);
+        assert([sharedSettings refreshFingerprintDataForIdentifier:@"failure.app"]);
         assert(SHDWValidFingerprintData([sharedSettings fingerprintDataForIdentifier:@"failure.app"]));
         assert(SHDWFingerprintData(@"failure.app").count == 0);
         assert([sharedSettings refreshFingerprintDataForIdentifier:@"a.app"]);
@@ -245,6 +257,25 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert(nativeBoot + [clamped[@"BootTimeOffset"] doubleValue] >= varBirth);
         assert([otherApp isEqual:store.values[@"b.app"]]);
 
+        // Safety states permit only bounded, read-only runtime snapshots.
+        for (NSString *flag in @[@"Fingerprint_Enabled", @"Fingerprint_Locked"]) {
+            NSDictionary *guarded = @{@"Fingerprint_Data":profile,
+                                      flag:@([flag isEqual:@"Fingerprint_Locked"])};
+            store.values[@"guarded.app"] = guarded;
+            NSDictionary *readOnly = [sharedSettings fingerprintDataForIdentifier:@"guarded.app"];
+            assert([readOnly[@"BootTimeOffset"] integerValue] == 121);
+            assert([readOnly[@"BootSessionUUID"] isEqual:profile[@"BootSessionUUID"]]);
+            assert([store.values[@"guarded.app"] isEqual:guarded]);
+            assert(![sharedSettings refreshFingerprintDataForIdentifier:@"guarded.app"]);
+            assert([store.values[@"guarded.app"] isEqual:guarded]);
+            statFailure = YES;
+            NSDictionary *nativeBootFallback = [sharedSettings fingerprintDataForIdentifier:@"guarded.app"];
+            assert(!nativeBootFallback[@"BootTimeOffset"]);
+            assert([nativeBootFallback[@"VendorIdentifier"] isEqual:profile[@"VendorIdentifier"]]);
+            assert([store.values[@"guarded.app"] isEqual:guarded]);
+            statFailure = NO;
+        }
+
         // Missing metadata and incompatible ranges preserve the complete stored profile.
         NSDictionary *beforeFailure = [store.values copy];
         for(unsigned mode = 0; mode < 3; mode++) {
@@ -310,7 +341,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-storage-") as tmp:
     src, binary, prefs = tmp / "test.m", tmp / "test", tmp / "prefs.plist"
     src.write_text(source)
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
-        "-fsanitize=address,undefined", "-framework", "Foundation", "-I",
+        "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Shadow.framework/Headers"), "-I",
         str(root / "src/ShadowCore.dylib/policy"), str(src), "-o", str(binary)], check=True)
     for phase in ["seed", "restart", "restart", "vendor-migrate", "vendor-restart", "bounds", "clock", "reboot"]:
         subprocess.run([str(binary), str(prefs), phase], check=True)

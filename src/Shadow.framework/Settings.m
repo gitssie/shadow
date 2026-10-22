@@ -1,4 +1,5 @@
 #import <Shadow/Settings.h>
+#import <Shadow/FingerprintState.h>
 
 #import "../common.h"
 #import "SettingsMigration.h"
@@ -142,6 +143,7 @@ static NSDictionary *SHDWNewFingerprintData(void) {
   }
   return @{
     @"Version" : @1,
+    @"UpdatedAt" : @(now),
     @"MemoryDelta" : @(delta),
     @"InterfaceSeed" : [NSData dataWithBytes:seed length:sizeof(seed)],
     @"BootTimeOffset" : @(bootOffset),
@@ -235,11 +237,31 @@ static NSDictionary *SHDWNewFingerprintData(void) {
 }
 
 - (void)reset {
-  // Wipe the whole persistent domain in one atomic write: global toggle,
-  // aggressive mode, and every per-app override drop back to defaults. Same
-  // suite name as init so cfprefsd clears the store the runtime reads.
-  [userDefaults setPersistentDomain:@{} forName:@SHADOW_PREFS_PLIST];
-  [userDefaults synchronize];
+  @synchronized(self) {
+    [userDefaults synchronize];
+    NSDictionary *previous = [userDefaults persistentDomainForName:@SHADOW_PREFS_PLIST] ?: @{};
+    NSMutableDictionary *changedValues = [NSMutableDictionary new];
+    for (NSString *key in previous) {
+      id value = previous[key];
+      if (![value isKindOfClass:NSDictionary.class]) continue;
+      NSDictionary *updated = SHDWApplicationSettingsWithoutOverrides(value);
+      if (![updated isEqual:value]) {
+        changedValues[key] = value;
+        [userDefaults setObject:updated forKey:key];
+      }
+    }
+    for (NSString *key in @[SHDWGlobalEnabledID, SHDWDetectorAggressiveID,
+                            SHDWUniversalPseudoSandboxModeID]) {
+      if (previous[key]) {
+        changedValues[key] = previous[key];
+        [userDefaults removeObjectForKey:key];
+      }
+    }
+    if (![userDefaults synchronize]) {
+      for (NSString *key in changedValues) [userDefaults setObject:changedValues[key] forKey:key];
+      [userDefaults synchronize];
+    }
+  }
 }
 
 - (NSDictionary *)fingerprintDataForIdentifier:(NSString *)bundleIdentifier {
@@ -278,6 +300,29 @@ static NSDictionary *SHDWNewFingerprintData(void) {
           app = fileApp;
         }
       }
+    }
+
+    if (!SHDWFingerprintApplicationEnabled(app) ||
+        SHDWFingerprintApplicationLocked(app)) {
+      id existing = app[@"Fingerprint_Data"];
+      if (!SHDWValidFingerprintData(existing)) {
+        return nil;
+      }
+      NSMutableDictionary *snapshot = [existing mutableCopy];
+      double nativeBoot = SHDWNativeBootTimestamp();
+      double now = [[NSDate date] timeIntervalSince1970];
+      NSInteger minimumOffset, maximumOffset;
+      if (!SHDWNativeBootSessionUUID() ||
+          !SHDWFingerprintBootOffsetBounds(nativeBoot, now, &minimumOffset,
+                                           &maximumOffset)) {
+        [snapshot removeObjectForKey:@"BootTimeOffset"];
+      } else {
+        NSInteger offset = [existing[@"BootTimeOffset"] integerValue];
+        snapshot[@"BootTimeOffset"] =
+            @(MIN(maximumOffset, MAX(minimumOffset, offset)));
+        snapshot[@"NativeBootTimestamp"] = @(nativeBoot);
+      }
+      return [snapshot copy];
     }
 
     if (SHDWValidFingerprintData(data)) {
@@ -323,6 +368,13 @@ static NSDictionary *SHDWNewFingerprintData(void) {
       return [self.userDefaults synchronize] ? [updated copy] : nil;
     }
 
+    // Reading an unregistered application never creates a device identity.
+    id registration = app[@"Fingerprint_Data"];
+    if (![registration isKindOfClass:[NSDictionary class]] ||
+        [registration count] == 0) {
+      return nil;
+    }
+
     NSMutableDictionary *updatedApp =
         [app mutableCopy] ?: [NSMutableDictionary new];
     NSDictionary *generated = SHDWNewFingerprintData();
@@ -336,12 +388,18 @@ static NSDictionary *SHDWNewFingerprintData(void) {
 }
 
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier {
+  return [self refreshFingerprintDataForIdentifier:bundleIdentifier lockOnSuccess:NO];
+}
+
+- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier
+                            lockOnSuccess:(BOOL)lockOnSuccess {
   if (bundleIdentifier.length == 0) {
     return NO;
   }
   @synchronized(self) {
     [self.userDefaults synchronize];
-    id storedApp = [self.userDefaults objectForKey:bundleIdentifier];
+    id previous = [self.userDefaults objectForKey:bundleIdentifier];
+    id storedApp = previous;
     if (![storedApp isKindOfClass:[NSDictionary class]]) {
       for (NSString *path in @[
              JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST
@@ -354,6 +412,10 @@ static NSDictionary *SHDWNewFingerprintData(void) {
         }
       }
     }
+    if (!SHDWFingerprintApplicationEnabled(storedApp) ||
+        SHDWFingerprintApplicationLocked(storedApp)) {
+      return NO;
+    }
     NSMutableDictionary *app =
         [storedApp isKindOfClass:[NSDictionary class]]
             ? [storedApp mutableCopy] : [NSMutableDictionary new];
@@ -361,9 +423,28 @@ static NSDictionary *SHDWNewFingerprintData(void) {
     if (!generated) {
       return NO;
     }
+    id previousData = app[@"Fingerprint_Data"];
+    NSNumber *previousMemory = [previousData isKindOfClass:NSDictionary.class]
+        ? previousData[@"MemoryDelta"] : nil;
+    if ([previousMemory isKindOfClass:NSNumber.class] &&
+        [generated[@"MemoryDelta"] isEqual:previousMemory]) {
+      NSMutableDictionary *changed = [generated mutableCopy];
+      changed[@"MemoryDelta"] = @(-previousMemory.longLongValue);
+      generated = changed;
+    }
     app[@"Fingerprint_Data"] = generated;
+    if (lockOnSuccess) app[@"Fingerprint_Locked"] = @YES;
     [self.userDefaults setObject:app forKey:bundleIdentifier];
-    return [self.userDefaults synchronize];
+    if ([self.userDefaults synchronize]) {
+      return YES;
+    }
+    if (previous) {
+      [self.userDefaults setObject:previous forKey:bundleIdentifier];
+    } else {
+      [self.userDefaults removeObjectForKey:bundleIdentifier];
+    }
+    [self.userDefaults synchronize];
+    return NO;
   }
 }
 
@@ -381,10 +462,14 @@ static NSDictionary *SHDWNewFingerprintData(void) {
   // Sandboxed cfprefsd can omit another app's dictionary despite libSandy's
   // file grant.
   if (bundleIdentifier) {
-    id fileRoot =
-        [NSDictionary dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST];
-    filePreferences =
-        [fileRoot isKindOfClass:[NSDictionary class]] ? fileRoot : nil;
+    for (NSString *path in @[JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST]) {
+      id fileRoot = [NSDictionary dictionaryWithContentsOfFile:path];
+      if ([fileRoot isKindOfClass:[NSDictionary class]] &&
+          [fileRoot[bundleIdentifier] isKindOfClass:[NSDictionary class]]) {
+        filePreferences = fileRoot;
+        break;
+      }
+    }
     id fileSettings = filePreferences[bundleIdentifier];
     fileAppSettings = [fileSettings isKindOfClass:[NSDictionary class]]
                           ? SHDWMigratedHookSettings(fileSettings)
@@ -407,6 +492,11 @@ static NSDictionary *SHDWNewFingerprintData(void) {
       [bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] ||
           bundleIdentifier.length == 0);
   result[SHDWAppEnabledID] = @(enabled);
+  id fingerprint = app_settings[@"Fingerprint_Data"];
+  result[SHDWUniversalFingerprintID] =
+      @(enabled && SHDWFingerprintApplicationEnabled(app_settings) &&
+        [fingerprint isKindOfClass:[NSDictionary class]] &&
+        [fingerprint count] > 0);
 
   // Aggressive detector neutralization: per-app override, else the global
   // default. Written into the returned profile so the coordinator/adapters

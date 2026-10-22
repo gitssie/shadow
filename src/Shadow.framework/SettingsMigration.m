@@ -31,6 +31,9 @@ SHDWMigratedHookSettings(NSDictionary<NSString *, id> *settings) {
       SHDWGlobalEnabledID,
       SHDWSingleToggleMigrationID,
       SHDWAppEnabledID,
+      @"Fingerprint_Managed",
+      @"Fingerprint_Enabled",
+      @"Fingerprint_Locked",
       SHDWUniversalHarnessBaselineID,
       // A mode, not a hook toggle: pruned would silently disable it.
       SHDWUniversalPseudoSandboxModeID,

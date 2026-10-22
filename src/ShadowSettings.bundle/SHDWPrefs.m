@@ -92,7 +92,11 @@ BOOL SHDWAppIsCustomized(id appPrefs) {
 BOOL SHDWResetApp(NSUserDefaults *prefs, NSString *appID) {
   if (appID.length == 0)
     return NO;
-  [prefs removeObjectForKey:appID];
+  NSDictionary *current = [prefs dictionaryForKey:appID];
+  if (current) {
+    NSDictionary *updated = SHDWApplicationSettingsWithoutOverrides(current);
+    if (![updated isEqual:current]) [prefs setObject:updated forKey:appID];
+  }
   // Do not roll back asynchronous defaults writes with a potentially stale
   // snapshot.
   return [prefs synchronize];
@@ -106,21 +110,13 @@ UIImage *SHDWSettingsSymbol(NSString *name) {
 }
 
 void SHDWClearAppOverrides(NSUserDefaults *prefs, NSString *appID) {
-  NSMutableDictionary *appPrefs = [[prefs dictionaryForKey:appID] mutableCopy];
+  NSDictionary *appPrefs = [prefs dictionaryForKey:appID];
   if (!appPrefs) {
     return;
   }
-  [appPrefs removeObjectForKey:SHDWAppEnabledID];
-  [appPrefs removeObjectForKey:SHDWAppDisabledID];
-  [appPrefs removeObjectForKey:SHDWDetectorAggressiveID];
   [prefs setBool:YES forKey:SHDWSingleToggleMigrationID];
-  // Drop the app's dictionary entirely once it holds no overrides, so a
-  // "follow global" app leaves no residue in the backing plist.
-  if (appPrefs.count == 0) {
-    [prefs removeObjectForKey:appID];
-  } else {
-    [prefs setObject:[appPrefs copy] forKey:appID];
-  }
+  NSDictionary *updated = SHDWApplicationSettingsWithoutOverrides(appPrefs);
+  if (![updated isEqual:appPrefs]) [prefs setObject:updated forKey:appID];
 }
 
 BOOL SHDWAppAggressive(NSUserDefaults *prefs, NSString *appID) {

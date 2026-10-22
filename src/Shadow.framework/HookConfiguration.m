@@ -119,7 +119,7 @@ NSDictionary<NSString *, id> *SHDWDefaultHookSettings(void) {
   return @{
     SHDWUniversalFilesystemID : @(YES),
     SHDWUniversalURLSchemeID : @(YES),
-    SHDWUniversalFingerprintID : @(YES),
+    SHDWUniversalFingerprintID : @(NO),
     SHDWUniversalEnvVarsID : @(YES),
     SHDWUniversalFoundationID : @(YES),
     SHDWUniversalMachBootstrapID : @(YES),

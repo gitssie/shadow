@@ -600,7 +600,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-webkit-") as tmp:
     src.write_text(prefix + policy_source + "\n" + helper + "\n@implementation WKWebView (Hooks)\n" + methods + "\n@end\n" + controller_implementation + suffix)
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
-        "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(policy.parent),
+        "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(policy.parent),
         str(src), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)

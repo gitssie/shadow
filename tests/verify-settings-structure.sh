@@ -180,7 +180,6 @@ specifier_ids = {
 full = [
     "AppSettingsGroup", "App_FollowGlobal", "App_Enabled",
     "AppAggressiveGroup", "Detector_Aggressive",
-    "AppFingerprintGroup", "AppRefreshFingerprint",
     "AppResetGroup", "AppReset",
 ]
 assert plist_ids == full, "App.plist specifier order changed"
@@ -200,8 +199,7 @@ def apply(specifiers, calls):
     return specifiers
 
 
-following = ["AppSettingsGroup", "App_FollowGlobal", "AppFingerprintGroup",
-             "AppRefreshFingerprint", "AppResetGroup", "AppReset"]
+following = ["AppSettingsGroup", "App_FollowGlobal", "AppResetGroup", "AppReset"]
 assert apply(full, initial_ops) == following
 for _ in range(2):
     assert apply(full, on_ops) == following
@@ -211,19 +209,11 @@ print("PASS: app controller follow-global visibility transitions (static call se
 
 with open(sys.argv[2], 'rb') as stream:
     rows = {row['id']: row for row in plistlib.load(stream)['items']}
-refresh_row = rows['AppRefreshFingerprint']
-assert refresh_row['cell'] == 'PSButtonCell'
-assert refresh_row['action'] == 'refreshFingerprintData:'
-assert refresh_row['label'] == 'REFRESH_FINGERPRINT'
-assert rows['AppFingerprintGroup']['footerText'] == 'FINGERPRINT_REFRESH_DESC'
-refresh = block(source, '- (void)refreshFingerprintData:')
-assert has(refresh, 'refreshFingerprintDataForIdentifier:[self applicationID]')
-assert refresh.count('refreshFingerprintDataForIdentifier:') == 1
-assert has(block(refresh, 'if(saved)'), 'SHDWToggleHaptic();')
-assert has(refresh, 'FINGERPRINT_REFRESHED_DESC') and has(refresh, 'FINGERPRINT_REFRESH_FAILED_DESC')
-assert has(refresh, '[self presentViewController:alert animated:YES completion:nil];')
-assert 'SHDWResetApp' not in refresh
-print("PASS: per-app refresh remains visible following global settings and uses isolated refresh API")
+assert 'AppRefreshFingerprint' not in rows and 'AppFingerprintGroup' not in rows
+assert 'refreshFingerprintData:' not in source
+assert 'refreshFingerprintDataForIdentifier:' not in source
+assert 'fingerprintDataForIdentifier:' not in source
+print("PASS: legacy settings expose no fingerprint refresh action or generation on page load")
 
 reset = block(source, '- (void)resetAppSettings:')
 assert has(reset, 'style:UIAlertActionStyleCancel handler:nil')
@@ -361,7 +351,8 @@ pinned "$settings" 'SHDWAdapterDeviceCheckID, SHDWAdapterFreeRASPID' \
 # explicit App_Enabled and stamping the single-toggle migration marker;
 # clearing it (follow global) drops the override key.
 pinned src/ShadowSettings.bundle/SHDWPrefs.m 'setBool:YES forKey:SHDWSingleToggleMigrationID' &&
-grep -q 'removeObjectForKey:SHDWAppEnabledID' src/ShadowSettings.bundle/SHDWPrefs.m || {
+grep -q 'SHDWApplicationSettingsWithoutOverrides(appPrefs)' src/ShadowSettings.bundle/SHDWPrefs.m &&
+grep -q 'removeObjectForKey:SHDWAppEnabledID' src/Shadow.framework/Headers/Shadow/SHDWPlugin.h || {
     echo 'SETTINGS DRIFT: per-app toggle must use explicit single-toggle semantics with follow-global clear'
     exit 1
 }
@@ -381,10 +372,13 @@ grep -q 'removeObjectForKey:key' src/Shadow.framework/SettingsMigration.m || {
     exit 1
 }
 
-for source in "$loader" "$settings"; do
-    grep -q 'dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST' "$source" || {
-        echo "SETTINGS DRIFT: $source lost the sandboxed per-app fallback"
-        exit 1
-    }
-done
+grep -q 'dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST' "$loader" || {
+    echo "SETTINGS DRIFT: loader lost the sandboxed per-app fallback"
+    exit 1
+}
+pinned "$settings" 'JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST' \
+    'dictionaryWithContentsOfFile:path' || {
+    echo "SETTINGS DRIFT: settings lost the scheme-aware per-app fallback"
+    exit 1
+}
 

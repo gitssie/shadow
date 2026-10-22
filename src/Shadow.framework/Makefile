@@ -3,8 +3,8 @@ include $(THEOS)/makefiles/common.mk
 
 FRAMEWORK_NAME = Shadow
 
-Shadow_FILES = Core.m Core+Utilities.m Ruleset.m RulesetCompiler.m RulesetStore.m RestrictionEngine.m JBPath.m Settings.m SettingsMigration.m DpkgRulesGenerator.m SystemRulesGenerator.m HookConfiguration.m
-Shadow_FRAMEWORKS = Foundation CoreFoundation
+Shadow_FILES = Core.m Core+Utilities.m Ruleset.m RulesetCompiler.m RulesetStore.m RestrictionEngine.m JBPath.m Settings.m SettingsMigration.m DpkgRulesGenerator.m SystemRulesGenerator.m HookConfiguration.m Fingerprint/Profile.m Fingerprint/Signals.m Fingerprint/Store.m
+Shadow_FRAMEWORKS = Foundation CoreFoundation UIKit LocalAuthentication
 Shadow_PRIVATE_FRAMEWORKS = MobileCoreServices
 Shadow_INSTALL_PATH = /Library/Frameworks
 # The path seam (Shadow/JBPath.h) is compile-time: the rooted/rootless mapping

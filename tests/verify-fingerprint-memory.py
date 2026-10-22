@@ -42,6 +42,7 @@ prefix = r'''
 #import <Foundation/Foundation.h>
 #include <assert.h>
 #include <stdint.h>
+#import <Shadow/FingerprintMemory.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <math.h>
@@ -250,6 +251,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-memory-") as tmp:
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation",
-        "-I", str(policy.parent), str(src), "-o", str(binary),
+        "-I", str(policy.parent), "-I", str(root / "src/Shadow.framework/Headers"), str(src), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)

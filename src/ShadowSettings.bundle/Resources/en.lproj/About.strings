@@ -25,8 +25,8 @@
 
 "RESET_HDR" = "Reset";
 "RESET_SETTINGS" = "Reset Settings";
-"RESET_SETTINGS_DESC" = "Restore all Shadow settings to their defaults. Per-app settings will be cleared.";
-"RESET_CONFIRM" = "This will restore all Shadow settings to their defaults. This cannot be undone.";
+"RESET_SETTINGS_DESC" = "Restore Shadow settings to their defaults. Fingerprint data and its protection settings are preserved.";
+"RESET_CONFIRM" = "Restore Shadow settings to their defaults? Fingerprint data and its protection settings will be preserved.";
 "RESET_CANCEL" = "Cancel";
 
 /* your name here! */

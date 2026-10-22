@@ -61,6 +61,14 @@
 // a named detector. Only meaningful when the app is enabled.
 #define SHDWDetectorAggressiveID @"Detector_Aggressive"
 
+static inline NSDictionary *SHDWApplicationSettingsWithoutOverrides(NSDictionary *settings) {
+  NSMutableDictionary *updated = [settings mutableCopy];
+  [updated removeObjectForKey:SHDWAppEnabledID];
+  [updated removeObjectForKey:SHDWAppDisabledID];
+  [updated removeObjectForKey:SHDWDetectorAggressiveID];
+  return [updated copy];
+}
+
 // Resolve the effective aggressive-neutralization state for an app: the per-app
 // override if present, else the global default. Mirrors
 // SHDWApplicationEnabled's global-fallback shape.

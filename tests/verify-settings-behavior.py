@@ -68,7 +68,17 @@ source = '#import <Foundation/Foundation.h>\n#import <objc/runtime.h>\n#include 
 source += "\n".join(re.findall(
     r'^#define SHDW(?:AppEnabled|AppDisabled|DetectorAggressive|SingleToggleMigration)ID\s+@"[^"]+"',
     keys, re.M))
+source += '\n' + body(keys, 'static inline NSDictionary *SHDWApplicationSettingsWithoutOverrides(', '// Resolve the effective')
+source += r'''
+static NSDictionary *testFingerprintFields(NSDictionary *app) {
+    NSMutableDictionary *fields=[NSMutableDictionary new];
+    for(NSString *key in app) if([key hasPrefix:@"Fingerprint_"]) fields[key]=app[key];
+    return fields;
+}
+'''
 source += '\nBOOL SHDWAppIsCustomized(id appPrefs);\n' + helpers
+source += body(prefs, 'void SHDWWriteAppEnabled(', 'BOOL SHDWAppFollowsGlobal(')
+source += body(prefs, 'void SHDWWriteAppAggressive(', 'void SHDWToggleHaptic(')
 source += '#define JBPath(path) (path)\n#define THEOS_PACKAGE_INSTALL_PREFIX "/test-bootstrap"\n'
 source += pin_all(body(prefs, 'NSString *SHDWInstalledVersion(', 'BOOL SHDWAppEnabled('),
                   'SHDWInstalledVersion(void)', 'readInstalledVersion(void)')
@@ -477,7 +487,7 @@ int main(void) { @autoreleasepool {
             prefs.failSynchronize = YES;
             assert(!SHDWResetApp(prefs, app));
             NSMutableDictionary *expected = [before mutableCopy];
-            [expected removeObjectForKey:app];
+            expected[app] = @{@"obsolete":@YES};
             // Failed persistence leaves current memory visible, without clobbering other keys.
             assert([[prefs dictionaryRepresentation] isEqual:expected]);
             prefs.failSynchronize = NO;
@@ -485,7 +495,7 @@ int main(void) { @autoreleasepool {
             [prefs setObject:override forKey:app];
             assert(SHDWResetApp(prefs, app));
             assert([[prefs dictionaryRepresentation] isEqual:expected]);
-            assert([prefs objectForKey:app] == nil);
+            assert([[prefs dictionaryForKey:app] isEqual:@{@"obsolete":@YES}]);
             assert(SHDWAppFollowsGlobal(prefs, app));
         }
     }
@@ -498,7 +508,7 @@ int main(void) { @autoreleasepool {
         SHDWClearAppOverrides(prefs, app);
         assert([[prefs objectForKey:SHDWSingleToggleMigrationID] boolValue]);
         if(mask & 8) assert([[prefs dictionaryForKey:app] isEqual:@{@"unrelated": @YES}]);
-        else assert([prefs dictionaryForKey:app] == nil);
+        else assert([[prefs dictionaryForKey:app] isEqual:@{}]);
         assert(SHDWAppFollowsGlobal(prefs, app));
     }
     [prefs removeObjectForKey:app];
@@ -510,6 +520,33 @@ int main(void) { @autoreleasepool {
     assert(!SHDWResetApp(prefs, @""));
     assert(SHDWResetApp(prefs, app));
     assert([[prefs dictionaryRepresentation] isEqual:before]);
+
+    NSDictionary *protected = @{@"Fingerprint_Data":fingerprint, @"Fingerprint_Managed":@YES,
+        @"Fingerprint_Enabled":@NO, @"Fingerprint_Locked":@YES, @"Fingerprint_Future":@{@"opaque":@"keep"}, @"UnrelatedPayload":@[@1,@2]};
+    NSMutableDictionary *configured = [protected mutableCopy];
+    configured[SHDWAppEnabledID]=@YES; configured[SHDWDetectorAggressiveID]=@YES;
+    [prefs setObject:configured forKey:app];
+    for(NSNumber *on in @[@NO,@YES]) {
+        SHDWWriteAppEnabled(prefs, app, on.boolValue);
+        assert([testFingerprintFields([prefs dictionaryForKey:app]) isEqual:testFingerprintFields(protected)]);
+        SHDWWriteAppAggressive(prefs, app, on.boolValue);
+        assert([testFingerprintFields([prefs dictionaryForKey:app]) isEqual:testFingerprintFields(protected)]);
+    }
+    SHDWClearAppOverrides(prefs, app);
+    assert([[prefs dictionaryForKey:app] isEqual:protected]);
+    assert(SHDWAppFollowsGlobal(prefs, app));
+    [prefs setObject:configured forKey:app];
+    NSDictionary *untouchedOther = [[prefs dictionaryForKey:other] copy];
+    assert(SHDWResetApp(prefs, app));
+    assert([[prefs dictionaryForKey:app] isEqual:protected]);
+    assert([[prefs dictionaryForKey:other] isEqual:untouchedOther]);
+    assert(SHDWResetApp(prefs, app));
+    assert([[prefs dictionaryForKey:app] isEqual:protected]);
+    prefs.failSynchronize=YES;
+    [prefs setObject:configured forKey:app];
+    assert(!SHDWResetApp(prefs, app));
+    assert([testFingerprintFields([prefs dictionaryForKey:app]) isEqual:testFingerprintFields(protected)]);
+    prefs.failSynchronize=NO;
 
     NSString *longBody = [@"## Actual notes\\n- Fix with `code` and https://example.invalid\\n"
         stringByPaddingToLength:100000 withString:@"More release notes.\\n" startingAtIndex:0];

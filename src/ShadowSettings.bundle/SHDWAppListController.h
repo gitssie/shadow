@@ -7,5 +7,4 @@
 @interface SHDWAppListController : ATLApplicationListSubcontroller
 - (id)readPreferenceValue:(PSSpecifier *)specifier;
 - (void)setPreferenceValue:(id)value forSpecifier:(PSSpecifier *)specifier;
-- (void)refreshFingerprintData:(id)sender;
 @end

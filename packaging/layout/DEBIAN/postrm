@@ -10,6 +10,13 @@ case "$1" in
         "$DPKG_ROOT/usr/local/bin/shdw" -g > /dev/null || true
     ;;
     remove|purge)
+        uicache_bin=${SHADOW_UICACHE_BIN:-$DPKG_ROOT/usr/bin/uicache}
+        if [ ! -x "$uicache_bin" ]; then
+            uicache_bin=$(command -v uicache || true)
+        fi
+        if [ -n "$uicache_bin" ]; then
+            "$uicache_bin" -u "$DPKG_ROOT/Applications/ShadowManager.app" || true
+        fi
         # Runtime-generated ruleset files dpkg does not own (the shipped
         # dpkgInstalled.plist placeholder is removed by dpkg itself).
         rm -f "$DPKG_ROOT/Library/Shadow/Rulesets/SystemRules.plist" \

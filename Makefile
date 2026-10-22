@@ -10,6 +10,9 @@ SUBPROJECTS += src/Shadow.framework
 SUBPROJECTS += src/Shadow.dylib
 SUBPROJECTS += src/ShadowCore.dylib
 SUBPROJECTS += src/ShadowSettings.bundle
+ifneq ($(SHADOW_LANE),rootful-legacy)
+SUBPROJECTS += src/Shadow.app
+endif
 SUBPROJECTS += src/shdw
 include $(THEOS_MAKE_PATH)/aggregate.mk
 

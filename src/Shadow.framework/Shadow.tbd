@@ -8,6 +8,7 @@ exports:
   - archs:                [ armv7, armv7s, arm64, arm64e ]
     objc-classes:         [ _Shadow,
                             _ShadowSettings,
+                            _SHDWFingerprintStore,
                             _SystemRulesGenerator ]
     symbols:              [ _SHDWHookPlan, _SHDWPluginPlan, _SHDWInstallUnits, _SHDWPluginRegistry,
                             _SHDWDefaultHookSettings, _SHDWHookGroupCapabilityKind,

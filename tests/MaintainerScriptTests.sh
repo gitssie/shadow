@@ -98,4 +98,22 @@ if grep -E '\<pgrep\>|\<seq\>|kill[[:space:]]+-[0-9]' "$root/packaging/layout/DE
     fail 'forbidden maintainer command remains'
 fi
 
+mkdir -p "$clean_pkg/Applications/ShadowManager.app"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "$FAKE_LOG"' \
+    'exit "${FAKE_UICACHE_RESULT:-0}"' >"$tmp/bin/uicache"
+chmod 700 "$tmp/bin/uicache"
+: >"$tmp/log"; printf '%s\n' absent >"$tmp/state"
+env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_ROOTFS_ROOT="$tmp/rootfs-clean" \
+    FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/state" FAKE_PROGRAM=/var/jb/usr/libexec/shadowd \
+    SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \
+    SHADOW_UICACHE_BIN="$tmp/bin/uicache" sh "$root/packaging/layout/DEBIAN/postinst" configure
+assert grep -F -q -- "-p $clean_pkg/Applications/ShadowManager.app" "$tmp/log"
+if env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_ROOTFS_ROOT="$tmp/rootfs-clean" \
+    FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/state" FAKE_PROGRAM=/var/jb/usr/libexec/shadowd \
+    SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \
+    SHADOW_UICACHE_BIN="$tmp/bin/uicache" FAKE_UICACHE_RESULT=9 \
+    sh "$root/packaging/layout/DEBIAN/postinst" configure; then
+    fail 'app registration failure was hidden'
+fi
+
 printf 'PASS maintainer scripts\n'

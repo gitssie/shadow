@@ -27,6 +27,6 @@
 
 "RESET_HDR" = "重置";
 "RESET_SETTINGS" = "重置設定";
-"RESET_SETTINGS_DESC" = "將所有Shadow設定還原為預設值。所有個別應用程式設定都將被清除。";
-"RESET_CONFIRM" = "這將把所有Shadow設定還原為預設值。此操作無法復原。";
+"RESET_SETTINGS_DESC" = "將 Shadow 設定還原為預設值，保留指紋資料及其保護設定。";
+"RESET_CONFIRM" = "將 Shadow 設定還原為預設值？指紋資料及其保護設定將保留。";
 "RESET_CANCEL" = "取消";

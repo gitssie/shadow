@@ -580,6 +580,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-version-") as tmp:
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation",
-        "-I", str(policy.parent), str(src), "-o", str(binary),
+        "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(policy.parent), str(src), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)

@@ -614,5 +614,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-map-defaults-") as tmp:
         "\n@end\n@implementation ConcretePasteboard\n" + pasteboard + "\n@end\n" + sysctl_methods + "\n" + suffix)
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-Wno-unused-variable", "-Wno-unused-parameter", "-fsanitize=address,undefined", "-framework", "Foundation", "-framework", "CoreGraphics",
-        "-I", str(root / "src/ShadowCore.dylib/policy"), str(src), str(root / "src/ShadowCore.dylib/policy/FingerprintPolicy.m"), "-o", str(binary)], check=True)
+        "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(root / "src/ShadowCore.dylib/policy"), str(src), str(root / "src/ShadowCore.dylib/policy/FingerprintPolicy.m"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

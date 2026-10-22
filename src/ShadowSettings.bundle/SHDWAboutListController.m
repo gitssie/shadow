@@ -88,9 +88,7 @@
 }
 
 - (void)resetSettings:(id)sender {
-  // Destructive: confirm before wiping. Clear the whole persistent domain so
-  // the global toggle, aggressive mode, and every per-app override drop back
-  // to defaults in one atomic write.
+  // Reset Shadow configuration while retaining manager-owned fingerprint data.
   UIAlertController *alert = [UIAlertController
       alertControllerWithTitle:[self localized:@"RESET_SETTINGS"]
                        message:[self localized:@"RESET_CONFIRM"]
@@ -105,9 +103,6 @@
                                  style:UIAlertActionStyleDestructive
                                handler:^(UIAlertAction *action) {
                                  [[ShadowSettings sharedInstance] reset];
-                                 // Match the switch-flip feedback used across
-                                 // the panes so the wipe registers as a
-                                 // completed state change, not a silent no-op.
                                  SHDWToggleHaptic();
                                }]];
 

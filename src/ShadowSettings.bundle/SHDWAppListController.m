@@ -36,9 +36,6 @@
       self.title = proxy.atl_fastDisplayName;
     }
 
-    [[ShadowSettings sharedInstance]
-        fingerprintDataForIdentifier:[self applicationID]];
-
     // One Follow Global toggle governs the whole app: following global =
     // no per-app overrides, so both the activation and aggressive rows are
     // hidden — together with the now-empty Neutralization group header —
@@ -147,34 +144,6 @@
   if ([key isEqualToString:@"Detector_Aggressive"]) {
     SHDWWriteAppAggressive(prefs, [self applicationID], [value boolValue]);
   }
-}
-
-- (void)refreshFingerprintData:(id)sender {
-  NSBundle *bundle = [NSBundle bundleForClass:[self class]];
-  BOOL saved = [[ShadowSettings sharedInstance]
-      refreshFingerprintDataForIdentifier:[self applicationID]];
-  if (saved) {
-    SHDWToggleHaptic();
-  }
-  UIAlertController *alert = [UIAlertController
-      alertControllerWithTitle:
-          [bundle localizedStringForKey:saved ? @"FINGERPRINT_REFRESHED"
-                                               : @"FINGERPRINT_REFRESH_FAILED"
-                                  value:nil
-                                  table:@"App"]
-                       message:
-          [bundle localizedStringForKey:saved ? @"FINGERPRINT_REFRESHED_DESC"
-                                               : @"FINGERPRINT_REFRESH_FAILED_DESC"
-                                  value:nil
-                                  table:@"App"]
-                preferredStyle:UIAlertControllerStyleAlert];
-  [alert addAction:[UIAlertAction
-      actionWithTitle:[bundle localizedStringForKey:@"RESET_OK"
-                                              value:nil
-                                              table:@"App"]
-                style:UIAlertActionStyleDefault
-              handler:nil]];
-  [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)resetAppSettings:(id)sender {

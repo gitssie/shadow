@@ -1,3 +1,4 @@
+#import <Shadow/FingerprintMemory.h>
 #import "FingerprintPolicy.h"
 #import "FingerprintStorage.h"
 #include <stdlib.h>
@@ -154,12 +155,9 @@ SHDWFingerprintCoordinate SHDWFingerprintCountryCenter(void) {
 }
 
 uint64_t SHDWFingerprintMemorySize(NSString *bundleID, uint64_t nativeSize) {
-    const uint64_t maximumDelta = 64 * UINT64_C(16384);
-    if(!bundleID.length || nativeSize <= maximumDelta || nativeSize > UINT64_MAX - maximumDelta)
-        return nativeSize;
-    int64_t delta = [SHDWFingerprintData(bundleID)[@"MemoryDelta"] longLongValue];
-    if(delta < -(int64_t)maximumDelta || delta > (int64_t)maximumDelta) return nativeSize;
-    return delta < 0 ? nativeSize - (uint64_t)(-delta) : nativeSize + (uint64_t)delta;
+    if (!bundleID.length) return nativeSize;
+    return SHDWFingerprintProjectedMemory(nativeSize,
+        [SHDWFingerprintData(bundleID)[@"MemoryDelta"] longLongValue]);
 }
 
 NSDictionary<NSString *, NSString *> *SHDWFingerprintRadioTechnologies(NSDictionary<NSString *, NSString *> *services) {
