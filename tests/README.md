@@ -54,6 +54,18 @@ enablement, optional fingerprint refresh,
 failure propagation, and mandatory final verification. It does not delete data
 from installed applications or exercise device Keychain permissions.
 
+The optional `make -C tests verify-app-state` requires macOS Foundation, Xcode
+command-line tools, and libarchive with Zstandard support. Homebrew installations
+of `libarchive` and `zstd` are detected; alternate prefixes can be supplied with
+`ARCHIVE_PREFIX` and `ZSTD_PREFIX`. It compiles the production archive/store code,
+uses real temporary files and tar.zst archives, and runs functional checks with
+AddressSanitizer and UndefinedBehaviorSanitizer. A separate unsanitized run checks
+streaming progress and memory growth with many small files and a large file.
+Keychain, process control, and fingerprint preferences use an isolated backend
+double. These checks do not establish device permissions or application-level
+restore correctness. See `src/AppState/README.md` for the core's integration scope
+and optional iOS compile/link checks. This target is not part of `test` or CI.
+
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer
 scripts, rather than the aggregate target. It omits several aggregate checks,
 including mount filtering and JB-identifier data validation. Consult that workflow

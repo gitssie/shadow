@@ -96,6 +96,12 @@ verify-cleanup:
 
 .PHONY: verify-cleanup
 
+# Optional macOS integration check of the actual AppState archive and store.
+verify-app-state:
+	python3 verify-app-state.py
+
+.PHONY: verify-app-state
+
 # Compile the identifier arrays and check their data and consumer wiring.
 jb-identifiers:
 	python3 verify-jb-identifiers.py
