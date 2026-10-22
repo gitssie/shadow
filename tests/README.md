@@ -41,6 +41,19 @@ image containing clang and GNUstep/libobjc2, with networking disabled. Tests use
 an in-memory defaults double, not Shadow's domain. This check is not in `test`
 or CI and does not exercise UIKit rendering, accessibility, or live networking.
 
+The optional `make -C tests verify-cleanup` requires macOS Foundation and Xcode
+command-line tools. It exercises cleanup traversal against temporary fixtures,
+including category boundaries, receipt preservation, container metadata,
+symlink and identity rejection, and detection of data left after cleanup.
+Keychain doubles cover exact group scope, empty results, deletion without
+intermediate readback, and final residual detection. When `ldid` is available,
+it also checks signing and reading back an executable with exact access groups.
+It also runs the actual application cleanup coordinator with a helper double to
+check ordered execution, automatic unlock and lock restoration, fingerprint
+enablement, optional fingerprint refresh,
+failure propagation, and mandatory final verification. It does not delete data
+from installed applications or exercise device Keychain permissions.
+
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer
 scripts, rather than the aggregate target. It omits several aggregate checks,
 including mount filtering and JB-identifier data validation. Consult that workflow

@@ -11,7 +11,7 @@
 @implementation SHDWFingerprintActionControl
 - (UIColor *)stateColor {
     if (!self.refreshAllowed) return UIColor.systemGrayColor;
-    return self.locked ? SHDWLockColor() : SHDWAccent();
+    return SHDWAccent();
 }
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
@@ -45,7 +45,7 @@
     self.accessibilityTraits = UIAccessibilityTraitButton | (self.enabled ? 0 : UIAccessibilityTraitNotEnabled);
     self.accessibilityLabel = SHDWText(self.locked ? @"Fingerprint locked" : !self.refreshAllowed ? @"Fingerprint disabled" : self.working ? @"Refreshing fingerprint" : @"Refresh fingerprint");
     UIColor *color = [self stateColor];
-    self.backgroundColor = self.refreshAllowed && self.locked ? [UIColor colorWithRed:255/255.0 green:251/255.0 blue:241/255.0 alpha:1] : UIColor.whiteColor;
+    self.backgroundColor = UIColor.whiteColor;
     self.layer.borderColor = [color colorWithAlphaComponent:self.refreshAllowed ? 0.28 : 0.14].CGColor;
     self.layer.shadowColor = color.CGColor;
     self.layer.shadowOpacity = self.refreshAllowed ? 0.22 : 0.08;

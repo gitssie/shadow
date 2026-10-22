@@ -90,6 +90,12 @@ verify-fingerprint:
 
 .PHONY: verify-fingerprint
 
+verify-cleanup:
+	python3 verify-cleanup-engine.py
+	python3 verify-cleanup-service.py
+
+.PHONY: verify-cleanup
+
 # Compile the identifier arrays and check their data and consumer wiring.
 jb-identifiers:
 	python3 verify-jb-identifiers.py

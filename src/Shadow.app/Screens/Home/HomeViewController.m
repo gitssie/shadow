@@ -1,4 +1,5 @@
 #import "HomeViewController.h"
+#import "Screens/Cleanup/CleanupViewController.h"
 #import "Screens/Applications/AppSelectionViewController.h"
 #import "Screens/Fingerprint/FingerprintDetailViewController.h"
 #import "Services/InstalledApplications.h"
@@ -31,7 +32,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     self.selector.heightChanged = ^(CGFloat height, BOOL animated) { typeof(self) self = weakSelf; if (!self) return; self.selectorHeight.constant = height; [self.view bringSubviewToFront:self.selector]; if (animated) [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:^{ [self.view layoutIfNeeded]; } completion:nil]; else [self.view layoutIfNeeded]; };
     self.selector.selectionChanged = ^(SHDWInstalledApplication *app) { typeof(self) self = weakSelf; if (!self || self.busy) return; self.selected = app; [self.refreshControl setWorking:NO]; [self renderSelection]; };
     self.refreshControl = [SHDWFingerprintActionControl new]; [self.refreshControl addTarget:self action:@selector(refreshFingerprint) forControlEvents:UIControlEventTouchUpInside];
-    self.summary = [SHDWFingerprintSummaryView new]; [self.summary addTarget:self action:@selector(showDetails) forControlEvents:UIControlEventTouchUpInside];
+    self.summary = [SHDWFingerprintSummaryView new]; self.summary.cleanupTapped = ^{ [weakSelf showCleanup]; }; [self.summary addTarget:self action:@selector(showDetails) forControlEvents:UIControlEventTouchUpInside];
     UIImageView *mark = [[UIImageView alloc] initWithImage:SHDWSymbol(@"touchid", 30)]; mark.tintColor = SHDWAccent(); mark.contentMode = UIViewContentModeScaleAspectFit;
     UIStackView *brand = [[UIStackView alloc] initWithArrangedSubviews:@[mark]]; brand.alignment = UIStackViewAlignmentCenter;
     self.manageButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.manageButton setImage:SHDWSymbol(@"plus", 17) forState:UIControlStateNormal]; [self.manageButton addTarget:self action:@selector(manageApplications) forControlEvents:UIControlEventTouchUpInside]; self.manageButton.accessibilityLabel = SHDWText(@"Applications"); self.manageButton.accessibilityIdentifier = @"home.manage-applications";
@@ -77,7 +78,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     BOOL enabled = present && [store enabledForApplication:self.selected.bundleIdentifier];
     [self.refreshControl setRefreshAllowed:enabled locked:locked];
     self.lockButton.hidden = !present; self.lockButton.enabled = present && !self.busy;
-    [self.lockButton setImage:SHDWSymbol(locked ? @"lock.fill" : @"lock.open", 17) forState:UIControlStateNormal]; self.lockButton.tintColor = locked ? SHDWLockColor() : UIColor.secondaryLabelColor;
+    [self.lockButton setImage:SHDWSymbol(locked ? @"lock.fill" : @"lock.open", 17) forState:UIControlStateNormal]; self.lockButton.tintColor = self.manageButton.tintColor;
     self.lockButton.accessibilityLabel = SHDWText(locked ? @"Unlock fingerprint" : @"Lock fingerprint");
     NSDictionary *configuration = present ? [store configurationForApplication:self.selected.bundleIdentifier] : [SHDWFingerprintConfiguration defaultConfiguration];
     NSDictionary *systemProfile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
@@ -122,6 +123,13 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
             if (success && [self.selected.bundleIdentifier isEqualToString:identifier]) [self.refreshControl showCompleted]; else if (!success) SHDWShowError(self, error);
         });
     });
+}
+- (void)showCleanup {
+    if (self.busy || !self.selected) return;
+    [self.selector setExpanded:NO animated:NO];
+    SHDWCleanupViewController *controller = [[SHDWCleanupViewController alloc] initWithApplication:self.selected];
+    __weak typeof(self) weakSelf = self; controller.completion = ^{ [weakSelf reloadApplications]; };
+    [self presentViewController:controller animated:YES completion:nil];
 }
 - (void)showDetails { if (self.busy || !self.selected) return; [self.selector setExpanded:NO animated:NO]; [self.navigationController pushViewController:[[SHDWFingerprintDetailViewController alloc] initWithBundleIdentifier:self.selected.bundleIdentifier name:self.selected.name] animated:YES]; }
 @end

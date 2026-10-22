@@ -158,6 +158,12 @@ case "$1" in
                 || true
         fi
 
+        cleaner_path="$DPKG_ROOT/usr/libexec/shadow-cleaner"
+        if [ -f "$cleaner_path" ]; then
+            chown root:wheel "$cleaner_path"
+            chmod 4755 "$cleaner_path"
+        fi
+
         app_path="$DPKG_ROOT/Applications/ShadowManager.app"
         if [ -d "$app_path" ]; then
             uicache_bin=${SHADOW_UICACHE_BIN:-$DPKG_ROOT/usr/bin/uicache}
