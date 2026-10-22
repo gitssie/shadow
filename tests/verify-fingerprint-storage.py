@@ -101,7 +101,7 @@ static ShadowSettings *sharedSettings;
 source += helpers + "\n" + customized + "\n@implementation ShadowSettings\n"
 source += "+ (instancetype)sharedInstance { return sharedSettings; }\n" + methods + "\n@end\n"
 storage = (root / "src/ShadowCore.dylib/policy/FingerprintStorage.m").read_text()
-source += "\n".join(line for line in storage.splitlines() if not line.startswith("#import"))
+source += function(storage, "NSDictionary *SHDWFingerprintData(")
 source += r'''
 int main(int argc, const char **argv) { @autoreleasepool {
     assert(argc == 3);

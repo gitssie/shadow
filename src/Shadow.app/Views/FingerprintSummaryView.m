@@ -3,13 +3,14 @@
 #include <math.h>
 @interface SHDWFingerprintSummaryView ()
 @property(nonatomic, strong) UILabel *updatedAt;
+@property(nonatomic, strong) UILabel *value;
 @end
 @implementation SHDWFingerprintSummaryView
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
         self.backgroundColor = UIColor.whiteColor; self.layer.cornerRadius = 20;
         self.isAccessibilityElement = YES; self.accessibilityTraits = UIAccessibilityTraitButton; self.accessibilityIdentifier = @"home.fingerprint-details";
-        UILabel *value = [UILabel new]; value.text = [@"18.7.1 · " stringByAppendingString:@"France"]; value.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; value.textColor = SHDWInk(); value.adjustsFontForContentSizeCategory = YES;
+        UILabel *value = [UILabel new]; self.value = value; value.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; value.textColor = SHDWInk(); value.adjustsFontForContentSizeCategory = YES;
         UIImageView *icon = [[UIImageView alloc] initWithImage:SHDWSymbol(@"slider.horizontal.3", 24)]; icon.tintColor = SHDWAccent(); icon.contentMode = UIViewContentModeScaleAspectFit;
         UIImageView *chevron = [[UIImageView alloc] initWithImage:SHDWSymbol(@"chevron.right", 15)]; chevron.tintColor = SHDWAccent(); chevron.contentMode = UIViewContentModeScaleAspectFit;
         _updatedAt = [UILabel new]; _updatedAt.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular]; _updatedAt.textColor = UIColor.secondaryLabelColor;
@@ -22,6 +23,10 @@
         [self showUpdatedAt:nil];
     } return self;
 }
+- (void)showSystemVersion:(NSString *)version region:(NSString *)region {
+    self.value.text = [NSString stringWithFormat:@"%@ · %@", version, region];
+    self.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", self.value.text, self.updatedAt.text ?: @"—"];
+}
 - (void)showUpdatedAt:(NSNumber *)timestamp {
     NSString *text = @"—";
     if ([timestamp isKindOfClass:NSNumber.class] && isfinite(timestamp.doubleValue) && timestamp.doubleValue > 0) {
@@ -29,7 +34,7 @@
         text = [format stringFromDate:[NSDate dateWithTimeIntervalSince1970:timestamp.doubleValue]];
     }
     self.updatedAt.text = text;
-    self.accessibilityLabel = [NSString stringWithFormat:@"18.7.1, %@, %@", @"France", text];
+    self.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", self.value.text ?: @"", text];
 }
 
 @end

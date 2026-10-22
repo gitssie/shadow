@@ -26,7 +26,8 @@ def method(text, signature):
         end += 1
     return text[start:end]
 receipt_init = method(source, "void shdw_universal_fingerprint_receipts(SHDWHookSession *hooks)")
-assert "shdw_receipts_enabled = YES;" in receipt_init
+assert "shdw_receipts_enabled = SHDWFingerprintInterceptsReceipts();" in receipt_init
+assert "if(!shdw_receipts_enabled) return;" in receipt_init
 core_methods = method(core, "+ (void)shdwSetReceiptPathPredicate:") + "\n" + method(core, "+ (BOOL)shdwIsReceiptPathRestricted:")
 engine = (root / "src/Shadow.framework/RestrictionEngine.m").read_text()
 query = method(engine, "- (BOOL)_pathRestrictedQuery:")

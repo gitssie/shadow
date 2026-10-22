@@ -71,6 +71,16 @@ assert "NSProcessInfo = processInfoClass" in fingerprint
 
 prefix = r'''
 #import <Foundation/Foundation.h>
+NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
+    (void)bundleID;
+    return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
+}
+
+#import <Shadow/FingerprintConfiguration.h>
+NSDictionary *SHDWFingerprintSystem(NSString *bundleID) {
+    return [SHDWFingerprintConfiguration resolvedSystemForConfiguration:SHDWFingerprintConfig(bundleID)];
+}
+
 NSDictionary *SHDWFingerprintData(NSString *bundleID) {
     (void)bundleID;
     return @{@"MemoryDelta": @16384,
@@ -183,7 +193,7 @@ static int version_nametomib(const char *name, int *mib, size_t *count) {
     mib[0] = CTL_KERN;
     mib[1] = !strcmp(name, "kern.osproductversion") ? 9001 : !strcmp(name, "kern.osversion") ? 9002 :
         !strcmp(name, "kern.boottime") ? 9003 : !strcmp(name, "kern.bootsessionuuid") ? 9004 :
-        !strcmp(name, "kern.osrelease") ? 9005 : !strcmp(name, "kern.version") ? 9006 : 9007;
+        !strcmp(name, "kern.osrelease") ? 9005 : !strcmp(name, "kern.version") ? 9006 : name && !strcmp(name, "kern.hostname") ? 9007 : 9008;
     *count = 2; errno = EIO; return 0;
 }
 #define sysctlnametomib version_nametomib
@@ -243,6 +253,8 @@ static const void *expectedImage;
     return YES;
 }
 @end
+static void *original_gethostname;
+static void replaced_gethostname(void) {}
 static void *original_getppid, *resolved_getppid, *original_getuid, *resolved_getuid,
     *original_geteuid, *resolved_geteuid, *original_getgid, *resolved_getgid,
     *original_getegid, *resolved_getegid, *original_issetugid, *resolved_issetugid;
@@ -265,7 +277,7 @@ static int mibAdapter(const char *name, void *out, size_t *length, void *newp, s
         name && !strcmp(name, "kern.boottime") ? 9003 :
         name && !strcmp(name, "kern.bootsessionuuid") ? 9004 :
         name && !strcmp(name, "kern.osrelease") ? 9005 :
-        name && !strcmp(name, "kern.version") ? 9006 : 9007};
+        name && !strcmp(name, "kern.version") ? 9006 : name && !strcmp(name, "kern.hostname") ? 9007 : 9008};
     return replaced_sysctl(name ? mib : NULL, name ? 2 : 0, out, length, newp, newlen);
 }
 static void verify_native_string_contract(void) {
@@ -496,7 +508,7 @@ static void verify_current_boot(void) {
 }
 static void verify_uname_value(const struct utsname *value, BOOL mapped) {
     assert(!memcmp(value->sysname, nativeUnameValue.sysname, sizeof(value->sysname)));
-    assert(!memcmp(value->nodename, nativeUnameValue.nodename, sizeof(value->nodename)));
+    assert(mapped ? !strcmp(value->nodename, "iPhone") : !memcmp(value->nodename, nativeUnameValue.nodename, sizeof(value->nodename)));
     assert(!memcmp(value->machine, nativeUnameValue.machine, sizeof(value->machine)));
     assert(!strcmp(value->release, mapped ? "24.6.0" : nativeUnameValue.release));
     assert(!strcmp(value->version, mapped ? expectedKernel : nativeUnameValue.version));
@@ -580,6 +592,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-version-") as tmp:
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation",
-        "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(policy.parent), str(src), "-o", str(binary),
+        "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(policy.parent), str(src), str(root / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)

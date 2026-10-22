@@ -3,6 +3,7 @@
 
 typedef struct { double latitude, longitude; } SHDWFingerprintCoordinate;
 NSOperatingSystemVersion SHDWFingerprintOSVersion(void);
+BOOL SHDWFingerprintInterceptsReceipts(void);
 BOOL SHDWFingerprintOSVersionAtLeast(NSOperatingSystemVersion requested);
 NSString *SHDWFingerprintOSVersionString(void);
 NSUUID *SHDWFingerprintVendorIdentifier(NSString *bundleID);
@@ -15,6 +16,7 @@ BOOL SHDWFingerprintVersionQuery(const char *name, void *value, size_t *length, 
 BOOL SHDWFingerprintBootName(const char *name);
 BOOL SHDWFingerprintBootQuery(const char *name, void *value, size_t *length, int *result);
 SHDWFingerprintCoordinate SHDWFingerprintCountryCenter(void);
+SHDWFingerprintCoordinate SHDWFingerprintCountryCenterForCode(NSString *country);
 uint64_t SHDWFingerprintMemorySize(NSString *bundleID, uint64_t nativeSize);
 NSDictionary<NSString *, NSString *> *SHDWFingerprintRadioTechnologies(NSDictionary<NSString *, NSString *> *services);
 void SHDWFingerprintSysctlValue(const char *name, void *value, size_t length);

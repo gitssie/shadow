@@ -643,6 +643,8 @@ extern int replaced_kevent64(int kq, const struct kevent64_s *changelist,
 // Phase 4 pass-throughs (bodies forward untouched; dlsym-policy agreement)
 extern int (*original_uname)(struct utsname *buf);
 extern int replaced_uname(struct utsname *buf);
+extern int (*original_gethostname)(char *name, size_t length);
+extern int replaced_gethostname(char *name, size_t length);
 extern int (*original_getifaddrs)(struct ifaddrs **ifap);
 extern int replaced_getifaddrs(struct ifaddrs **ifap);
 extern int (*original_ioctl)(int fd, unsigned long request, ...);

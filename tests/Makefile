@@ -74,6 +74,7 @@ settings-behavior:
 verify-fingerprint:
 	python3 verify-manager-apps.py
 	python3 verify-fingerprint-manager.py
+	python3 verify-fingerprint-config-runtime.py
 	python3 verify-fingerprint-digest.py
 	python3 verify-fingerprint-raw-memory.py
 	python3 verify-fingerprint-system-version.py

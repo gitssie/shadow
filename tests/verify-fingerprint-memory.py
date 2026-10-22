@@ -40,6 +40,10 @@ hooks += function(syscall, "static int replaced___sysctlbyname(") + "\n"
 hooks += function(libc, "int replaced_sysctl(") + "\n"
 prefix = r'''
 #import <Foundation/Foundation.h>
+NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
+    (void)bundleID;return @{@"Version":@1,@"System":@{@"Mode":@"native"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
+}
+
 #include <assert.h>
 #include <stdint.h>
 #import <Shadow/FingerprintMemory.h>
@@ -50,6 +54,11 @@ prefix = r'''
 #include <dlfcn.h>
 #include <sys/sysctl.h>
 static long long persistedDelta = -16384;
+#import <Shadow/FingerprintConfiguration.h>
+NSDictionary *SHDWFingerprintSystem(NSString *bundleID) {
+    return [SHDWFingerprintConfiguration resolvedSystemForConfiguration:SHDWFingerprintConfig(bundleID)];
+}
+
 NSDictionary *SHDWFingerprintData(NSString *bundleID) {
     assert(bundleID.length);
     return @{@"MemoryDelta": @(persistedDelta)};
@@ -251,6 +260,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-memory-") as tmp:
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation",
-        "-I", str(policy.parent), "-I", str(root / "src/Shadow.framework/Headers"), str(src), "-o", str(binary),
+        "-I", str(policy.parent), "-I", str(root / "src/Shadow.framework/Headers"), str(src), str(root / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)

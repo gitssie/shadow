@@ -47,6 +47,16 @@ fingerprint = fingerprint.replace("// if(applies) shdw_fingerprint_webkit_clipbo
 
 prefix = r'''
 #import <Foundation/Foundation.h>
+NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
+    (void)bundleID;
+    return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
+}
+
+#import <Shadow/FingerprintConfiguration.h>
+NSDictionary *SHDWFingerprintSystem(NSString *bundleID) {
+    return [SHDWFingerprintConfiguration resolvedSystemForConfiguration:SHDWFingerprintConfig(bundleID)];
+}
+
 NSDictionary *SHDWFingerprintData(NSString *bundleID) {
     (void)bundleID;
     return @{@"MemoryDelta": @16384, @"ActivationTimestamp": @1700000000};
@@ -601,6 +611,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-webkit-") as tmp:
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(policy.parent),
-        str(src), "-o", str(binary),
+        str(src), str(root / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True)

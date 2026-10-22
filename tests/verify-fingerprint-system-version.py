@@ -74,6 +74,7 @@ for index, (match, signature, is_c) in enumerate(entries):
     }""" % (kind, "YES" if is_url else "NO", index, ", ".join(argv), index, ", ".join(argv), index, ", ".join(argv)))
 prefix = r"""
 #import <Foundation/Foundation.h>
+
 #include <assert.h>
 #include <stdarg.h>
 static unsigned depth, nativeCalls, nativeKind, shdw_system_version_state;

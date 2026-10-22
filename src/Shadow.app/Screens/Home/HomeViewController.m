@@ -7,6 +7,7 @@
 #import "Views/FingerprintSummaryView.h"
 #import "Appearance/Theme.h"
 #import <Shadow/Fingerprint.h>
+#import <Shadow/FingerprintConfiguration.h>
 static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleIdentifier";
 @interface SHDWHomeViewController () <UIGestureRecognizerDelegate>
 @property(nonatomic, strong) SHDWAppSelectorView *selector;
@@ -78,6 +79,9 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     self.lockButton.hidden = !present; self.lockButton.enabled = present && !self.busy;
     [self.lockButton setImage:SHDWSymbol(locked ? @"lock.fill" : @"lock.open", 17) forState:UIControlStateNormal]; self.lockButton.tintColor = locked ? SHDWLockColor() : UIColor.secondaryLabelColor;
     self.lockButton.accessibilityLabel = SHDWText(locked ? @"Unlock fingerprint" : @"Lock fingerprint");
+    NSDictionary *configuration = present ? [store configurationForApplication:self.selected.bundleIdentifier] : [SHDWFingerprintConfiguration defaultConfiguration];
+    NSDictionary *systemProfile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
+    [self.summary showSystemVersion:systemProfile[@"Version"] ?: UIDevice.currentDevice.systemVersion region:[NSLocale.currentLocale objectForKey:NSLocaleCountryCode] ?: @"—"];
     [self.summary showUpdatedAt:present ? [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"UpdatedAt"] : nil];
 }
 - (void)manageApplications {

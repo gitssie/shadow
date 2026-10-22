@@ -41,3 +41,8 @@
 "Enabled" = "已启用";
 "Disabled" = "已停用";
 "Unlock fingerprint before removing application" = "请先解锁指纹，再移除应用";
+
+"Time zone" = "时区";
+"Network" = "网络";
+"Receipt interception" = "收据拦截";
+"Use device system" = "使用本机系统";

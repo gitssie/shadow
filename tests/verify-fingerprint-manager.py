@@ -19,6 +19,8 @@ source = r'''
 #import <Shadow/Settings.h>
 #import <Shadow/SHDWPlugin.h>
 #import <Shadow/Fingerprint.h>
+#import <Shadow/FingerprintConfiguration.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <Shadow/FingerprintState.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -28,8 +30,24 @@ source = r'''
 #include <string.h>
 #define SHADOW_PREFS_PLIST "shadow-manager-host-tests"
 #define JBPath(path) (path)
+static const char *managerProductType = "iPhone14,5";
+static BOOL managerFailVersionQueries;
 static int managerSysctl(const char *name, void *out, size_t *length, void *input, size_t inputLength) {
   assert(!input && !inputLength);
+  if (!strcmp(name, "hw.machine")) {
+    assert(*length > strlen(managerProductType));
+    strcpy(out, managerProductType); *length = strlen(managerProductType) + 1; return 0;
+  }
+  const char *nativeValue = NULL;
+  if (!strcmp(name,"kern.osproductversion")) nativeValue = "15.8.8";
+  if (!strcmp(name,"kern.osversion")) nativeValue = "19H440";
+  if (!strcmp(name,"kern.osrelease")) nativeValue = "21.6.0";
+  if (!strcmp(name,"kern.version")) nativeValue = "native-kernel-from-sysctl";
+  if (nativeValue) {
+    if (managerFailVersionQueries) return -1;
+    assert(*length >= strlen(nativeValue)+1);
+    strcpy(out,nativeValue); *length=strlen(nativeValue)+1; return 0;
+  }
   if (!strcmp(name, "kern.boottime")) {
     struct timeval boot = {(time_t)(NSDate.date.timeIntervalSince1970 - 3 * 86400), 0};
     memcpy(out, &boot, sizeof boot); *length = sizeof boot; return 0;
@@ -60,6 +78,7 @@ NSDictionary *SHDWFingerprintInputsForData(NSDictionary *data) {
 }
 '''
 source += "\n" + without_imports(framework / "Fingerprint/Profile.m")
+source += "\n" + without_imports(framework / "Fingerprint/Configuration.m")
 source += "\n" + without_imports(framework / "Fingerprint/Store.m")
 source += r'''
 @interface FailingDefaults : NSObject
@@ -82,6 +101,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     [fixture setPersistentDomain:@{
       @"migration.app":@{SHDWAppEnabledID:@YES, @"Fingerprint_Managed":@YES,
                          @"Fingerprint_Enabled":@NO, @"Fingerprint_Locked":@YES,
+                         @"Fingerprint_Config":@{@"Version":@1},
                          @"Fingerprint_Data":@{@"Version":@1, @"UpdatedAt":@1234},
                          @"Obsolete_Scalar":@1},
       @"pending.app":@{@"Fingerprint_Managed":@YES, @"Fingerprint_Enabled":@YES,
@@ -97,6 +117,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     assert([app[@"Fingerprint_Managed"] boolValue]);
     assert([app[@"Fingerprint_Enabled"] isEqual:@NO]);
     assert([app[@"Fingerprint_Locked"] isEqual:@YES]);
+    assert(([app[@"Fingerprint_Config"] isEqual:@{@"Version":@1}]));
     assert(([app[@"Fingerprint_Data"] isEqual:@{@"Version":@1, @"UpdatedAt":@1234}]));
     assert(!app[@"Obsolete_Scalar"]);
     NSDictionary *pending = [settings.userDefaults dictionaryForKey:@"pending.app"];
@@ -303,6 +324,9 @@ int main(int argc, const char **argv) { @autoreleasepool {
   failure.failures = 2;
   assert(![store setShadowEnabled:YES forApplication:@"failed.existing" error:&error] && error.code == 3);
   assert([failure.values[@"failed.existing"] isEqual:before]);
+  failure.failures = 2;
+  assert(![store setConfiguration:SHDWFingerprintConfiguration.defaultConfiguration forApplication:@"failed.existing" error:&error] && error.code == 3);
+  assert([failure.values[@"failed.existing"] isEqual:before]);
   [settings setValue:defaults forKey:@"userDefaults"];
   NSDictionary *resetProtected = @{@"Fingerprint_Data":a, @"Fingerprint_Managed":@YES,
       @"Fingerprint_Enabled":@NO, @"Fingerprint_Locked":@YES, @"Fingerprint_Future":@"keep", @"UnrelatedPayload":@[@1,@2]};
@@ -320,6 +344,83 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([[store profileForBundleIdentifier:@"a.app"] isEqual:a]);
   assert([store lockedForApplication:@"a.app"]);
   assert([defaults boolForKey:SHDWSingleToggleMigrationID]);
+  assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
+  assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 1);
+  for (NSString *product in @[@"iPhone9,2", @"iPhone9,4", @"iPhone12,1", @"iPhone13,2", @"iPhone15,2", @"unknown"]) {
+    managerProductType = product.UTF8String;
+    assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"native"]);
+    assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 0);
+  }
+  managerProductType = "iPhone9,2";
+  NSDictionary *configuration = SHDWFingerprintConfiguration.defaultConfiguration;
+  assert([configuration[@"System"][@"Mode"] isEqual:@"native"]);
+  NSDictionary *resolvedNative = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:configuration];
+  assert([resolvedNative[@"Version"] isEqual:@"15.8.8"]);
+  assert([resolvedNative[@"Build"] isEqual:@"19H440"]);
+  assert([resolvedNative[@"Darwin"] isEqual:@"21.6.0"]);
+  assert([resolvedNative[@"Kernel"] isEqual:@"native-kernel-from-sysctl"]);
+  managerFailVersionQueries = YES;
+  NSDictionary *fallbackNative = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:configuration];
+  NSOperatingSystemVersion nativeHostVersion = NSProcessInfo.processInfo.operatingSystemVersion;
+  NSString *nativeHostString = [NSString stringWithFormat:@"%ld.%ld.%ld", (long)nativeHostVersion.majorVersion,
+     (long)nativeHostVersion.minorVersion, (long)nativeHostVersion.patchVersion];
+  assert([fallbackNative[@"Version"] isEqual:nativeHostString]);
+  assert(!fallbackNative[@"Build"] && !fallbackNative[@"Darwin"] && !fallbackNative[@"Kernel"]);
+  managerFailVersionQueries = NO;
+  managerProductType = "iPhone14,5";
+  NSDictionary *resolvedProfile = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:SHDWFingerprintConfiguration.defaultConfiguration];
+  assert([resolvedProfile[@"Version"] isEqual:@"18.7.1"] && [resolvedProfile[@"Build"] isEqual:@"22H31"]);
+  assert(resolvedProfile == [SHDWFingerprintConfiguration systemProfileForConfiguration:SHDWFingerprintConfiguration.defaultConfiguration]);
+  assert([configuration[@"Receipts"][@"InterceptEnabled"] boolValue]);
+  assert(([configuration[@"Network"][@"RadioTechnologies"] isEqual:@[@"4g",@"5g"]]));
+  [defaults setObject:@{@"Fingerprint_Managed":@YES, @"Fingerprint_Data":a} forKey:@"config.legacy"];
+  NSDictionary *legacyConfigurationBefore = [defaults dictionaryForKey:@"config.legacy"];
+  assert([[store configurationForApplication:@"config.legacy"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration]);
+  assert([[defaults dictionaryForKey:@"config.legacy"] isEqual:legacyConfigurationBefore]);
+  assert([store registerApplication:@"config.new" error:&error]);
+  NSDictionary *registeredConfig = [defaults dictionaryForKey:@"config.new"][@"Fingerprint_Config"];
+  assert([registeredConfig[@"UpdatedAt"] doubleValue] > 0);
+  assert(![store profileForBundleIdentifier:@"config.new"]);
+  NSMutableDictionary *chosen = [configuration mutableCopy];
+  chosen[@"Network"] = @{@"RadioTechnologies":@[]};
+  chosen[@"Receipts"] = @{@"InterceptEnabled":@NO};
+  assert([store setEnabled:NO forApplication:@"config.legacy" error:&error]);
+  assert([store setConfiguration:chosen forApplication:@"config.legacy" error:&error]);
+  assert([[store profileForBundleIdentifier:@"config.legacy"] isEqual:a]);
+  NSDictionary *savedConfig = [store configurationForApplication:@"config.legacy"];
+  assert([savedConfig[@"UpdatedAt"] doubleValue] > 0);
+  assert([savedConfig[@"Network"][@"RadioTechnologies"] count] == 0);
+  assert(![savedConfig[@"Receipts"][@"InterceptEnabled"] boolValue]);
+  assert([store setLocked:YES forApplication:@"config.legacy" error:&error]);
+  NSDictionary *lockedConfigApp = [defaults dictionaryForKey:@"config.legacy"];
+  assert(![store setConfiguration:configuration forApplication:@"config.legacy" error:&error] && error.code == 6);
+  assert([[defaults dictionaryForKey:@"config.legacy"] isEqual:lockedConfigApp]);
+  assert(![store setConfiguration:configuration forApplication:@"config.unknown" error:&error] && error.code == 4);
+  assert([store setLocked:NO forApplication:@"config.legacy" error:&error]);
+  chosen[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.1_22H31"};
+  assert([SHDWFingerprintConfiguration configurationByValidating:chosen error:&error]);
+  assert([SHDWFingerprintConfiguration systemProfileForConfiguration:chosen]);
+  managerProductType = "iPhone9,2";
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 0);
+  assert(![SHDWFingerprintConfiguration configurationByValidating:chosen error:&error]);
+  assert([SHDWFingerprintConfiguration systemProfileForConfiguration:chosen]);
+  assert([SHDWFingerprintConfiguration configurationByValidating:configuration error:&error]);
+  managerProductType = "iPhone14,5";
+  for (NSDictionary *invalidPart in @[
+      @{@"Version":@YES}, @{@"Version":@2}, @{@"UpdatedAt":@YES}, @{@"UpdatedAt":@(-1)},
+      @{@"System":@{@"Mode":@"native", @"ProfileID":@"extra"}},
+      @{@"System":@{@"Mode":@"profile", @"ProfileID":@"unknown"}},
+      @{@"Network":@{@"RadioTechnologies":@[@"5g",@"5g"]}},
+      @{@"Network":@{@"RadioTechnologies":@[@"3g"]}},
+      @{@"Network":@{@"RadioTechnologies":@"4g"}},
+      @{@"Receipts":@{@"InterceptEnabled":@1}}, @{@"Region":@"FR"}]) {
+    NSMutableDictionary *invalid = [configuration mutableCopy]; [invalid addEntriesFromDictionary:invalidPart];
+    NSDictionary *beforeInvalid = [defaults dictionaryForKey:@"config.legacy"];
+    assert(![store setConfiguration:invalid forApplication:@"config.legacy" error:&error] && error.code == 7);
+    assert([[defaults dictionaryForKey:@"config.legacy"] isEqual:beforeInvalid]);
+  }
+  puts("fingerprint configuration: validation, hardware catalog, literal radio selections, defaults, read-only legacy, locks, data isolation and rollback passed");
   puts("fingerprint manager: default off, registration, persistence, refresh, digest stability, isolation and removal passed");
 } }
 '''

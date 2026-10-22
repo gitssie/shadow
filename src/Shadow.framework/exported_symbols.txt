@@ -22,3 +22,5 @@ _shdw_is_path_in_restricted_root
 _shdw_jbroot_prefix
 _OBJC_CLASS_$_SHDWFingerprintStore
 _OBJC_METACLASS_$_SHDWFingerprintStore
+_OBJC_CLASS_$_SHDWFingerprintConfiguration
+_OBJC_METACLASS_$_SHDWFingerprintConfiguration

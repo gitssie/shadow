@@ -1,4 +1,5 @@
 #import <Shadow/FingerprintMemory.h>
+#import <Shadow/FingerprintConfiguration.h>
 #import "FingerprintPolicy.h"
 #import "FingerprintStorage.h"
 #include <stdlib.h>
@@ -9,14 +10,19 @@
 #include <sys/sysctl.h>
 #include <math.h>
 
-static const NSOperatingSystemVersion shdw_os_version = {18, 7, 1};
-static const char shdw_os_build[] = "22H31";
-static const char shdw_kernel_release[] = "24.6.0";
-static const char shdw_kernel_version[] =
-    "Darwin Kernel Version 24.6.0: Tue Aug 12 00:02:59 PDT 2025; root:xnu-11417.140.69.700.6~5/RELEASE_ARM64_T8110";
-
+static NSDictionary *SHDWFingerprintCurrentConfiguration(void) {
+    return SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
+}
+static NSDictionary *SHDWFingerprintSystemProfile(void) {
+    return SHDWFingerprintSystem(NSBundle.mainBundle.bundleIdentifier);
+}
+BOOL SHDWFingerprintInterceptsReceipts(void) {
+    return [SHDWFingerprintCurrentConfiguration()[@"Receipts"][@"InterceptEnabled"] boolValue];
+}
 NSOperatingSystemVersion SHDWFingerprintOSVersion(void) {
-    return shdw_os_version;
+    NSDictionary *profile = SHDWFingerprintSystemProfile();
+    NSArray *parts = [profile[@"Version"] componentsSeparatedByString:@"."];
+    return (NSOperatingSystemVersion){parts.count > 0 ? [parts[0] integerValue] : 0, parts.count > 1 ? [parts[1] integerValue] : 0, parts.count > 2 ? [parts[2] integerValue] : 0};
 }
 
 BOOL SHDWFingerprintOSVersionAtLeast(NSOperatingSystemVersion requested) {
@@ -27,7 +33,7 @@ BOOL SHDWFingerprintOSVersionAtLeast(NSOperatingSystemVersion requested) {
 }
 
 NSString *SHDWFingerprintOSVersionString(void) {
-    return [NSString stringWithUTF8String:SHDWFingerprintVersionValue("kern.osproductversion")];
+    return SHDWFingerprintSystemProfile()[@"Version"];
 }
 
 NSUUID *SHDWFingerprintVendorIdentifier(NSString *bundleID) {
@@ -54,25 +60,22 @@ NSString *SHDWFingerprintUserAgent(NSString *userAgent) {
 
 const char *SHDWFingerprintVersionValue(const char *name) {
     if(!name) return NULL;
-    if(!strcmp(name, "kern.osversion")) return shdw_os_build;
-    if(!strcmp(name, "kern.osrelease")) return shdw_kernel_release;
-    if(!strcmp(name, "kern.version")) return shdw_kernel_version;
-    if(!strcmp(name, "kern.osproductversion")) {
-        static char version[32];
-        static dispatch_once_t once;
-        dispatch_once(&once, ^{
-            snprintf(version, sizeof(version), "%ld.%ld.%ld", (long)shdw_os_version.majorVersion,
-                (long)shdw_os_version.minorVersion, (long)shdw_os_version.patchVersion);
-        });
-        return version;
-    }
+    if(!strcmp(name, "kern.hostname")) return "iPhone";
+    NSDictionary *profile = SHDWFingerprintSystemProfile();
+    if(!profile) return NULL;
+    if(!strcmp(name, "kern.osversion")) return [profile[@"Build"] UTF8String];
+    if(!strcmp(name, "kern.osrelease")) return [profile[@"Darwin"] UTF8String];
+    if(!strcmp(name, "kern.version")) return [profile[@"Kernel"] UTF8String];
+    if(!strcmp(name, "kern.osproductversion")) return [profile[@"Version"] UTF8String];
     return NULL;
 }
 
 BOOL SHDWFingerprintUnameValue(struct utsname *value) {
     if(!value) return NO;
+    memcpy(value->nodename, "iPhone", sizeof("iPhone"));
     const char *release = SHDWFingerprintVersionValue("kern.osrelease");
     const char *version = SHDWFingerprintVersionValue("kern.version");
+    if (!release || !version) return YES;
     if(strlen(release) >= sizeof(value->release) || strlen(version) >= sizeof(value->version)) return NO;
     memcpy(value->release, release, strlen(release) + 1);
     memcpy(value->version, version, strlen(version) + 1);
@@ -151,7 +154,13 @@ BOOL SHDWFingerprintBootQuery(const char *name, void *value, size_t *length, int
 }
 
 SHDWFingerprintCoordinate SHDWFingerprintCountryCenter(void) {
-    return (SHDWFingerprintCoordinate){46.227638, 2.213749};
+    return SHDWFingerprintCountryCenterForCode([NSLocale.currentLocale objectForKey:NSLocaleCountryCode]);
+}
+
+SHDWFingerprintCoordinate SHDWFingerprintCountryCenterForCode(NSString *country) {
+    if ([country isEqualToString:@"FR"]) return (SHDWFingerprintCoordinate){46.227638, 2.213749};
+    if ([country isEqualToString:@"GB"]) return (SHDWFingerprintCoordinate){55.378051, -3.435973};
+    return (SHDWFingerprintCoordinate){37.09024, -95.712891};
 }
 
 uint64_t SHDWFingerprintMemorySize(NSString *bundleID, uint64_t nativeSize) {
@@ -162,8 +171,11 @@ uint64_t SHDWFingerprintMemorySize(NSString *bundleID, uint64_t nativeSize) {
 
 NSDictionary<NSString *, NSString *> *SHDWFingerprintRadioTechnologies(NSDictionary<NSString *, NSString *> *services) {
     (void)services;
-    return @{@"0000000100000001": @"CTRadioAccessTechnologyLTE",
-             @"0000000100000002": @"CTRadioAccessTechnologyNRNSA"};
+    NSArray *radios = SHDWFingerprintCurrentConfiguration()[@"Network"][@"RadioTechnologies"];
+    NSMutableDictionary *result = [NSMutableDictionary new];
+    if ([radios containsObject:@"4g"]) result[@"0000000100000001"] = @"CTRadioAccessTechnologyLTE";
+    if ([radios containsObject:@"5g"]) result[@"0000000100000002"] = @"CTRadioAccessTechnologyNRNSA";
+    return [result copy];
 }
 
 void SHDWFingerprintSysctlValue(const char *name, void *value, size_t length) {
@@ -175,5 +187,5 @@ void SHDWFingerprintSysctlValue(const char *name, void *value, size_t length) {
 
 NSDictionary<NSString *, NSNumber *> *SHDWFingerprintSIMState(void) {
     return @{@"attached": @YES, @"hasIndicator": @YES, @"inHomeCountry": @YES,
-             @"roamAllowed": @NO, @"cellularDataPossible": @YES, @"newRadioCoverage": @YES};
+             @"roamAllowed": @NO, @"cellularDataPossible": @YES, @"newRadioCoverage": @([SHDWFingerprintCurrentConfiguration()[@"Network"][@"RadioTechnologies"] containsObject:@"5g"])};
 }

@@ -1,5 +1,6 @@
 #import "UniversalHooks.h"
 #import "../../policy/ReceiptPolicy.h"
+#import "../../policy/FingerprintPolicy.h"
 
 static BOOL shdw_receipts_enabled;
 static unsigned shdw_receipt_bundle_state, shdw_receipt_service_state;
@@ -109,7 +110,8 @@ void shdw_universal_fingerprint_receipts_prepare(SHDWHookSession *hooks) {
 }
 
 void shdw_universal_fingerprint_receipts(SHDWHookSession *hooks) {
-    shdw_receipts_enabled = YES;
+    shdw_receipts_enabled = SHDWFingerprintInterceptsReceipts();
+    if(!shdw_receipts_enabled) return;
     [Shadow shdwSetReceiptPathPredicate:shdw_fingerprint_receipt_path_is_restricted];
     shdw_universal_fingerprint_receipts_prepare(hooks);
 }

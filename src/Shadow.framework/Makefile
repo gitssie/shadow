@@ -3,7 +3,7 @@ include $(THEOS)/makefiles/common.mk
 
 FRAMEWORK_NAME = Shadow
 
-Shadow_FILES = Core.m Core+Utilities.m Ruleset.m RulesetCompiler.m RulesetStore.m RestrictionEngine.m JBPath.m Settings.m SettingsMigration.m DpkgRulesGenerator.m SystemRulesGenerator.m HookConfiguration.m Fingerprint/Profile.m Fingerprint/Signals.m Fingerprint/Store.m
+Shadow_FILES = Core.m Core+Utilities.m Ruleset.m RulesetCompiler.m RulesetStore.m RestrictionEngine.m JBPath.m Settings.m SettingsMigration.m DpkgRulesGenerator.m SystemRulesGenerator.m HookConfiguration.m Fingerprint/Profile.m Fingerprint/Signals.m Fingerprint/Store.m Fingerprint/Configuration.m
 Shadow_FRAMEWORKS = Foundation CoreFoundation UIKit LocalAuthentication
 Shadow_PRIVATE_FRAMEWORKS = MobileCoreServices
 Shadow_INSTALL_PATH = /Library/Frameworks

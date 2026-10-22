@@ -9,6 +9,7 @@ exports:
     objc-classes:         [ _Shadow,
                             _ShadowSettings,
                             _SHDWFingerprintStore,
+                            _SHDWFingerprintConfiguration,
                             _SystemRulesGenerator ]
     symbols:              [ _SHDWHookPlan, _SHDWPluginPlan, _SHDWInstallUnits, _SHDWPluginRegistry,
                             _SHDWDefaultHookSettings, _SHDWHookGroupCapabilityKind,

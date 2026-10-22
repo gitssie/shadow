@@ -15,3 +15,5 @@ _SHDWDefaultHookSettings
 _SHDWHookGroupCapabilityKind
 _OBJC_CLASS_$_SHDWFingerprintStore
 _OBJC_METACLASS_$_SHDWFingerprintStore
+_OBJC_CLASS_$_SHDWFingerprintConfiguration
+_OBJC_METACLASS_$_SHDWFingerprintConfiguration

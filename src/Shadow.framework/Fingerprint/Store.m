@@ -1,4 +1,5 @@
 #import <Shadow/Fingerprint.h>
+#import <Shadow/FingerprintConfiguration.h>
 #import <Shadow/Settings.h>
 #import <Shadow/FingerprintState.h>
 #import <Shadow/SHDWPlugin.h>
@@ -82,9 +83,15 @@ static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
   @synchronized(ShadowSettings.sharedInstance) {
     if (![self validIdentifier:bundleID error:error]) return NO;
     NSMutableDictionary *app = [[self application:bundleID] mutableCopy] ?: [NSMutableDictionary new];
+    BOOL alreadyRegistered = SHDWFingerprintApplicationIsRegistered(app);
     app[@"Fingerprint_Managed"] = @YES;
     if (!app[@"Fingerprint_Enabled"]) app[@"Fingerprint_Enabled"] = @YES;
     if (!app[@"Fingerprint_Locked"]) app[@"Fingerprint_Locked"] = @NO;
+    if (!alreadyRegistered && !app[@"Fingerprint_Config"]) {
+      NSMutableDictionary *configuration = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
+      configuration[@"UpdatedAt"] = @(NSDate.date.timeIntervalSince1970);
+      app[@"Fingerprint_Config"] = configuration;
+    }
     app[SHDWAppEnabledID] = @YES;
     [app removeObjectForKey:SHDWAppDisabledID];
     return [self saveApplication:app identifier:bundleID error:error];
@@ -119,12 +126,38 @@ static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
       return SHDWFingerprintStoreFailure(error, 6, @"Fingerprint is locked.");
     }
     if (!existing[@"Fingerprint_Data"] && !existing[@"Fingerprint_Managed"] &&
-        !existing[@"Fingerprint_Enabled"] && !existing[@"Fingerprint_Locked"]) return YES;
+        !existing[@"Fingerprint_Enabled"] && !existing[@"Fingerprint_Locked"] &&
+        !existing[@"Fingerprint_Config"]) return YES;
     NSMutableDictionary *app = [existing mutableCopy];
+    [app removeObjectForKey:@"Fingerprint_Config"];
     [app removeObjectForKey:@"Fingerprint_Data"];
     [app removeObjectForKey:@"Fingerprint_Managed"];
     [app removeObjectForKey:@"Fingerprint_Enabled"];
     [app removeObjectForKey:@"Fingerprint_Locked"];
+    return [self saveApplication:app identifier:bundleID error:error];
+  }
+}
+
+- (NSDictionary *)configurationForApplication:(NSString *)bundleID {
+  id configuration = [self application:bundleID][@"Fingerprint_Config"];
+  return [SHDWFingerprintConfiguration configurationByValidating:configuration error:nil] ?:
+         SHDWFingerprintConfiguration.defaultConfiguration;
+}
+
+- (BOOL)setConfiguration:(NSDictionary *)configuration forApplication:(NSString *)bundleID error:(NSError **)error {
+  @synchronized(ShadowSettings.sharedInstance) {
+    if (![self validIdentifier:bundleID error:error]) return NO;
+    NSDictionary *existing = [self application:bundleID];
+    if (!SHDWFingerprintApplicationIsRegistered(existing))
+      return SHDWFingerprintStoreFailure(error, 4, @"Application is not registered.");
+    if (SHDWFingerprintApplicationLocked(existing))
+      return SHDWFingerprintStoreFailure(error, 6, @"Fingerprint is locked.");
+    NSDictionary *validated = [SHDWFingerprintConfiguration configurationByValidating:configuration error:error];
+    if (!validated) return NO;
+    NSMutableDictionary *updated = [validated mutableCopy];
+    updated[@"UpdatedAt"] = @(NSDate.date.timeIntervalSince1970);
+    NSMutableDictionary *app = [existing mutableCopy];
+    app[@"Fingerprint_Config"] = updated;
     return [self saveApplication:app identifier:bundleID error:error];
   }
 }

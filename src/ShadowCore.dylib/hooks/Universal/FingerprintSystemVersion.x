@@ -20,8 +20,10 @@ static BOOL shdw_system_version_path(id location, const void *caller) {
 static NSDictionary *shdw_system_version_dictionary(NSDictionary *native) {
     if(![native isKindOfClass:NSDictionary.class]) return native;
     NSMutableDictionary *result = [native mutableCopy];
-    result[@"ProductVersion"] = @(SHDWFingerprintVersionValue("kern.osproductversion"));
-    result[@"ProductBuildVersion"] = @(SHDWFingerprintVersionValue("kern.osversion"));
+    const char *version = SHDWFingerprintVersionValue("kern.osproductversion");
+    const char *build = SHDWFingerprintVersionValue("kern.osversion");
+    if(version) result[@"ProductVersion"] = @(version);
+    if(build) result[@"ProductBuildVersion"] = @(build);
     if(result[@"ProductUserVisibleVersion"]) result[@"ProductUserVisibleVersion"] = result[@"ProductVersion"];
     return [native isKindOfClass:NSMutableDictionary.class] ? result : [result copy];
 }

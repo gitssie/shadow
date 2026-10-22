@@ -75,20 +75,20 @@ BOOL shdw_fingerprint_sysctl_mib_query(const int *mib, u_int count, void *value,
     errno = saved;
     if(!applies) return NO;
     static const char *names[] = {"kern.osproductversion", "kern.osversion", "kern.boottime", "kern.bootsessionuuid",
-                                "kern.osrelease", "kern.version"};
-    static int selectors[6][CTL_MAXNAME];
-    static size_t counts[6];
+                                "kern.osrelease", "kern.version", "kern.hostname"};
+    static int selectors[7][CTL_MAXNAME];
+    static size_t counts[7];
     static dispatch_once_t once;
     SHADOW_INTERNAL_SCOPE {
         dispatch_once(&once, ^{
-            for(unsigned i = 0; i < 6; i++) {
+            for(unsigned i = 0; i < 7; i++) {
                 counts[i] = CTL_MAXNAME;
                 if(sysctlnametomib(names[i], selectors[i], &counts[i]) != 0) counts[i] = 0;
             }
         });
     }
     errno = saved;
-    for(unsigned i = 0; i < 6; i++) {
+    for(unsigned i = 0; i < 7; i++) {
         if(counts[i] == count && !memcmp(mib, selectors[i], count * sizeof(*mib)))
             return shdw_fingerprint_sysctl_query(names[i], value, length, NULL, 0, caller, result);
     }
@@ -212,6 +212,11 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
 
 %group shadowhook_fingerprint_version
 %hook UIDevice
+- (NSString *)name {
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    if(shdw_fingerprint_enabled && shdw_map_app_caller(caller)) return @"iPhone";
+    return %orig;
+}
 - (NSUUID *)identifierForVendor {
     if(shdw_fingerprint_enabled) {
         SHADOW_INTERNAL_SCOPE {
@@ -229,6 +234,11 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
 }
 %end
 %hook NSProcessInfo
+- (NSString *)hostName {
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    if(shdw_fingerprint_enabled && shdw_map_app_caller(caller)) return @"iPhone";
+    return %orig;
+}
 - (NSOperatingSystemVersion)operatingSystemVersion {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     if(shdw_fingerprint_enabled && shdw_map_app_caller(caller))
@@ -243,9 +253,10 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
 }
 - (NSString *)operatingSystemVersionString {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
-    if(shdw_fingerprint_enabled && shdw_map_app_caller(caller))
-        return [NSString stringWithFormat:@"Version %@ (Build %s)", SHDWFingerprintOSVersionString(),
-            SHDWFingerprintVersionValue("kern.osversion")];
+    if(shdw_fingerprint_enabled && shdw_map_app_caller(caller)) {
+        const char *build = SHDWFingerprintVersionValue("kern.osversion");
+        if(build) return [NSString stringWithFormat:@"Version %@ (Build %s)", SHDWFingerprintOSVersionString(), build];
+    }
     return %orig;
 }
 %end
@@ -383,7 +394,10 @@ void shdw_universal_fingerprint(SHDWHookSession *hooks) {
     }
     shdw_fingerprint_bundle_id = [NSBundle.mainBundle.bundleIdentifier copy];
     NSDictionary *data;
-    SHADOW_INTERNAL_SCOPE { data = SHDWFingerprintData(shdw_fingerprint_bundle_id); }
+    SHADOW_INTERNAL_SCOPE {
+        data = SHDWFingerprintData(shdw_fingerprint_bundle_id);
+        if (data.count) SHDWFingerprintSystem(shdw_fingerprint_bundle_id);
+    }
     shdw_universal_fingerprint_receipts(hooks);
     shdw_fingerprint_enabled = data.count > 0;
     if(!shdw_fingerprint_enabled) return;

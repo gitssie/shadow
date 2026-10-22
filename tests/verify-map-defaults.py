@@ -55,6 +55,16 @@ assert "shdw_sym_policy_lookup_syscall(symbol)" in dyld_source
 assert "shdw_sym_policy_lookup_syscall(name)" in dyld_source
 prefix = r'''
 #import <Foundation/Foundation.h>
+NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
+    (void)bundleID;
+    return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
+}
+
+#import <Shadow/FingerprintConfiguration.h>
+NSDictionary *SHDWFingerprintSystem(NSString *bundleID) {
+    return [SHDWFingerprintConfiguration resolvedSystemForConfiguration:SHDWFingerprintConfig(bundleID)];
+}
+
 NSDictionary *SHDWFingerprintData(NSString *bundleID) {
     (void)bundleID;
     return @{@"MemoryDelta": @16384};
@@ -559,18 +569,18 @@ int main(void) { @autoreleasepool {
     strcpy(shdw_map_canonical_bundle, "/private/Apps/Probe.app");
     CGRect negative = CGRectMake(0, 0, -1, -1);
     MKMapView *candidate = [[MKMapView alloc] initWithFrame:negative];
-    verify_center(candidate, 46.227638, 2.213749);
+    verify_center(candidate, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
     callerPath = "/System/Library/Frameworks/MapKit.framework/MapKit";
     verify_center(candidate, 51, 9);
     MKMapView *system = [[MKMapView alloc] initWithFrame:negative];
     callerPath = "/private/Apps/Probe.app/Frameworks/SDK.framework/SDK";
     verify_center(system, 51, 9);
-    verify_center(candidate, 46.227638, 2.213749);
+    verify_center(candidate, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
     internalDepth = 2; verify_center(candidate, 51, 9); assert(internalDepth == 2); internalDepth = 0;
     externalCaller = NO; verify_center(candidate, 51, 9); externalCaller = YES;
     candidate.superview = [NSObject new]; verify_center(candidate, 51, 9); candidate.superview = nil;
     candidate.window = [NSObject new]; verify_center(candidate, 51, 9); candidate.window = nil;
-    verify_center(candidate, 46.227638, 2.213749);
+    verify_center(candidate, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
     for(NSValue *frame in @[[NSValue valueWithRect:NSMakeRect(0, 0, 100, 100)],
         [NSValue valueWithRect:NSMakeRect(0, 0, -1, 100)], [NSValue valueWithRect:NSMakeRect(0, 0, 100, -1)]]) {
         MKMapView *normal = [[MKMapView alloc] initWithFrame:NSRectToCGRect(frame.rectValue)];
@@ -591,7 +601,7 @@ int main(void) { @autoreleasepool {
     }
     callerPath = "/System/Library/Frameworks/MapKit.framework/MapKit";
     [candidate setCenterCoordinate:(CLLocationCoordinate2D){1, 2}];
-    callerPath = "/Apps/Probe.app/Probe"; verify_center(candidate, 46.227638, 2.213749);
+    callerPath = "/Apps/Probe.app/Probe"; verify_center(candidate, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
     verify_radio_cases();
     verify_resource_values();
     verify_sim_attributes();
@@ -614,5 +624,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-map-defaults-") as tmp:
         "\n@end\n@implementation ConcretePasteboard\n" + pasteboard + "\n@end\n" + sysctl_methods + "\n" + suffix)
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-Wno-unused-variable", "-Wno-unused-parameter", "-fsanitize=address,undefined", "-framework", "Foundation", "-framework", "CoreGraphics",
-        "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(root / "src/ShadowCore.dylib/policy"), str(src), str(root / "src/ShadowCore.dylib/policy/FingerprintPolicy.m"), "-o", str(binary)], check=True)
+        "-I", str(root / "src/Shadow.framework/Headers"), "-I", str(root / "src/ShadowCore.dylib/policy"), str(src), str(root / "src/ShadowCore.dylib/policy/FingerprintPolicy.m"), str(root / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

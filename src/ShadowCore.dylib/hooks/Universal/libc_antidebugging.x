@@ -709,6 +709,18 @@ int replaced_kevent64(int kq, const struct kevent64_s* changelist, int nchanges,
 }
 
 int (*original_uname)(struct utsname* buf);
+int (*original_gethostname)(char *name, size_t length);
+int replaced_gethostname(char *name, size_t length) {
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    int saved = errno;
+    BOOL applies = shdw_fingerprint_app_caller(caller);
+    errno = saved;
+    if(!applies) return original_gethostname(name, length);
+    if(length < sizeof("iPhone")) { errno = ENAMETOOLONG; return -1; }
+    if(!name) { errno = EFAULT; return -1; }
+    memcpy(name, "iPhone", sizeof("iPhone"));
+    return 0;
+}
 int replaced_uname(struct utsname* buf) {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     int result = original_uname(buf);
@@ -733,6 +745,8 @@ void shdw_universal_antidebugging_rebind_image(SHDWHookSession* hooks, const voi
     if(!imageHeader) return;
     if(original_uname)
         [hooks hookRebindSymbol:@"uname" withReplacement:replaced_uname outOldPtr:NULL inCallerImage:imageHeader];
+    if(original_gethostname)
+        [hooks hookRebindSymbol:@"gethostname" withReplacement:replaced_gethostname outOldPtr:NULL inCallerImage:imageHeader];
     if(original_sysctl)
         [hooks hookRebindSymbol:@"sysctl" withReplacement:replaced_sysctl outOldPtr:NULL inCallerImage:imageHeader];
     if(!resolved_getppid)

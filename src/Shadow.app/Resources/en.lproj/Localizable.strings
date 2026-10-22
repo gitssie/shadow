@@ -41,3 +41,8 @@
 "Enabled" = "Enabled";
 "Disabled" = "Disabled";
 "Unlock fingerprint before removing application" = "Unlock fingerprint before removing application";
+
+"Time zone" = "Time zone";
+"Network" = "Network";
+"Receipt interception" = "Receipt interception";
+"Use device system" = "Use device system";
