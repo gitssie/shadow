@@ -102,6 +102,13 @@ verify-app-state:
 
 .PHONY: verify-app-state
 
+verify-backups: verify-app-state
+	python3 verify-backup-service.py
+	python3 verify-backup-keychain.py
+	python3 verify-state-backend.py
+
+.PHONY: verify-backups
+
 # Compile the identifier arrays and check their data and consumer wiring.
 jb-identifiers:
 	python3 verify-jb-identifiers.py

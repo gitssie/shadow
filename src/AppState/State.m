@@ -37,7 +37,7 @@ static BOOL BundleValue(NSString *value) {
 }
 static BOOL PlainString(id value) { return [value isKindOfClass:NSString.class] && [value length] > 0 && [value length] <= 4096; }
 static BOOL PrivateNode(struct stat info, BOOL directory) {
-    return (directory ? S_ISDIR(info.st_mode) : S_ISREG(info.st_mode)) && info.st_uid == getuid() && (info.st_mode & 0777) == (directory ? 0700 : 0600);
+    return (directory ? S_ISDIR(info.st_mode) : S_ISREG(info.st_mode)) && info.st_uid == geteuid() && (info.st_mode & 0777) == (directory ? 0700 : 0600);
 }
 static BOOL Overlaps(NSString *a, NSString *b) { return [a isEqual:b] || [a hasPrefix:[b stringByAppendingString:@"/"]] || [b hasPrefix:[a stringByAppendingString:@"/"]]; }
 static BOOL SameNode(struct stat a, struct stat b) { return a.st_dev == b.st_dev && a.st_ino == b.st_ino; }
@@ -293,6 +293,9 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         NSDictionary *live = [self fingerprint:context error:error]; NSArray *again = [self.backend captureKeychainForTarget:context[@"target"] error:error];
         if (!live || !again || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
         NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": NSDate.date, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo } mutableCopy];
+        NSString *digest = fingerprint[@"digest"];
+        NSCharacterSet *hex = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"];
+        if ([digest isKindOfClass:NSString.class] && digest.length == 64 && [digest rangeOfCharacterFromSet:hex.invertedSet].location == NSNotFound) manifest[@"digest"] = digest;
         if (!WritePlistAt(stageFD, @"manifest.plist", manifest, error)) return nil;
         int archiveFD = openat(stageFD, "data.tar.zst", O_RDONLY | O_NOFOLLOW | O_CLOEXEC); struct stat archiveStat;
         if (archiveFD < 0 || fstat(archiveFD, &archiveStat) || !PrivateNode(archiveStat, NO) || fsync(archiveFD)) { if (archiveFD >= 0) close(archiveFD); Fail(error, @"Cannot synchronize the captured archive."); return nil; } close(archiveFD);

@@ -13,4 +13,9 @@ ShadowManager_RESOURCE_DIRS = Resources
 ShadowManager_RESOURCE_FILES = Info.plist
 ShadowManager_INSTALL_PATH = /Applications
 
+ifeq ($(THEOS_PACKAGE_SCHEME),roothide)
+ShadowManager_CFLAGS += -DSHADOW_ROOTHIDE
+ShadowManager_LDFLAGS += -lroothide
+endif
+
 include $(THEOS_MAKE_PATH)/application.mk

@@ -157,6 +157,13 @@ static NSDictionary *SHDWNewFingerprintData(void) {
 @implementation ShadowSettings
 @synthesize defaultSettings, userDefaults;
 
+- (BOOL)isValidFingerprintData:(NSDictionary *)data {
+  if (!SHDWValidFingerprintData(data)) return NO;
+  NSString *identifier = data[@"VendorIdentifier"];
+  return [identifier isKindOfClass:NSString.class] &&
+      [identifier isEqual:[[NSUUID alloc] initWithUUIDString:identifier].UUIDString];
+}
+
 - (instancetype)init {
   if ((self = [super init])) {
     // Enabled apps all receive this one built-in profile. Stored hook

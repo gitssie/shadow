@@ -8,6 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 __attribute__((visibility("default")))
 @interface SHDWFingerprintStore : NSObject
 + (instancetype)sharedStore;
++ (nullable NSString *)deviceFingerprintForData:(NSDictionary *)data;
 - (NSArray<NSString *> *)registeredBundleIdentifiers;
 // Reads a saved snapshot without generating or repairing a profile.
 - (nullable NSDictionary *)profileForBundleIdentifier:(NSString *)bundleID;

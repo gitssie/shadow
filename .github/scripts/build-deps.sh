@@ -181,4 +181,7 @@ common_make_args
 # builds the from-source deps that are not published as a Theos install.
 build_altlist
 build_sandy
+if [ "$FLAVOR" != rootful-legacy ]; then
+    PREBUILT_ROOT="$PB" "$ROOT/scripts/build-app-state-deps.sh" "$FLAVOR"
+fi
 echo "dependencies staged: $FLAVOR"

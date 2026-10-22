@@ -1,5 +1,6 @@
 #import "CleanupService.h"
 #import "Language.h"
+#import "OperationCoordinator.h"
 #import <Shadow/Fingerprint.h>
 #import <Shadow/JBPath.h>
 #include <spawn.h>
@@ -131,6 +132,11 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
             dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, SHDWCleanupError(1, @"Cleanup is already running.", nil, NO)); });
             return;
         }
+        NSError *busyError = nil;
+        if (![SHDWOperationCoordinator beginOperation:&busyError]) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, busyError); });
+            return;
+        }
         SHDWCleanupActive = YES; self.running = YES;
     }
     NSArray *requested = [steps copy];
@@ -227,6 +233,7 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             @synchronized(SHDWCleanupService.class) { SHDWCleanupActive = NO; self.running = NO; }
+            [SHDWOperationCoordinator endOperation];
             completion(error == nil, error);
         });
     });

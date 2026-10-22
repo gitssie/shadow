@@ -92,7 +92,7 @@ jobs:
 
       - name: Install Theos
         run: |
-          brew install dpkg ldid
+          brew install dpkg ldid cmake
           sudo git clone --recursive --quiet https://github.com/jjolano/theos.git "$THEOS"
           # Xcode 16's iOS SDK dropped private-framework tbds (Preferences et
           # al); stage the pinned 16.5 SDK so dependency framework links

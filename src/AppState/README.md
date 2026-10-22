@@ -1,14 +1,16 @@
 # App state core
 
-This standalone Foundation module implements snapshot storage, streaming archives,
-and backup/restore coordination. It is not yet linked into Shadow Manager or its
-privileged helper. It does not change installed apps by itself. A device adapter
-must implement `SHDWAppStateBackend` before product integration.
+This Foundation module implements snapshot storage, streaming archives, and
+backup/restore coordination. Shadow Manager's middle archive tab calls the
+installed privileged cleaner helper. Its native `SHDWAppStateBackend` adapter
+resolves the selected application, controls its processes, and delegates scoped
+credential and fingerprint operations to mobile-context workers. The archive
+module itself has no UIKit or device-service dependency.
 
 ## Storage and identity
 
 ```text
-ShadowBackups/<BundleID>/
+/private/var/mobile/Library/ShadowBackups/<BundleID>/
   .lock
   pending.plist                  # only while a restore is incomplete
   snapshots/<canonical-IDFV>/
@@ -79,6 +81,20 @@ claim rollback. Pending state blocks backing up that partial environment and
 protects the restore source from editing/deletion, while permitting retry. The
 core never launches an app automatically.
 
+The device adapter currently exports generic/internet password records; nonempty
+certificate, private-key, or identity classes are rejected before restore writes.
+Shared/unverifiable container or Keychain ownership is rejected. Ambiguous success
+with a NULL export result is an error; item-not-found and typed empty arrays are
+valid empty results. Fingerprint writes run as mobile, preserve unrelated app
+fields, and save data/configuration/lock in one app-dictionary write. The helper
+retains its caller's real UID so the manager can stop its process group on timeout.
+
+The app uses a single operation gate for backups, restoration, cleanup, and manual
+fingerprint refresh. Existing same-IDFV backups are updated rather than duplicated.
+Cleanup of an already backed-up environment offers backup-first/direct/cancel;
+backup failure prevents cleanup. Restore defaults to saving the live environment,
+except same-IDFV and pending-recovery cases, which cannot overwrite their source.
+
 ## Build and verification
 
 Host checks use real archive/filesystem code and isolated doubles for device
@@ -86,6 +102,7 @@ authority, process control, Keychain, and fingerprint preferences:
 
 ```sh
 make -C tests verify-app-state
+make -C tests verify-backups
 ```
 
 They require macOS, Xcode command-line tools, and libarchive with Zstandard support
@@ -105,6 +122,8 @@ Set `THEOS` as for other repository builds. `PREBUILT_ROOT` and `SDKROOT` may
 override dependency storage and the SDK. Dependency sources are checksum-pinned
 and built outside the source tree; core outputs go under ignored `build/app-state`.
 The compile/link check force-loads the core against static libarchive/Zstandard;
-it does not package or install an app. Host and compile/link checks do not verify
-live iOS permissions, Keychain entitlement behavior, file protection, or app
-compatibility after restore. Those remain device integration work before release.
+it does not package or install an app. Normal modern-lane dependency provisioning
+also builds these libraries; packaged builds link them into the cleaner helper.
+Host and compile/link checks do not verify live iOS permissions, Keychain
+entitlement behavior, file protection, UIKit rendering, or app compatibility after
+restore. Those require device verification before release.

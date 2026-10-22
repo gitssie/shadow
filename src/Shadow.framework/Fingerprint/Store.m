@@ -16,6 +16,10 @@ static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
 }
 
 @implementation SHDWFingerprintStore
++ (NSString *)deviceFingerprintForData:(NSDictionary *)data {
+  return [ShadowSettings.sharedInstance isValidFingerprintData:data] ?
+      [SHDWFingerprintProfile displayIdentifierForData:data] : nil;
+}
 + (instancetype)sharedStore {
   static SHDWFingerprintStore *store;
   static dispatch_once_t once;

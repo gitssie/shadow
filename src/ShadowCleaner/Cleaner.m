@@ -525,7 +525,7 @@ static void ReapWorker(pid_t child, int *status) {
     kill(child, SIGKILL);
     while (waitpid(child, status, 0) < 0 && errno == EINTR) {}
 }
-static NSDictionary *RunBounded(NSString *executable, NSArray<NSString *> *arguments, double timeout) {
+static NSDictionary *RunBoundedLimit(NSString *executable, NSArray<NSString *> *arguments, double timeout, NSUInteger maximum) {
     NSMutableArray *values = [NSMutableArray arrayWithObject:executable]; [values addObjectsFromArray:arguments];
     char **args = calloc(values.count + 1, sizeof(char *)); Require(args != NULL, @"Cannot allocate worker arguments");
     for (NSUInteger i = 0; i < values.count; i++) args[i] = (char *)[values[i] UTF8String];
@@ -551,7 +551,7 @@ static NSDictionary *RunBounded(NSString *executable, NSArray<NSString *> *argum
             if (ready > 0 && (channel.revents & (POLLIN | POLLHUP))) {
                 char buffer[1024]; ssize_t length;
                 while ((length = read(descriptors[0], buffer, sizeof(buffer))) > 0) {
-                    Require(output.length + (NSUInteger)length <= 65536, @"Keychain worker response exceeded its limit");
+                    Require(output.length + (NSUInteger)length <= maximum, @"Keychain worker response exceeded its limit");
                     [output appendBytes:buffer length:(NSUInteger)length];
                 }
                 Require(length >= 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR, @"Cannot read keychain worker response");
@@ -562,7 +562,7 @@ static NSDictionary *RunBounded(NSString *executable, NSArray<NSString *> *argum
         }
         char tail[1024]; ssize_t length;
         while ((length = read(descriptors[0], tail, sizeof(tail))) > 0) {
-            Require(output.length + (NSUInteger)length <= 65536, @"Keychain worker response exceeded its limit");
+            Require(output.length + (NSUInteger)length <= maximum, @"Keychain worker response exceeded its limit");
             [output appendBytes:tail length:(NSUInteger)length];
         }
         Require(length >= 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR, @"Cannot finish keychain worker response");
@@ -571,6 +571,9 @@ static NSDictionary *RunBounded(NSString *executable, NSArray<NSString *> *argum
         if (!reaped) ReapWorker(child, &status);
     }
     return @{@"status":@(WIFEXITED(status) ? WEXITSTATUS(status) : -1), @"output":output};
+}
+static NSDictionary *RunBounded(NSString *executable, NSArray<NSString *> *arguments, double timeout) {
+    return RunBoundedLimit(executable, arguments, timeout, 65536);
 }
 static void PrivateDirectory(NSString *directory) {
     struct stat st;
@@ -593,12 +596,28 @@ static NSArray *ValidatedKeychainScope(NSDictionary *target) {
     }
     return groups;
 }
-static NSDictionary *Keychain(NSDictionary *target, BOOL clear, BOOL verifyEmpty) {
+static void PreserveWorkerLoaderAnchor(NSString *parent, NSString *directory) {
+    NSString *original = [parent.stringByDeletingLastPathComponent stringByAppendingPathComponent:@".jbroot"];
+    struct stat link;
+    if (lstat(original.fileSystemRepresentation, &link)) {
+        Require(errno == ENOENT, @"Cannot inspect the installed worker loader anchor");
+#if defined(THEOS_PACKAGE_SCHEME_ROOTHIDE) || defined(SHADOW_ROOTHIDE)
+        Fail(@"The installed worker loader anchor is unavailable");
+#else
+        return;
+#endif
+    }
+    Require(S_ISLNK(link.st_mode) && link.st_uid == 0, @"The installed worker loader anchor is not trusted");
+    NSString *destination = Canonical(original); struct stat root;
+    Require(!lstat(destination.fileSystemRepresentation, &root) && S_ISDIR(root.st_mode) && root.st_uid == 0 && !(root.st_mode & 022), @"The installed worker loader destination is not trusted");
+    NSString *relocated = [directory stringByAppendingPathComponent:@".jbroot"];
+    Require(!symlink(destination.fileSystemRepresentation, relocated.fileSystemRepresentation) && [Canonical(relocated) isEqual:destination], @"Cannot preserve the private worker loader anchor");
+}
+static NSDictionary *ScopedWorker(NSDictionary *target, NSString *mode, NSDictionary *request) {
     Require([target[@"ownershipComplete"] boolValue] && ![target[@"sharedKeychainGroups"] count], @"Keychain access groups are shared or ownership cannot be verified");
     NSArray *groups = ValidatedKeychainScope(target);
-    if (!groups.count) return @{@"ok":@YES, @"classCounts":@{}, @"countsQueried":@NO};
+    if (!groups.count && ![mode hasPrefix:@"state-"]) return @{@"ok":@YES, @"classCounts":@{}, @"countsQueried":@NO};
     NSString *parent = OwnExecutable(), *identifier = target[@"bundleID"], *token = Hash(target);
-    NSString *mode = clear ? @"clear" : verifyEmpty ? @"empty" : @"inspect";
     NSString *signer = Canonical([[parent.stringByDeletingLastPathComponent stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"bin/ldid"]);
     struct stat st; Require(!stat(signer.fileSystemRepresentation, &st) && S_ISREG(st.st_mode) && st.st_uid == 0 && !(st.st_mode & 022), @"Keychain worker signer is not trusted");
     NSString *template = [SessionRoot stringByAppendingPathComponent:@".worker-XXXXXX"];
@@ -609,6 +628,7 @@ static NSDictionary *Keychain(NSDictionary *target, BOOL clear, BOOL verifyEmpty
         PrivateDirectory(directory);
         NSString *worker = [directory stringByAppendingPathComponent:@"worker"], *plist = [directory stringByAppendingPathComponent:@"entitlements.plist"], *manifestPath = [directory stringByAppendingPathComponent:@"manifest.plist"];
         Require([NSFileManager.defaultManager copyItemAtPath:parent toPath:worker error:NULL] && !chmod(worker.fileSystemRepresentation, 0700), @"Cannot copy keychain worker");
+        PreserveWorkerLoaderAnchor(parent, directory);
         NSDictionary *entitlements = ExactEntitlements(ExecutableEntitlements(parent), groups);
         Require([entitlements writeToFile:plist atomically:YES] && !chmod(plist.fileSystemRepresentation, 0600), @"Cannot write exact keychain entitlements");
         NSDictionary *signedResult = RunBounded(signer, @[@"-Cadhoc", [@"-S" stringByAppendingString:plist], worker], 30.0);
@@ -616,13 +636,22 @@ static NSDictionary *Keychain(NSDictionary *target, BOOL clear, BOOL verifyEmpty
         Require(!chmod(worker.fileSystemRepresentation, 0700), @"Cannot secure signed keychain worker");
         NSDictionary *manifest = @{@"parent":parent, @"worker":worker, @"token":token, @"bundleID":identifier, @"mode":mode, @"groups":groups};
         Require([manifest writeToFile:manifestPath atomically:YES] && !chmod(manifestPath.fileSystemRepresentation, 0600), @"Cannot secure keychain worker manifest");
-        NSDictionary *execution = RunBounded(worker, @[@"keychain-worker", identifier, token, mode], 45.0);
+        if (request) {
+            NSString *requestPath = [directory stringByAppendingPathComponent:@"request.plist"];
+            NSData *data = [NSPropertyListSerialization dataWithPropertyList:request format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+            Require(data && data.length <= 16 * 1024 * 1024 && [data writeToFile:requestPath options:NSDataWritingAtomic error:NULL] && !chmod(requestPath.fileSystemRepresentation, 0600), @"Cannot secure scoped worker request");
+        }
+        BOOL stateWorker = [mode hasPrefix:@"state-"];
+        NSDictionary *execution = RunBoundedLimit(worker, @[@"keychain-worker", identifier, token, mode], stateWorker ? 120.0 : 45.0, stateWorker ? 24 * 1024 * 1024 : 65536);
         NSData *output = execution[@"output"]; NSDictionary *response = output.length ? [NSJSONSerialization JSONObjectWithData:output options:0 error:NULL] : nil;
-        Require([execution[@"status"] intValue] == 0 && [response[@"ok"] boolValue], [NSString stringWithFormat:@"Keychain %@ failed (status %@, worker %@, class %@, phase %@, count %@)", mode, response[@"securityStatus"] ?: @"unavailable", response[@"workerCode"] ?: @"unavailable", response[@"itemClass"] ?: @"unavailable", response[@"phase"] ?: @"unavailable", response[@"itemCount"] ?: @"unavailable"]);
+        Require([execution[@"status"] intValue] == 0 && [response[@"ok"] boolValue], [NSString stringWithFormat:@"Keychain %@ failed (status %@, worker %@, class %@, phase %@, count %@)", mode, response[@"securityStatus"] ?: @"unavailable", response[@"workerCode"] ?: @"unavailable", response[@"itemClass"] ?: @"unavailable", response[@"phase"] ?: @"unavailable", response[@"itemCount"] ?: response[@"error"] ?: @"unavailable"]);
         return response;
     } @finally {
         [NSFileManager.defaultManager removeItemAtPath:directory error:NULL];
     }
+}
+static NSDictionary *Keychain(NSDictionary *target, BOOL clear, BOOL verifyEmpty) {
+    return ScopedWorker(target, clear ? @"clear" : verifyEmpty ? @"empty" : @"inspect", nil);
 }
 static int SessionLock(NSString *identifier) {
     if (mkdir(SessionRoot.fileSystemRepresentation, 0700)) Require(errno == EEXIST, @"Cannot create cleanup session directory");
@@ -638,6 +667,9 @@ static void SaveSession(NSString *identifier, NSDictionary *session) {
     Require([data writeToFile:SessionPath(identifier) options:NSDataWritingAtomic error:NULL], @"Cannot save cleanup progress");
     Require(!chmod(SessionPath(identifier).fileSystemRepresentation, 0600), @"Cannot secure cleanup progress");
 }
+#ifdef SHADOW_STATE_SUPPORT
+#import "StateBackend.inc"
+#endif
 static NSDictionary *Execute(int argc, const char *argv[]) {
     Require(argc >= 3, @"Expected inspect, prepare, or run and an application identifier");
     NSString *command = [NSString stringWithUTF8String:argv[1]], *identifier = [NSString stringWithUTF8String:argv[2]];
@@ -660,6 +692,9 @@ static NSDictionary *Execute(int argc, const char *argv[]) {
         ValidatedKeychainScope(target);
         Require([manifest[@"groups"] isEqual:target[@"keychainGroups"]] && [StringList(ExecutableEntitlements(own)[@"keychain-access-groups"]) isEqual:target[@"keychainGroups"]], @"Keychain worker signed scope changed");
         NSString *mode = [NSString stringWithUTF8String:argv[4]];
+#ifdef SHADOW_STATE_SUPPORT
+        if ([mode hasPrefix:@"state-"]) return StateWorker(mode, target, directory);
+#endif
         Require([@[@"inspect", @"clear", @"empty"] containsObject:mode], @"Invalid private worker mode");
         Require(!setgroups(0, NULL) && !setgid(501) && !setuid(501) && getuid() == 501 && geteuid() == 501, @"Cannot enter mobile keychain context");
         int code = KeychainWork(target[@"keychainGroups"], [mode isEqual:@"clear"], ![mode isEqual:@"inspect"]);
@@ -667,6 +702,9 @@ static NSDictionary *Execute(int argc, const char *argv[]) {
             @"countsQueried":@(![mode isEqual:@"clear"]), @"classCounts":keychainClassCounts ?: @{},
             @"uid":@(getuid()), @"euid":@(geteuid()), @"gid":@(getgid()), @"egid":@(getegid())};
     }
+#ifdef SHADOW_STATE_SUPPORT
+    if ([command isEqual:@"state"]) return StateCommand(argc, argv);
+#endif
     Require([@[@"inspect", @"prepare", @"run", @"recheck"] containsObject:command], @"Unknown cleanup operation");
     NSDictionary *scope = Resolve(identifier), *target = scope[@"target"];
     if ([command isEqual:@"inspect"]) {

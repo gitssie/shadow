@@ -10,6 +10,7 @@ __attribute__((visibility("default")))
 @property(strong, nonatomic, readonly) NSUserDefaults *userDefaults;
 
 + (instancetype)sharedInstance;
+- (BOOL)isValidFingerprintData:(NSDictionary *)data;
 
 - (NSDictionary<NSString *, id> *)getPreferencesForIdentifier:
     (NSString *)bundleIdentifier;

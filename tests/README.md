@@ -66,6 +66,17 @@ double. These checks do not establish device permissions or application-level
 restore correctness. See `src/AppState/README.md` for the core's integration scope
 and optional iOS compile/link checks. This target is not part of `test` or CI.
 
+`make -C tests verify-backups` adds production backup transport/coordinator and
+native credential/fingerprint adapter checks to `verify-app-state`. These macOS
+ASan/UBSan checks run a fixture child through the actual spawn/poll/NDJSON parser
+(split frames, binary property lists, malformed/truncated/oversized responses,
+exit failures, bounded timeout/reaping and operation exclusion). Native Security
+queries/mutations, process authority, and preference persistence use test doubles:
+exact group/class validation, unsupported credential classes, empty/ambiguous
+results, replacement preflight, and a single fingerprint app-dictionary write are
+verified without accessing the user's Keychain or installed apps. This target
+does not verify UIKit rendering or device entitlements and is not in `test` or CI.
+
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer
 scripts, rather than the aggregate target. It omits several aggregate checks,
 including mount filtering and JB-identifier data validation. Consult that workflow

@@ -37,6 +37,15 @@ stage_deps() { # rootful-legacy|rootful-modern|rootless|roothide
         echo "missing $profile dependencies; run .github/scripts/build-deps.sh $profile" >&2
         return 1
     }
+    if [ "$profile" != rootful-legacy ] && [ "${2:-manager}" != core ]; then
+        local arch
+        for arch in $(shadow_lane_field "$profile" ARCHS); do
+            [ -f "$PB/app-state/$profile/$arch/lib/libarchive.a" ] && [ -f "$PB/app-state/$profile/$arch/lib/libzstd.a" ] || {
+                echo "missing $profile AppState dependencies; run scripts/build-app-state-deps.sh $profile" >&2
+                return 1
+            }
+        done
+    fi
     # HookKit framework dir is owned by build-support/hookkit.mk; consume its mapping.
     local hookkit_dir
     hookkit_dir=$(printf 'include %s\nshdw_print:\n\t@echo $(SHADOW_HOOKKIT_DIR)\n' \
@@ -172,7 +181,7 @@ build_lane() { # profile
 }
 
 build_quick() {
-    stage_deps rootful-modern
+    stage_deps rootful-modern core
     modern_args
     make -C src/Shadow.framework SHADOW_LANE=rootful-modern "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
     make -C src/Shadow.dylib SHADOW_LANE=rootful-modern "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}

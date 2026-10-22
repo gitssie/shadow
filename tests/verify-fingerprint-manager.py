@@ -194,6 +194,10 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([[store profileForBundleIdentifier:@"b.app"] isEqual:first]);
   NSString *identifier = [store deviceFingerprintForApplication:@"b.app"];
   assert(identifier.length == 64 && [identifier isEqual:[store deviceFingerprintForApplication:@"b.app"]]);
+  assert([settings isValidFingerprintData:first]);
+  assert([identifier isEqual:[SHDWFingerprintStore deviceFingerprintForData:first]]);
+  assert(![settings isValidFingerprintData:@{@"Version":@1}]);
+  assert(![SHDWFingerprintStore deviceFingerprintForData:@{@"Version":@1}]);
   NSMutableDictionary *timeChanged = [first mutableCopy];
   timeChanged[@"NativeBootTimestamp"] = @100;
   timeChanged[@"BootTimeOffset"] = @500;
