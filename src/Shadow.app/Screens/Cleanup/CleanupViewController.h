@@ -3,6 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 @interface SHDWCleanupViewController : UIViewController
 - (instancetype)initWithApplication:(SHDWInstalledApplication *)application;
+- (void)startCleanup;
 @property(nonatomic, copy, nullable) void (^completion)(void);
 @end
 NS_ASSUME_NONNULL_END

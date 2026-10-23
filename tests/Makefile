@@ -99,6 +99,7 @@ verify-cleanup:
 # Optional macOS integration check of the actual AppState archive and store.
 verify-app-state:
 	python3 verify-app-state.py
+	python3 verify-app-state-progress.py
 
 .PHONY: verify-app-state
 

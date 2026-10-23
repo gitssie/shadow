@@ -80,7 +80,7 @@ static BOOL SameStat(struct stat before, struct stat after) {
 }
 @end
 static NSArray<ArchiveRoot *> *OpenRoots(NSDictionary *roots) {
-    Check([roots isKindOfClass:NSDictionary.class] && roots.count, @"Archive roots are missing");
+    Check([roots isKindOfClass:NSDictionary.class], @"Archive roots are missing");
     NSMutableArray *result = [NSMutableArray new];
     for (NSString *prefix in [[roots allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
         Check(SafePath(prefix), @"Invalid archive root prefix"); NSString *path = roots[prefix];
@@ -213,7 +213,7 @@ static NSDictionary *InfoEntries(NSDictionary *info) {
         if ([entry[@"type"] isEqual:@"symlink"]) Check([entry[@"target"] isKindOfClass:NSString.class] && [entry[@"target"] length], @"Invalid archive link target");
         result[entry[@"path"]] = entry;
     }
-    NSDictionary *sources = info[@"sourceRoots"]; Check([sources isKindOfClass:NSDictionary.class] && sources.count, @"Archive source roots are missing");
+    NSDictionary *sources = info[@"sourceRoots"]; Check([sources isKindOfClass:NSDictionary.class], @"Archive source roots are missing");
     for (NSString *prefix in sources) {
         NSString *source = sources[prefix]; Check(SafePath(prefix) && [source isKindOfClass:NSString.class] && source.isAbsolutePath && SafePath([source substringFromIndex:1]) && [result[prefix][@"type"] isEqual:@"directory"], @"Invalid archive source root mapping");
         for (NSString *other in sources) if (![other isEqual:prefix]) Check(!Below(prefix, other) && ![source isEqual:sources[other]] && !Below(source, sources[other]), @"Archive source roots overlap");
@@ -331,7 +331,7 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
 + (NSDictionary *)captureRoots:(NSDictionary<NSString *,NSString *> *)roots payloads:(NSDictionary<NSString *,NSData *> *)payloads toPath:(NSString *)path progress:(SHDWStateProgress)progress error:(NSError **)error {
     struct archive *writer = NULL; int fd = -1; BOOL created = NO, complete = NO;
     @try {
-        NSArray *opened = OpenRoots(roots); Check([payloads isKindOfClass:NSDictionary.class], @"Invalid archive payloads");
+        NSArray *opened = OpenRoots(roots); Check([payloads isKindOfClass:NSDictionary.class] && (roots.count || payloads.count), @"Invalid or empty archive sources");
         Check([Physical(path.stringByDeletingLastPathComponent) isEqual:path.stringByDeletingLastPathComponent] && SafePath(path.lastPathComponent), @"Archive destination parent must be canonical");
         for (ArchiveRoot *root in opened) Check(![path isEqual:root.path] && !Below(path, root.path), @"Archive destination overlaps its source");
         for (NSString *name in payloads) {

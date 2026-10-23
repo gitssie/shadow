@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "src/ShadowCleaner/Cleaner.m"
 HARNESS = r'''
 #import <Security/Security.h>
+#include <mach/mach.h>
 static OSStatus FakeDelete(CFDictionaryRef query);
 static OSStatus FakeCopy(CFDictionaryRef query, CFTypeRef *result);
 #define SecItemDelete FakeDelete
@@ -69,6 +70,25 @@ static void SignatureFixture(NSString *bundle, BOOL derOnly) {
     [bytes appendBytes:&link length:sizeof(link)]; [bytes appendBytes:signature length:link.datasize];
     Require([bytes writeToFile:[bundle stringByAppendingPathComponent:@"Example App"] atomically:YES], @"signature fixture executable");
 }
+static mach_vm_size_t VirtualSize(void) {
+    struct mach_task_basic_info info;mach_msg_type_number_t count=MACH_TASK_BASIC_INFO_COUNT;
+    Require(task_info(mach_task_self(),MACH_TASK_BASIC_INFO,(task_info_t)&info,&count)==KERN_SUCCESS,@"read task virtual size");return info.virtual_size;
+}
+static void EntitlementReadLifetime(NSString *source, NSString *path) {
+    Require([NSFileManager.defaultManager copyItemAtPath:source toPath:path error:NULL],@"copy entitlement lifetime fixture");
+    const off_t extent=80LL*1024*1024;int fd=open(path.fileSystemRepresentation,O_WRONLY|O_NOFOLLOW);
+    Require(fd>=0&&!ftruncate(fd,extent),@"pad sparse entitlement lifetime fixture");close(fd);
+    NSDictionary *expected;
+    @autoreleasepool { expected=ExecutableEntitlements(path);Require(expected!=nil,@"read padded signature"); }
+    // Warm caches outside the measured outer operation pool. The loop below must
+    // bound executable data lifetime without relying on its caller draining it.
+    for(NSUInteger i=0;i<2;i++) { @autoreleasepool { Require([ExecutableEntitlements(path) isEqual:expected],@"warm entitlement read"); } }
+    mach_vm_size_t before=VirtualSize();
+    for(NSUInteger i=0;i<8;i++)Require([ExecutableEntitlements(path) isEqual:expected],@"repeated entitlement content changed");
+    mach_vm_size_t after=VirtualSize(),growth=after>before?after-before:0;
+    Require(growth<(mach_vm_size_t)extent*2,[NSString stringWithFormat:@"repeated entitlement reads retained executable mappings: %.1f MiB",growth/1048576.0]);
+    printf("cleanup entitlement lifetime: 8 x 80 MiB executable reads, virtual growth %.1f MiB passed\n",growth/1048576.0);
+}
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         (void)argc; NSString *root = [NSString stringWithUTF8String:argv[1]];
@@ -121,6 +141,7 @@ int main(int argc, const char *argv[]) {
         NSString *signatureBundle = [Canonical(root) stringByAppendingPathComponent:@"Signature.app"];
         SignatureFixture(signatureBundle, NO);
         Require(Entitlements(signatureBundle).count == 0, @"valid signature without entitlement slots rejected");
+        EntitlementReadLifetime(argc>2 ? Canonical([NSString stringWithUTF8String:argv[2]]) : [signatureBundle stringByAppendingPathComponent:@"Example App"], [Canonical(root) stringByAppendingPathComponent:@"large-signed-copy"]);
         SignatureFixture(signatureBundle, YES);
         BOOL unsupportedDER = NO;
         @try { Entitlements(signatureBundle); } @catch (NSException *exception) { unsupportedDER = [exception.reason containsString:@"DER-only"]; }
@@ -169,8 +190,54 @@ int main(int argc, const char *argv[]) {
 }
 '''
 
+LOCK_HARNESS = r'''#import <Foundation/Foundation.h>
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+static NSString *SessionRoot;
+static void Fail(NSString *reason) { @throw [NSException exceptionWithName:@"LockFixture" reason:reason userInfo:nil]; }
+static void Require(BOOL value, NSString *reason) { if(!value) Fail(reason); }
+static NSString *Hash(NSArray *values) { return values.firstObject; }
+__LOCK_SOURCE__
+static void Blocked(BOOL exclusive) {
+    BOOL blocked=NO;
+    @try { int fd=SessionLockForAccess(@"fixture.app",exclusive);close(fd); }
+    @catch(NSException *exception) { blocked=[exception.reason isEqual:@"An operation is already running."]; }
+    Require(blocked,exclusive ? @"writer escaped an active session lock" : @"reader escaped an active writer");
+}
+int main(int argc,const char **argv) { @autoreleasepool {
+    Require(argc==2,@"lock fixture arguments");SessionRoot=@(argv[1]);
+    int first=SessionLockForAccess(@"fixture.app",NO),second=SessionLockForAccess(@"fixture.app",NO);
+    Require(first>=0&&second>=0,@"independent readers cannot share the session lock");close(second);
+    Blocked(YES);close(first);
+    int writer=SessionLockForAccess(@"fixture.app",YES);Blocked(NO);Blocked(YES);close(writer);
+    int cleanup=SessionLock(@"fixture.app");Blocked(NO);Blocked(YES);close(cleanup);
+    int released=SessionLockForAccess(@"fixture.app",NO);close(released);
+    puts("cleanup session locking: shared readers, exclusive writers, cleanup exclusion and close release passed");
+}return 0;}
+'''
+
+
+def verify_session_locks(temp):
+    source = SOURCE.read_text()
+    begin = source.index("static int SessionLock")
+    end = source.index("static NSString *SessionPath", begin)
+    lock = source[begin:end]
+    # Only adapt the root-only storage owner to the host user's private fixture.
+    # mkdir/open/flock/close remain the production implementation and real syscalls.
+    lock = lock.replace("st.st_uid == 0", "st.st_uid == geteuid()").replace("st.st_uid != 0", "st.st_uid != geteuid()")
+    source_path = temp / "locks.m"
+    source_path.write_text(LOCK_HARNESS.replace("__LOCK_SOURCE__", lock))
+    binary = temp / "locks"
+    subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-Wall", "-Wextra", "-Werror", "-framework", "Foundation", str(source_path), "-o", str(binary)], check=True)
+    subprocess.run([str(binary), str(temp / "sessions")], check=True)
+
+
 with tempfile.TemporaryDirectory(prefix="shadow-cleanup-test-") as temp:
     temp = Path(temp)
+    verify_session_locks(temp)
     harness = temp / "main.m"
     harness.write_text(HARNESS.replace("__SOURCE__", str(SOURCE)))
     binary = temp / "check"

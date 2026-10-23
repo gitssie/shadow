@@ -163,3 +163,6 @@
 "Restored data, credentials, or fingerprint did not pass verification." = "恢复后的数据、钥匙串或指纹未通过复查。";
 "The restoration source changed." = "恢复来源发生变化，请重新检查备份。";
 "Application state operation failed" = "无法完成应用数据操作。";
+
+
+"This backup belongs to the current IDFV and cannot be restored." = "此备份与当前环境的 IDFV 相同，不能恢复。";

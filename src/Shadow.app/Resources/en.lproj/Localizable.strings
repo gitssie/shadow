@@ -163,3 +163,6 @@
 "Restored data, credentials, or fingerprint did not pass verification." = "Restored data, credentials, or fingerprint did not pass verification.";
 "The restoration source changed." = "The restoration source changed.";
 "Application state operation failed" = "Application state operation failed";
+
+
+"This backup belongs to the current IDFV and cannot be restored." = "This backup belongs to the current IDFV and cannot be restored.";

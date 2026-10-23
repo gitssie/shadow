@@ -62,7 +62,9 @@ uses real temporary files and tar.zst archives, and runs functional checks with
 AddressSanitizer and UndefinedBehaviorSanitizer. A separate unsanitized run checks
 streaming progress and memory growth with many small files and a large file.
 Keychain, process control, and fingerprint preferences use an isolated backend
-double. These checks do not establish device permissions or application-level
+double. A streaming regression fixture also verifies that process checks remain
+bounded as file and progress-event counts grow, while backup, restore, and final
+verification still succeed. These checks do not establish device permissions or application-level
 restore correctness. See `src/AppState/README.md` for the core's integration scope
 and optional iOS compile/link checks. This target is not part of `test` or CI.
 
@@ -74,7 +76,11 @@ exit failures, bounded timeout/reaping and operation exclusion). Native Security
 queries/mutations, process authority, and preference persistence use test doubles:
 exact group/class validation, unsupported credential classes, empty/ambiguous
 results, replacement preflight, and a single fingerprint app-dictionary write are
-verified without accessing the user's Keychain or installed apps. This target
+verified without accessing the user's Keychain or installed apps. Native preference
+API doubles also exercise global/container and AnyHost/CurrentHost import, unknown
+configuration fields, unchanged-value no-op, stale-key removal, and synchronization
+failures. Split archive checks cover missing/corrupt/swapped state packages and
+pinning both archives during restore retries. This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.
 
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer

@@ -111,7 +111,7 @@ static NSArray *Bundles(NSString *app) {
 }
 static uint32_t BE32(const uint8_t *bytes) { uint32_t value; memcpy(&value, bytes, 4); return OSSwapBigToHostInt32(value); }
 static uint64_t BE64(const uint8_t *bytes) { uint64_t value; memcpy(&value, bytes, 8); return OSSwapBigToHostInt64(value); }
-static NSDictionary *ExecutableEntitlements(NSString *path) {
+static NSDictionary *ReadExecutableEntitlements(NSString *path) {
     Require([Canonical(path) isEqual:path], @"Invalid executable alias");
     NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL];
     Require(data.length >= sizeof(struct mach_header_64), @"Unreadable target signature");
@@ -168,6 +168,10 @@ static NSDictionary *ExecutableEntitlements(NSString *path) {
     }
     Fail(@"Target signature unavailable"); return nil;
 }
+static NSDictionary *ExecutableEntitlements(NSString *path) {
+    @autoreleasepool { return ReadExecutableEntitlements(path); }
+}
+
 static NSDictionary *Entitlements(NSString *bundle) {
     NSDictionary *info = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"]);
     NSString *name = info[@"CFBundleExecutable"];
@@ -653,14 +657,16 @@ static NSDictionary *ScopedWorker(NSDictionary *target, NSString *mode, NSDictio
 static NSDictionary *Keychain(NSDictionary *target, BOOL clear, BOOL verifyEmpty) {
     return ScopedWorker(target, clear ? @"clear" : verifyEmpty ? @"empty" : @"inspect", nil);
 }
-static int SessionLock(NSString *identifier) {
+static int SessionLockForAccess(NSString *identifier, BOOL exclusive) {
     if (mkdir(SessionRoot.fileSystemRepresentation, 0700)) Require(errno == EEXIST, @"Cannot create cleanup session directory");
     struct stat st; Require(!lstat(SessionRoot.fileSystemRepresentation, &st) && S_ISDIR(st.st_mode) && st.st_uid == 0 && (st.st_mode & 077) == 0, @"Unsafe cleanup session directory");
     NSString *path = [SessionRoot stringByAppendingPathComponent:[Hash(@[identifier]) stringByAppendingString:@".lock"]];
     int fd = open(path.fileSystemRepresentation, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
-    Require(fd >= 0 && !fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_uid == 0 && st.st_nlink == 1 && !flock(fd, LOCK_EX | LOCK_NB), @"Cleanup already in progress or session unavailable");
+    if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != 0 || st.st_nlink != 1) { if (fd >= 0) close(fd); Fail(@"Cannot open application operation session"); }
+    if (flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { close(fd); Fail(@"An operation is already running."); }
     return fd;
 }
+static int SessionLock(NSString *identifier) { return SessionLockForAccess(identifier, YES); }
 static NSString *SessionPath(NSString *identifier) { return [SessionRoot stringByAppendingPathComponent:[Hash(@[identifier]) stringByAppendingString:@".json"]]; }
 static void SaveSession(NSString *identifier, NSDictionary *session) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:session options:0 error:NULL];
