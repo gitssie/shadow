@@ -144,20 +144,11 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     if (self.busy || [SHDWOperationCoordinator isRunning] || !self.selected) return;
     [self.selector setExpanded:NO animated:NO];
     SHDWInstalledApplication *application = self.selected;
-    id rawIdentity = [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:application.bundleIdentifier][@"VendorIdentifier"];
-    NSString *identity = [rawIdentity isKindOfClass:NSString.class] ? [[NSUUID alloc] initWithUUIDString:rawIdentity].UUIDString : nil;
-    if (!identity) { [self presentCleanupForApplication:application]; return; }
-    self.busy = YES; [self renderSelection]; self.cleanupBackupService = [[SHDWBackupService alloc] initWithBundleIdentifier:application.bundleIdentifier];
+    self.cleanupBackupService = [[SHDWBackupService alloc] initWithBundleIdentifier:application.bundleIdentifier];
+    SHDWBackupPromptViewController *prompt = [[SHDWBackupPromptViewController alloc] initWithApplication:application service:self.cleanupBackupService];
     __weak typeof(self) weakSelf = self;
-    [self.cleanupBackupService loadCatalog:^(NSArray *catalog, NSError *error) {
-        typeof(self) self = weakSelf; if (!self) return; self.busy = NO; [self renderSelection];
-        if (error) { SHDWShowError(self, error); return; }
-        BOOL backedUp = NO; for (NSDictionary *snapshot in catalog) if ([snapshot[@"idfv"] isEqual:identity]) { backedUp = YES; break; }
-        if (!backedUp) { [self presentCleanupForApplication:application]; return; }
-        SHDWBackupPromptViewController *prompt = [[SHDWBackupPromptViewController alloc] initWithApplication:application service:self.cleanupBackupService];
-        prompt.proceed = ^(BOOL backupCompleted) { [weakSelf presentCleanupForApplication:application automatically:backupCompleted]; };
-        if (self.view.window && self.tabBarController.selectedViewController == self.navigationController) [self presentViewController:prompt animated:YES completion:nil];
-    }];
+    prompt.proceed = ^(BOOL backupCompleted) { [weakSelf presentCleanupForApplication:application automatically:backupCompleted]; };
+    if (self.view.window && self.tabBarController.selectedViewController == self.navigationController) [self presentViewController:prompt animated:YES completion:nil];
 }
 - (void)showDetails { if (self.busy || [SHDWOperationCoordinator isRunning] || !self.selected) return; [self.selector setExpanded:NO animated:NO]; [self.navigationController pushViewController:[[SHDWFingerprintDetailViewController alloc] initWithBundleIdentifier:self.selected.bundleIdentifier name:self.selected.name] animated:YES]; }
 @end

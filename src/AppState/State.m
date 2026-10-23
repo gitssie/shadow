@@ -388,7 +388,9 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
     struct stat previousInfo; BOOL replacing = fstatat(directory.snapshots, idfv.fileSystemRepresentation, &previousInfo, AT_SYMLINK_NOFOLLOW) == 0;
     if (!replacing && errno != ENOENT) { POSIXFail(error, @"Cannot inspect the existing snapshot."); return nil; }
     NSDictionary *previous = replacing ? [self manifest:bundle idfv:idfv directory:directory verify:NO error:error] : nil; if (replacing && !previous) return nil;
-    NSDictionary *display = Metadata(metadata ?: (previous ? @{ @"title": previous[@"title"], @"note": previous[@"note"] } : nil), bundle, error); if (!display) return nil;
+    NSDate *backupDate = NSDate.date;
+    NSDateFormatter *nameFormatter = [NSDateFormatter new]; nameFormatter.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]; nameFormatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    NSDictionary *display = Metadata(metadata ?: (previous ? @{ @"title": previous[@"title"], @"note": previous[@"note"] } : nil), [nameFormatter stringFromDate:backupDate], error); if (!display) return nil;
     NSDictionary *identity = @{ @"data": fingerprint[@"data"], @"configuration": fingerprint[@"configuration"] };
     NSData *identityData = Encode(identity, error), *keychainData = Encode(records, error), *preferencesData = Encode(preferences, error); if (!identityData || !keychainData || !preferencesData || identityData.length > MaximumPayloadSize || keychainData.length > MaximumPayloadSize || preferencesData.length > MaximumPayloadSize) { if (error && !*error) Fail(error, @"Snapshot identity or credentials are too large."); return nil; }
     NSString *stage = [@".capture-" stringByAppendingString:NSUUID.UUID.UUIDString];
@@ -407,7 +409,7 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         NSDictionary *live = [self fingerprint:context error:error]; NSArray *again = [self.backend captureKeychainForTarget:context[@"target"] error:error];
         if (!live || !again || !Same(preferences, [self.backend capturePreferencesForTarget:context[@"target"] error:error]) || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
         if (![SHDWStateArchive verifyRoots:context[@"roots"] info:archiveInfo progress:progress error:error]) return nil;
-        NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": NSDate.date, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo, @"stateArchiveInfo": stateArchiveInfo } mutableCopy];
+        NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": backupDate, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo, @"stateArchiveInfo": stateArchiveInfo } mutableCopy];
         NSString *digest = fingerprint[@"digest"];
         NSCharacterSet *hex = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"];
         if ([digest isKindOfClass:NSString.class] && digest.length == 64 && [digest rangeOfCharacterFromSet:hex.invertedSet].location == NSNotFound) manifest[@"digest"] = digest;

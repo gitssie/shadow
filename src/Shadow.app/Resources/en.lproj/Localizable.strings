@@ -123,8 +123,6 @@
 "Backup verified" = "Backup verified";
 "Backup deleted" = "Backup deleted";
 "Backup saved" = "Backup saved";
-"Update backup before cleaning?" = "Update backup before cleaning?";
-"The current fingerprint already has a backup." = "The current fingerprint already has a backup.";
 "Backup and clean" = "Backup and clean";
 "Clean directly" = "Clean directly";
 "Please wait" = "Please wait";
@@ -166,3 +164,5 @@
 
 
 "This backup belongs to the current IDFV and cannot be restored." = "This backup belongs to the current IDFV and cannot be restored.";
+"Back up before cleaning?" = "Back up before cleaning?";
+"Cleaning removes current app data. Back up first to keep it." = "Cleaning removes current app data. Back up first to keep it.";

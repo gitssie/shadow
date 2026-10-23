@@ -123,8 +123,6 @@
 "Backup verified" = "备份复查通过";
 "Backup deleted" = "备份已删除";
 "Backup saved" = "备份已保存";
-"Update backup before cleaning?" = "清理前更新备份？";
-"The current fingerprint already has a backup." = "当前指纹已有对应备份。";
 "Backup and clean" = "备份并清理";
 "Clean directly" = "直接清理";
 "Please wait" = "请稍候";
@@ -166,3 +164,5 @@
 
 
 "This backup belongs to the current IDFV and cannot be restored." = "此备份与当前环境的 IDFV 相同，不能恢复。";
+"Back up before cleaning?" = "清理前备份？";
+"Cleaning removes current app data. Back up first to keep it." = "清理将删除当前应用数据，建议先备份。";

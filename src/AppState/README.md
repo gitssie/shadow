@@ -69,8 +69,11 @@ libarchive's standard creation-time field omits (including equal/later creation
 times); it is archive metadata and is never installed as an app extended attribute.
 The module does **not** preserve extended
 attributes, filesystem ACLs, or iOS file protection classes. It is not a complete
-filesystem image. Hard links are captured as independent regular files. Special
-nodes are rejected. Container-manager metadata is excluded from capture and
+filesystem image. Regular-file hard links within captured roots share one archived
+content entry and are restored with their original inode relationship. Aliases
+outside the captured roots are not enumerated or recreated; an in-scope file
+remains a self-contained copy when its other aliases are outside the backup.
+Special nodes are rejected. Container-manager metadata is excluded from capture and
 preserved at the destination; the main app's `Library/SplashBoard` is excluded.
 Internal absolute symbolic links are relocated to the current container roots.
 External link text is retained without following it. Traversal, duplicate paths,

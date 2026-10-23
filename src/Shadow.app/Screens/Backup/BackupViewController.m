@@ -104,6 +104,9 @@ static NSString *ProgressTitle(NSDictionary *event) {
 @property(nonatomic, strong) UITableView *table;
 @property(nonatomic, strong) NSLayoutConstraint *tableHeight;
 @property(nonatomic, strong) UILabel *empty;
+@property(nonatomic, strong) UIImageView *emptyIcon;
+@property(nonatomic, strong) UIActivityIndicatorView *listSpinner;
+@property(nonatomic, strong) UIView *listBackground;
 @property(nonatomic, copy) NSArray<SHDWInstalledApplication *> *applications;
 @property(nonatomic, strong) SHDWInstalledApplication *selected;
 @property(nonatomic, copy) NSArray<NSDictionary *> *catalog;
@@ -124,7 +127,12 @@ static NSString *ProgressTitle(NSDictionary *event) {
     self.action = [SHDWBackupButton new]; self.action.accessibilityIdentifier = @"backup.current"; [self.action addTarget:self action:@selector(backupCurrent) forControlEvents:UIControlEventTouchUpInside];
     self.status = [UILabel new]; self.status.font = [UIFont systemFontOfSize:12]; self.status.numberOfLines = 0; self.status.textColor = UIColor.secondaryLabelColor; self.status.accessibilityIdentifier = @"backup.status";
     self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain]; self.table.backgroundColor = UIColor.clearColor; self.table.layer.cornerRadius = 18; self.table.clipsToBounds = YES; self.table.rowHeight = 60; self.table.dataSource = self; self.table.delegate = self; self.table.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16); self.table.separatorColor = [SHDWInk() colorWithAlphaComponent:0.06]; self.table.tableFooterView = [UIView new]; self.table.accessibilityIdentifier = @"backup.snapshots";
-    self.empty = [UILabel new]; self.empty.textAlignment = NSTextAlignmentCenter; self.empty.font = [UIFont systemFontOfSize:14]; self.empty.textColor = UIColor.secondaryLabelColor; self.empty.numberOfLines = 0; self.table.backgroundView = self.empty;
+    self.empty = [UILabel new]; self.empty.textAlignment = NSTextAlignmentCenter; self.empty.font = [UIFont systemFontOfSize:14]; self.empty.textColor = UIColor.secondaryLabelColor; self.empty.numberOfLines = 0;
+    self.emptyIcon = [[UIImageView alloc] initWithImage:SHDWSymbol(@"tray", 28)]; self.emptyIcon.tintColor = [SHDWAccent() colorWithAlphaComponent:0.45]; self.emptyIcon.contentMode = UIViewContentModeScaleAspectFit; self.emptyIcon.isAccessibilityElement = YES; self.emptyIcon.accessibilityLabel = SHDWText(@"No backups yet"); self.emptyIcon.accessibilityIdentifier = @"backup.empty";
+    self.listSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium]; self.listSpinner.color = SHDWAccent(); self.listSpinner.hidesWhenStopped = YES; self.listSpinner.isAccessibilityElement = YES; self.listSpinner.accessibilityLabel = SHDWText(@"Loading backups"); self.listSpinner.accessibilityIdentifier = @"backup.loading";
+    self.listBackground = [UIView new]; self.table.backgroundView = self.listBackground;
+    UIStackView *emptyContent = [[UIStackView alloc] initWithArrangedSubviews:@[self.listSpinner, self.emptyIcon, self.empty]]; emptyContent.axis = UILayoutConstraintAxisVertical; emptyContent.alignment = UIStackViewAlignmentCenter; emptyContent.spacing = 12; emptyContent.translatesAutoresizingMaskIntoConstraints = NO; [self.listBackground addSubview:emptyContent];
+    [NSLayoutConstraint activateConstraints:@[[emptyContent.centerXAnchor constraintEqualToAnchor:self.listBackground.centerXAnchor], [emptyContent.centerYAnchor constraintEqualToAnchor:self.listBackground.centerYAnchor], [emptyContent.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.listBackground.leadingAnchor constant:16], [emptyContent.trailingAnchor constraintLessThanOrEqualToAnchor:self.listBackground.trailingAnchor constant:-16], [self.emptyIcon.widthAnchor constraintEqualToConstant:32], [self.emptyIcon.heightAnchor constraintEqualToConstant:32]]];
     for (UIView *view in @[self.selector, self.action, self.status, self.table]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
     self.selectorHeight = [self.selector.heightAnchor constraintEqualToConstant:70]; self.selectorHeight.active = YES; self.tableHeight = [self.table.heightAnchor constraintEqualToConstant:140]; self.tableHeight.priority = UILayoutPriorityDefaultHigh; self.tableHeight.active = YES;
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
@@ -161,8 +169,12 @@ static NSString *ProgressTitle(NSDictionary *event) {
 - (void)updateControls {
     self.tableHeight.constant = self.catalog.count ? self.catalog.count * 60 : 140;
     BOOL busy = self.working || [SHDWOperationCoordinator isRunning]; BOOL pending = [self.catalog.firstObject[@"restorePending"] boolValue]; self.selector.enabled = !busy && !self.loading; self.table.userInteractionEnabled = !busy; self.action.enabled = self.selected && self.liveIDFV && !self.loading && !self.catalogFailed && !busy && !pending; self.action.alpha = self.action.enabled || self.working || self.loading ? 1 : 0.5; [self.action setWorking:self.working || self.loading];
-    if (!self.working) [self.action setTitle:SHDWText(self.loading ? @"Loading backups" : ([self currentSnapshot] ? @"Update current backup" : @"Back up current data")) forState:UIControlStateNormal];
-    self.empty.text = !self.selected ? SHDWText(@"Choose an application on Home to create a backup.") : (!self.liveIDFV ? SHDWText(@"Refresh the fingerprint on Home before creating a backup.") : (self.loading ? SHDWText(@"Loading backups") : SHDWText(@"No backups yet"))); self.empty.hidden = self.catalog.count > 0;
+    if (!self.working) [self.action setTitle:SHDWText([self currentSnapshot] ? @"Update current backup" : @"Back up current data") forState:UIControlStateNormal];
+    self.listBackground.hidden = self.catalog.count > 0;
+    if (self.loading && !self.listBackground.hidden) [self.listSpinner startAnimating]; else [self.listSpinner stopAnimating];
+    NSString *guidance = !self.selected ? SHDWText(@"Choose an application on Home to create a backup.") : (!self.liveIDFV ? SHDWText(@"Refresh the fingerprint on Home before creating a backup.") : nil);
+    self.empty.text = guidance; self.empty.hidden = self.loading || !guidance.length;
+    self.emptyIcon.hidden = self.loading || guidance.length || self.catalogFailed;
 }
 - (void)activityChanged { if (self.reloadPending && !self.loading && !self.working && ![SHDWOperationCoordinator isRunning]) [self reloadApplications]; else [self updateControls]; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView; (void)section; return self.catalog.count; }

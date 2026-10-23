@@ -23,9 +23,9 @@
     return self;
 }
 - (void)viewDidLoad {
-    self.sheetTitle = SHDWText(@"Update backup before cleaning?"); self.sheetIcon = [SHDWInstalledApplications iconForApplication:self.application];
+    self.sheetTitle = SHDWText(@"Back up before cleaning?"); self.sheetIcon = [SHDWInstalledApplications iconForApplication:self.application];
     [super viewDidLoad]; self.view.accessibilityIdentifier = @"cleanup.backup-prompt"; self.closeButton.accessibilityIdentifier = @"cleanup.backup-close";
-    self.message = [UILabel new]; self.message.text = SHDWText(@"The current fingerprint already has a backup."); self.message.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:13]]; self.message.adjustsFontForContentSizeCategory = YES; self.message.numberOfLines = 0; self.message.textColor = UIColor.secondaryLabelColor;
+    self.message = [UILabel new]; self.message.text = SHDWText(@"Cleaning removes current app data. Back up first to keep it."); self.message.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:13]]; self.message.adjustsFontForContentSizeCategory = YES; self.message.numberOfLines = 0; self.message.textColor = UIColor.secondaryLabelColor;
     self.action = [UIButton new]; self.action.backgroundColor = SHDWAccent(); self.action.layer.cornerRadius = 14; self.action.accessibilityIdentifier = @"cleanup.backup-start"; self.action.accessibilityLabel = SHDWText(@"Backup and clean"); [self.action addTarget:self action:@selector(backup) forControlEvents:UIControlEventTouchUpInside];
     self.actionTitle = [UILabel new]; self.actionTitle.text = SHDWText(@"Backup and clean"); self.actionTitle.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleHeadline] scaledFontForFont:[UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]]; self.actionTitle.adjustsFontForContentSizeCategory = YES; self.actionTitle.textColor = UIColor.whiteColor; self.actionTitle.numberOfLines = 0; self.actionTitle.textAlignment = NSTextAlignmentCenter;
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium]; self.spinner.color = UIColor.whiteColor; self.spinner.hidesWhenStopped = YES; self.spinner.hidden = YES;
