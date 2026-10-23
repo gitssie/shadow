@@ -51,6 +51,7 @@ verify-rebind-repair:
 	/tmp/shadow-rebind-import-index-test
 
 THEOS ?= /opt/theos
+include ../build-support/hookkit.mk
 
 # Static contract checks (CWD-agnostic: every script cds to the repo root).
 lane-contract:
@@ -75,6 +76,11 @@ verify-fingerprint:
 	python3 verify-manager-apps.py
 	python3 verify-fingerprint-manager.py
 	python3 verify-fingerprint-config-runtime.py
+	python3 verify-fingerprint-localization-config.py
+	python3 verify-fingerprint-localization-runtime.py
+	python3 verify-localization-bootstrap.py
+	HOOKKIT_INCLUDE="$(patsubst -I%,%,$(SHADOW_HOOKKIT_CFLAGS))" python3 verify-localization-function-hook.py
+	python3 verify-fingerprint-localization-webkit.py
 	python3 verify-fingerprint-digest.py
 	python3 verify-fingerprint-raw-memory.py
 	python3 verify-fingerprint-system-version.py

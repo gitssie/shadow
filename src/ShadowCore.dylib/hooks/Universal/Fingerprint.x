@@ -401,6 +401,7 @@ void shdw_universal_fingerprint(SHDWHookSession *hooks) {
     shdw_universal_fingerprint_receipts(hooks);
     shdw_fingerprint_enabled = data.count > 0;
     if(!shdw_fingerprint_enabled) return;
+    shdw_universal_fingerprint_localization(hooks);
     shdw_universal_fingerprint_interfaces(hooks);
     shdw_universal_url_resources(hooks);
     shdw_universal_file_attributes(hooks);

@@ -7,5 +7,7 @@ __attribute__((visibility("default")))
 + (NSArray<NSDictionary *> *)systemProfilesForCurrentDevice;
 + (nullable NSDictionary *)systemProfileForConfiguration:(NSDictionary *)configuration;
 + (NSDictionary *)resolvedSystemForConfiguration:(NSDictionary *)configuration;
+// Concrete process snapshot: LocaleIdentifier, Languages, TimeZone, CountryCode, OverridesSystem.
++ (nullable NSDictionary *)resolvedLocalizationForConfiguration:(NSDictionary *)configuration;
 @end
 NS_ASSUME_NONNULL_END

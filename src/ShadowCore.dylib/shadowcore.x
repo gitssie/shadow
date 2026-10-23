@@ -15,6 +15,7 @@
 #include <time.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <objc/runtime.h>
 
 #import "HookCoordinator.h"
 #import "../../vendor/apple/dyld_priv.h"
@@ -227,6 +228,11 @@ static void shdw_coordinator_ctor(NSDictionary<NSString*, id>* prefs) {
         if(![prefs[@"App_Enabled"] boolValue]) {
             return;
         }
+
+        IMP temporaryBlock = imp_implementationWithBlock(^(id receiver) {
+            (void)receiver;
+        });
+        if(temporaryBlock) imp_removeBlock(temporaryBlock);
 
         // Capture authorization independently of current target readiness.
         shdw_adapter_devicecheck_configure(prefs);

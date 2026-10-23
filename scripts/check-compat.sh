@@ -63,9 +63,10 @@ if [ "$PROFILE" != rootful-legacy ]; then
     APP=$(find_one -type f -path '*/Applications/ShadowManager.app/ShadowManager')
     APP_INFO=$(find_one -type f -path '*/Applications/ShadowManager.app/Info.plist')
     CLEANER=$(find_one -type f -path '*/usr/libexec/shadow-cleaner')
+    LOCALE=$(find_one -type f -path '*/DynamicLibraries/ShadowWebContent.dylib')
     [ -u "$CLEANER" ] || { echo "cleanup helper privilege bit is missing" >&2; exit 1; }
     [ -s "$APP_INFO" ] || { echo "manager app metadata is empty" >&2; exit 1; }
-    BINARIES+=("$APP" "$CLEANER")
+    BINARIES+=("$APP" "$CLEANER" "$LOCALE")
 fi
 "$(dirname "$0")/check-binary-compat.sh" "$PROFILE" "${BINARIES[@]}"
 

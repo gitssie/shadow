@@ -163,3 +163,5 @@
 "Restored data, credentials, or fingerprint did not pass verification." = "Restored data, credentials, or fingerprint did not pass verification.";
 "The restoration source changed." = "The restoration source changed.";
 "Application state operation failed" = "Application state operation failed";
+
+"Search" = "Search";

@@ -86,7 +86,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     self.lockButton.accessibilityLabel = SHDWText(locked ? @"Unlock fingerprint" : @"Lock fingerprint");
     NSDictionary *configuration = present ? [store configurationForApplication:self.selected.bundleIdentifier] : [SHDWFingerprintConfiguration defaultConfiguration];
     NSDictionary *systemProfile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
-    [self.summary showSystemVersion:systemProfile[@"Version"] ?: UIDevice.currentDevice.systemVersion region:[NSLocale.currentLocale objectForKey:NSLocaleCountryCode] ?: @"—"];
+    [self.summary showSystemVersion:systemProfile[@"Version"] ?: UIDevice.currentDevice.systemVersion region:[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration][@"CountryCode"] ?: @"—"];
     [self.summary showUpdatedAt:present ? [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"UpdatedAt"] : nil];
 }
 - (void)manageApplications {
