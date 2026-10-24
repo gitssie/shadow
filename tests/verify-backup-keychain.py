@@ -112,6 +112,38 @@ static void Reset(NSArray *records) { items=[NSMutableArray new]; for (NSDiction
 static BOOL Reject(void (^work)(void)) { @try { work(); } @catch(NSException *exception) { (void)exception;return YES; }return NO; }
 static void RejectedWithoutMutation(void (^work)(void), NSString *message) { NSUInteger before=mutations;Check(Reject(work),message);Check(mutations==before,@"rejected preflight mutated credentials"); }
 static BOOL SameRecords(NSArray *a, NSArray *b) { return a.count==b.count && [[NSSet setWithArray:a] isEqual:[NSSet setWithArray:b]]; }
+static NSData *Plist(id value) { return [NSPropertyListSerialization dataWithPropertyList:value format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL]; }
+static id Unplist(NSData *data) { return [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:NULL]; }
+static void PayloadBoundaryTests(NSArray *groups) { @autoreleasepool {
+    NSMutableDictionary *record=Password((__bridge id)kSecClassGenericPassword,@"boundary",NO);
+    record[(__bridge id)kSecValueData]=[NSMutableData dataWithLength:StatePayloadLimit];
+    NSUInteger overhead=Plist(@[record]).length-StatePayloadLimit;
+    record[(__bridge id)kSecValueData]=[NSMutableData dataWithLength:StatePayloadLimit-overhead-1];
+    NSArray *records=@[record]; Check(Plist(records).length==StatePayloadLimit-1,@"fixture did not reach logical payload boundary");
+    Reset(records); NSArray *captured=StateExportRecords(groups); NSData *payload=StatePayloadData(captured), *frame=StateRequestData(@{@"records":captured});
+    Check(payload && frame.length>StatePayloadLimit && frame.length<=StateFrameLimit,@"valid boundary payload failed framing or did not cross former frame limit");
+    NSString *encoded=[payload base64EncodedStringWithOptions:0]; NSData *output=[NSJSONSerialization dataWithJSONObject:@{@"ok":@YES,@"result":encoded} options:0 error:NULL];
+    Check(encoded.length<=StateEncodedOutputLimit && output.length+1<=StateEncodedOutputLimit,@"encoded worker response exceeded bounded output allowance");
+    NSArray *response=Unplist([[NSData alloc] initWithBase64EncodedString:encoded options:0]);
+    NSDictionary *request=Unplist(StateRequestData(@{@"records":response})); Reset(@[]); StateRestoreRecords(request[@"records"],@[],groups);
+    Check(SameRecords(StateExportRecords(groups),records),@"framed boundary credential roundtrip lost fields or bytes");
+    record[(__bridge id)kSecValueData]=[NSMutableData dataWithLength:StatePayloadLimit-overhead+1];
+    Check(Plist(records).length==StatePayloadLimit+1,@"oversized fixture missed logical boundary");
+    Reset(records); RejectedWithoutMutation(^{StateExportRecords(groups);},@"oversized logical export accepted");
+    Check(!StatePayloadData(records) && !StateRequestData(@{@"records":records}),@"oversized logical request accepted because frame had capacity");
+    Reset(@[]); RejectedWithoutMutation(^{StateRestoreRecords(records,@[],groups);},@"oversized logical restore accepted");
+    for(NSString *key in @[@"preferences",@"fingerprint"]) { @autoreleasepool {
+        NSMutableDictionary *body=[@{@"data":[NSMutableData dataWithLength:StatePayloadLimit]} mutableCopy];
+        NSUInteger padding=Plist(body).length-StatePayloadLimit;
+        body[@"data"]=[NSMutableData dataWithLength:StatePayloadLimit-padding-1];
+        NSData *wrapped=StateRequestData(@{key:body});
+        Check(StatePayloadData(body).length==StatePayloadLimit-1 && wrapped.length>StatePayloadLimit && wrapped.length<=StateFrameLimit,@"preference/fingerprint framing disagreed with logical body bound");
+        Check([Unplist(wrapped)[key] isEqual:body],@"preference/fingerprint wrapper lost logical fields");
+        body[@"data"]=[NSMutableData dataWithLength:StatePayloadLimit-padding+1];
+        Check(!StatePayloadData(body) && !StateRequestData(@{key:body}),@"preference/fingerprint oversized logical body accepted");
+    }}
+    Check(!StateRequestData(@{@"extra":[NSMutableData dataWithLength:StateFrameLimit]}),@"oversized frame accepted");
+}}
 int main(void) { @autoreleasepool {
     NSArray *groups=@[Group]; NSMutableDictionary *generic=Password((__bridge id)kSecClassGenericPassword,@"generic",NO), *internet=Password((__bridge id)kSecClassInternetPassword,@"internet",NO);
     generic[(__bridge id)kSecAttrGeneric]=Bytes(); generic[(__bridge id)kSecAttrIsInvisible]=@YES; generic[(__bridge id)kSecAttrCreator]=@42; generic[(__bridge id)kSecAttrType]=@77; generic[(__bridge id)kSecAttrLabel]=@"untouched-label";
@@ -146,6 +178,7 @@ int main(void) { @autoreleasepool {
     NSMutableDictionary *acl=[generic mutableCopy];[acl removeObjectForKey:(__bridge id)kSecAttrAccessible];acl[@"ArchivedACL"]=Bytes();Reset(@[control]);StateRestoreRecords(@[acl],@[],groups);Check(SameRecords(StateExportRecords(groups),@[acl]),@"encoded ACL bridge roundtrip failed");
     Reset(@[generic,control]);parentPID++;RejectedWithoutMutation(^{StateRestoreRecords(@[generic],@[generic],groups);},@"orphan worker mutated credentials");
     Reset(@[generic,control]);loseParentAfterMutation=YES;Check(Reject(^{StateRestoreRecords(@[generic],@[generic],groups);}) && mutations==1,@"parent loss was not rechecked before next mutation");Check([items containsObject:control],@"parent loss changed other group");
+    PayloadBoundaryTests(groups);
     puts("backup keychain: passed (Security calls stubbed; no user Keychain access)");
 }return 0;}
 '''

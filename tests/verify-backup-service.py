@@ -94,6 +94,7 @@ HARNESS = r'''
 #import "Services/BackupService.h"
 #import "Services/CleanupService.h"
 #import "Services/OperationCoordinator.h"
+#import "Services/BackupPolicy.h"
 #include <sys/wait.h>
 #include <errno.h>
 #include <unistd.h>
@@ -214,7 +215,15 @@ static void Next(void) {
     default:Check(notifications>0,@"operation notifications missing");printf("backup service: %lu transport cases, NDJSON bounds, main callbacks, timeout/reaping and shared operation gates passed\n",(unsigned long)completedCases);exit(0);
     }
 }
-int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==2,@"fixture directory argument");fixtures=[NSString stringWithUTF8String:argv[1]];[NSNotificationCenter.defaultCenter addObserverForName:SHDWOperationDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note){(void)note;Check(NSThread.isMainThread,@"coordinator notification off main");notifications++;}];dispatch_async(dispatch_get_main_queue(),^{Next();});while(YES)[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];}return 0;}
+int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==2,@"fixture directory argument");fixtures=[NSString stringWithUTF8String:argv[1]];
+Check(!SHDWBackupCanRestore(@{},YES)&&SHDWBackupCanRestore(@{},NO),@"ordinary same-IDFV restore was enabled");
+NSDictionary *pending=@{@"restorePending":@YES,@"recoverySource":@YES};
+Check(!SHDWBackupCanRestore(pending,YES)&&SHDWBackupCanRestore(pending,NO),@"incomplete restore bypassed identity rule");
+NSDictionary *finalizing=@{@"restorePending":@YES,@"recoverySource":@YES,@"finalizationPending":@YES};
+Check(SHDWBackupCanRestore(finalizing,YES)&&SHDWBackupFinalizationOnly(finalizing,YES)&&!SHDWBackupFinalizationOnly(finalizing,NO),@"pending finalization action unavailable");
+Check(!SHDWBackupCanRestore(@{@"restorePending":@YES},NO),@"unrelated snapshot allowed during pending restore");
+Check(!SHDWBackupCanRestore(@{@"unavailable":@YES,@"recoverySource":@YES,@"finalizationPending":@YES},YES),@"corrupt snapshot became restorable");
+[NSNotificationCenter.defaultCenter addObserverForName:SHDWOperationDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note){(void)note;Check(NSThread.isMainThread,@"coordinator notification off main");notifications++;}];dispatch_async(dispatch_get_main_queue(),^{Next();});while(YES)[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];}return 0;}
 '''
 
 

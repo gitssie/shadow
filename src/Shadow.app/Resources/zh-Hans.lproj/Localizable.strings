@@ -166,3 +166,15 @@
 "This backup belongs to the current IDFV and cannot be restored." = "此备份与当前环境的 IDFV 相同，不能恢复。";
 "Back up before cleaning?" = "清理前备份？";
 "Cleaning removes current app data. Back up first to keep it." = "清理将删除当前应用数据，建议先备份。";
+
+"Finish verification" = "完成验证";
+"Verify the restored data and finish the interrupted operation." = "验证已恢复的数据并完成中断操作，不会再次覆盖数据。";
+"Backup unavailable" = "备份不可用";
+
+"Container data" = "容器数据";
+
+"External preferences and caches" = "容器外偏好与缓存";
+
+"External web data" = "容器外网页数据";
+
+"Application receipts" = "应用安装包收据";

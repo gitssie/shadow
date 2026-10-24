@@ -91,6 +91,7 @@ verify-fingerprint:
 .PHONY: verify-fingerprint
 
 verify-cleanup:
+	python3 verify-process-stop.py
 	python3 verify-cleanup-engine.py
 	python3 verify-cleanup-service.py
 
@@ -99,7 +100,9 @@ verify-cleanup:
 # Optional macOS integration check of the actual AppState archive and store.
 verify-app-state:
 	python3 verify-app-state.py
+	python3 verify-archive-links.py
 	python3 verify-app-state-progress.py
+	python3 verify-state-durability.py
 
 .PHONY: verify-app-state
 

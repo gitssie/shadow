@@ -207,7 +207,8 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
                 activeStep = @"recheck";
                 update(activeStep, @"running", nil);
                 NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
-                NSDictionary *verified = [self invokeHelper:@[@"recheck", identifier, token, [ordered componentsJoinedByString:@","]] error:&error];
+                [self invokeHelper:@[@"finalize", identifier, token, [ordered componentsJoinedByString:@","]] error:&error];
+                NSDictionary *verified = error ? nil : [self invokeHelper:@[@"recheck", identifier, token, [ordered componentsJoinedByString:@","]] error:&error];
                 if (!error && ![verified[@"recheckVerified"] boolValue]) error = SHDWCleanupError(8, @"Cleanup verification did not pass.", activeStep, mutated);
                 NSDictionary *current = [store profileForBundleIdentifier:identifier];
                 BOOL same = originalProfile == current || [originalProfile isEqual:current];

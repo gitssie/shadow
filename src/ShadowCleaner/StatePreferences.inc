@@ -15,7 +15,7 @@ static NSDictionary *StatePreferenceContainers(NSDictionary *target) {
     return result;
 }
 static BOOL StatePreferenceDomain(NSString *domain) {
-    return Identifier(domain) && ![domain hasPrefix:@"kCFPreferences"] && ![domain isEqual:@"NSGlobalDomain"] && ![domain isEqual:@".GlobalPreferences"];
+    return PreferenceDomainName(domain) && !PreferenceDomainAlias(domain);
 }
 static NSArray *StatePreferenceScopes(NSDictionary *target) {
     NSDictionary *containers = StatePreferenceContainers(target); NSMutableArray *scopes = [NSMutableArray new];
@@ -44,8 +44,9 @@ static void StateValidatePreferences(NSDictionary *payload, NSDictionary *target
         for (id key in values) Require([key isKindOfClass:NSString.class], @"Invalid archived preference key");
         NSArray *identity = @[container, domain, host]; Require(![seen containsObject:identity], @"Duplicate archived preference scope"); [seen addObject:identity];
     }
-    // Every exact global app/extension domain must be represented, including empty domains.
-    for (NSString *domain in target[@"identifiers"]) for (NSString *host in @[@"any", @"current"]) Require([seen containsObject:@[@"", domain, host]], @"Archived preferences are missing an application domain");
+    // The app identity is stable across upgrades. Extensions added afterward
+    // have no archived records; restoration treats their current scopes as empty.
+    for (NSString *host in @[@"any", @"current"]) Require([seen containsObject:@[@"", target[@"bundleID"], host]], @"Archived preferences are missing the application domain");
 }
 static NSDictionary *StatePreferenceRead(NSDictionary *scope, NSDictionary *containers) {
     StatePreferencesCopyAPI copy = dlsym(RTLD_DEFAULT, "_CFPreferencesCopyMultipleWithContainer");

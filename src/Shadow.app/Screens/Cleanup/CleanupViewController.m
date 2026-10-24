@@ -125,7 +125,7 @@
     self.scroll = [UIScrollView new]; self.scroll.alwaysBounceVertical = NO;
     UIStackView *content = [UIStackView new]; content.axis = UILayoutConstraintAxisVertical; content.spacing = 0;
     NSArray *steps = @[@"files", @"preferences", @"web", @"keychain", @"receipts", @"fingerprint", @"recheck"];
-    NSArray *titles = @[@"Application files", @"Preferences and caches", @"Web data", @"Keychain", @"Clean receipts", @"Refresh fingerprint", @"Recheck"];
+    NSArray *titles = @[@"Container data", @"External preferences and caches", @"External web data", @"Keychain", @"Application receipts", @"Refresh fingerprint", @"Recheck"];
     NSArray *symbols = @[@"doc.text", @"slider.horizontal.3", @"globe", @"key", @"doc.plaintext", @"touchid", @"checkmark.shield"];
     NSMutableArray *rows = [NSMutableArray new];
     {

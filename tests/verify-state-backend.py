@@ -13,6 +13,7 @@ HARNESS = r'''
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <grp.h>
+#include <xlocale.h>
 static int FixtureSetGroups(int count,const gid_t *groups);
 static int FixtureSetGID(gid_t group);
 #define setgroups(count,groups) FixtureSetGroups(count,groups)
@@ -62,37 +63,87 @@ static OSStatus FixtureAdd(CFDictionaryRef raw,CFTypeRef *result){(void)result;a
 static OSStatus FixtureUpdate(CFDictionaryRef raw,CFDictionaryRef changes){updates++;NSDictionary *query=(__bridge NSDictionary *)raw;for(NSUInteger i=0;i<database.count;i++)if(Matches(database[i],query)){NSMutableDictionary *value=[database[i] mutableCopy];[value addEntriesFromDictionary:(__bridge NSDictionary *)changes];database[i]=value;return errSecSuccess;}return errSecItemNotFound;}
 static CFDataRef FixtureCopyACL(SecAccessControlRef value){return value?CFRetain((CFDataRef)value):NULL;}
 static SecAccessControlRef FixtureDecodeACL(CFAllocatorRef allocator,CFDataRef value,CFErrorRef *error){(void)allocator;(void)error;NSData *data=(__bridge NSData *)value;return [data isEqual:[@"valid-acl" dataUsingEncoding:NSUTF8StringEncoding]]?(SecAccessControlRef)CFRetain(value):NULL;}
-static void *FixtureSymbol(void *handle,const char *name){if(!strcmp(name,"_CFPreferencesCopyMultipleWithContainer"))return (void *)FixturePreferencesCopy;if(!strcmp(name,"_CFPreferencesSetValueWithContainer"))return (void *)FixturePreferencesSet;if(!strcmp(name,"_CFPreferencesSynchronizeWithContainer"))return (void *)FixturePreferencesSync;if(!strcmp(name,"_CFPreferencesFlushCachesForIdentifier"))return (void *)FixturePreferencesFlush;if(!strcmp(name,"SecAccessControlCopyData"))return (void *)FixtureCopyACL;if(!strcmp(name,"SecAccessControlCreateFromData"))return (void *)FixtureDecodeACL;return dlsym(handle,name);}
+// Host credential fixtures inspect only their own process; process lifecycle is
+// covered separately by verify-process-stop.py and the iOS device run.
+static int FixtureProcessList(void *buffer,int size){if(!buffer)return 1;if(size<(int)sizeof(pid_t))abort();*(pid_t *)buffer=getpid();return 1;}
+static void *FixtureSymbol(void *handle,const char *name){if(!strcmp(name,"proc_listallpids"))return (void *)FixtureProcessList;if(!strcmp(name,"_CFPreferencesCopyMultipleWithContainer"))return (void *)FixturePreferencesCopy;if(!strcmp(name,"_CFPreferencesSetValueWithContainer"))return (void *)FixturePreferencesSet;if(!strcmp(name,"_CFPreferencesSynchronizeWithContainer"))return (void *)FixturePreferencesSync;if(!strcmp(name,"_CFPreferencesFlushCachesForIdentifier"))return (void *)FixturePreferencesFlush;if(!strcmp(name,"SecAccessControlCopyData"))return (void *)FixtureCopyACL;if(!strcmp(name,"SecAccessControlCreateFromData"))return (void *)FixtureDecodeACL;return dlsym(handle,name);}
 
 static NSMutableDictionary *nativePreferences;
 static NSUInteger nativePreferenceWrites;
 static BOOL nativePreferenceSyncFailure, nativePreferenceNullEmpty;
-static NSArray *PreferenceKey(CFStringRef domain,CFStringRef user,CFStringRef host,CFStringRef container){Check(CFEqual(user,CFSTR("mobile")),@"preferences did not use mobile domain");Check(container!=NULL,@"preference scope lost explicit container");return @[(__bridge NSString *)container,(__bridge NSString *)domain,CFEqual(host,kCFPreferencesCurrentHost)?@"current":@"any"];}
+static NSArray *PreferenceKey(CFStringRef domain,CFStringRef user,CFStringRef host,CFStringRef container){Check(CFEqual(user,CFSTR("mobile")),@"preferences did not use mobile domain");Check(container!=NULL,@"preference scope lost explicit container");Check(!PreferenceDomainAlias((__bridge NSString *)domain),@"reserved domain reached native preference API");return @[(__bridge NSString *)container,(__bridge NSString *)domain,CFEqual(host,kCFPreferencesCurrentHost)?@"current":@"any"];}
 static CFDictionaryRef FixturePreferencesCopy(CFArrayRef keys,CFStringRef domain,CFStringRef user,CFStringRef host,CFStringRef container){Check(keys==NULL,@"partial preference capture");NSDictionary *values=nativePreferences[PreferenceKey(domain,user,host,container)];if(!values.count&&nativePreferenceNullEmpty)return NULL;return CFBridgingRetain(values?:@{});}
 static void FixturePreferencesSet(CFStringRef key,CFPropertyListRef value,CFStringRef domain,CFStringRef user,CFStringRef host,CFStringRef container){nativePreferenceWrites++;NSArray *identity=PreferenceKey(domain,user,host,container);NSMutableDictionary *values=[nativePreferences[identity]mutableCopy]?:[NSMutableDictionary new];if(value)values[(__bridge NSString *)key]=(__bridge id)value;else[values removeObjectForKey:(__bridge NSString *)key];nativePreferences[identity]=values;}
 static Boolean FixturePreferencesSync(CFStringRef domain,CFStringRef user,CFStringRef host,CFStringRef container){PreferenceKey(domain,user,host,container);return !nativePreferenceSyncFailure;}
-static void FixturePreferencesFlush(CFStringRef domain,CFStringRef user){Check(domain&&CFEqual(user,CFSTR("mobile")),@"invalid preference cache scope");}
+static void FixturePreferencesFlush(CFStringRef domain,CFStringRef user){Check(domain&&CFEqual(user,CFSTR("mobile"))&&!PreferenceDomainAlias((__bridge NSString *)domain),@"invalid preference cache scope");}
 static void NativePreferenceTests(NSString *root){
     NSString *identifier=@"local.fixture.app",*extension=@"local.fixture.app.extension",*path=[root stringByAppendingPathComponent:@"preference-container"];
     Check([NSFileManager.defaultManager createDirectoryAtPath:[path stringByAppendingPathComponent:@"Library/Preferences"] withIntermediateDirectories:YES attributes:nil error:NULL],@"create preference container");
     NSString *custom=[path stringByAppendingPathComponent:@"Library/Preferences/custom.domain.plist"];
     Check([@{} writeToFile:custom atomically:YES],@"create custom preference domain");
+    NSArray *names=@[@"My Settings",@"偏好设置",@"kCFPreferencesCustom",@"Back\\Slash"];
+    for(NSString *name in [names arrayByAddingObjectsFromArray:@[@"NSGlobalDomain",@".GlobalPreferences",@"kCFPreferencesAnyApplication",@"kCFPreferencesCurrentApplication"]]) Check([@{@"physical":name} writeToFile:[path stringByAppendingPathComponent:[@"Library/Preferences/" stringByAppendingFormat:@"%@.plist",name]] atomically:YES],@"create named preference fixture");
+    NSString *byHost=@"Library/Preferences/ByHost/主机 设置.11111111-1111-4111-8111-111111111111.plist";
+    Check([NSFileManager.defaultManager createDirectoryAtPath:[[path stringByAppendingPathComponent:byHost]stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:NULL]&&[@{} writeToFile:[path stringByAppendingPathComponent:byHost] atomically:YES],@"create Unicode ByHost domain");
     NSDictionary *target=@{@"bundleID":identifier,@"identifiers":@[identifier,extension],@"containers":@[@{@"identifier":identifier,@"path":path}]};
     NSArray *globalAny=@[@"kCFPreferencesNoContainer",identifier,@"any"],*globalHost=@[@"kCFPreferencesNoContainer",identifier,@"current"],*contained=@[path,@"custom.domain",@"any"],*other=@[@"kCFPreferencesNoContainer",@"other.app",@"any"];
     nativePreferences=[@{globalAny:@{@"binary":[NSData dataWithBytes:"\0\xff" length:2],@"date":[NSDate dateWithTimeIntervalSince1970:100],@"nested":@[@{@"enabled":@YES}]},globalHost:@{@"host":@42},contained:@{@"unicode":@"中文"},other:@{@"preserve":@YES}} mutableCopy]; nativePreferenceWrites=0;
-    NSDictionary *saved=StateCapturePreferences(target);Check([saved[@"records"]count]==5&&nativePreferenceWrites==0,@"native capture omitted exact global/host or container domain");
+    for(NSString *name in names)nativePreferences[@[path,name,@"any"]]=@{@"saved":name};
+    nativePreferences[@[path,@"主机 设置",@"current"]]=@{@"host":@YES};
+    NSArray *queries=PreferenceQueries(target);
+    for(NSString *name in [names arrayByAddingObject:@"主机 设置"])Check([queries containsObject:@{@"domain":name,@"container":path}],@"production discovery omitted a valid domain basename");
+    NSDictionary *saved=StateCapturePreferences(target);Check([saved[@"records"]count]==10&&nativePreferenceWrites==0,@"native capture omitted exact global/host or container domain");
     nativePreferenceNullEmpty=YES;Check([StateCapturePreferences(target)isEqual:saved],@"NULL empty native domain not supported");nativePreferenceNullEmpty=NO;
     StateRestorePreferences(saved,target);Check(nativePreferenceWrites==0,@"equal preferences were rewritten, changing original plist timestamps");
     nativePreferences[globalAny]=@{@"new":@"delete"};nativePreferences[globalHost]=@{};nativePreferences[contained]=@{@"stale":@YES};
+    for(NSString *name in names)nativePreferences[@[path,name,@"any"]]=@{@"stale":@YES};
+    nativePreferences[@[path,@"主机 设置",@"current"]]=@{};
     StateRestorePreferences(saved,target);Check([StateCapturePreferences(target)isEqual:saved]&&[nativePreferences[other]isEqual:@{@"preserve":@YES}],@"native preferences failed roundtrip or changed another application");
     NSMutableDictionary *forged=[saved mutableCopy];NSMutableArray *records=[saved[@"records"]mutableCopy];NSMutableDictionary *record=[records.firstObject mutableCopy];record[@"domain"]=@"other.app";records[0]=record;forged[@"records"]=records;NSUInteger before=nativePreferenceWrites;Check(Reject(^{StateRestorePreferences(forged,target);})&&nativePreferenceWrites==before,@"arbitrary global preference domain accepted");
     record=[records[0]mutableCopy];record[@"container"]=@"/private/var/mobile";records[0]=record;Check(Reject(^{StateRestorePreferences(forged,target);})&&nativePreferenceWrites==before,@"arbitrary archived container path accepted");
     records=[saved[@"records"]mutableCopy];[records addObject:records.firstObject];forged[@"records"]=records;Check(Reject(^{StateValidatePreferences(forged,target);}),@"duplicate preference domain accepted");
-    forged=[saved mutableCopy];forged[@"records"]=@[];Check(Reject(^{StateValidatePreferences(forged,target);}),@"missing empty global preference domains accepted");
+    forged=[saved mutableCopy];forged[@"records"]=@[];Check(Reject(^{StateValidatePreferences(forged,target);}),@"missing main application preference domains accepted");
+    unichar nulCharacters[]={ 'a',0,'b' };NSString *nul=[NSString stringWithCharacters:nulCharacters length:3];
+    unichar invalidCharacter=0xd800;NSString *invalidUTF8=[NSString stringWithCharacters:&invalidCharacter length:1];
+    NSArray *invalidNames=@[@"",@".",@"..",@"../escape",@"a/b",nul,invalidUTF8,@"NSGlobalDomain",@".GlobalPreferences",@"kCFPreferencesAnyApplication",@"kCFPreferencesCurrentApplication"];
+    for(NSString *name in invalidNames){
+        NSMutableDictionary *invalid=[saved mutableCopy];NSMutableArray *items=[saved[@"records"]mutableCopy];[items addObject:@{@"container":@"data",@"domain":name,@"host":@"any",@"values":@{@"bad":@YES}}];invalid[@"records"]=items;NSUInteger writes=nativePreferenceWrites;
+        Check(Reject(^{StateRestorePreferences(invalid,target);})&&nativePreferenceWrites==writes,@"unsafe or reserved archived container domain reached import");
+    }
+    for(NSString *name in @[@"My Settings",@"偏好设置",@"NSGlobalDomain",@".GlobalPreferences",@"kCFPreferencesAnyApplication"]){
+        NSMutableDictionary *invalid=[saved mutableCopy];NSMutableArray *items=[saved[@"records"]mutableCopy];[items addObject:@{@"container":@"",@"domain":name,@"host":@"any",@"values":@{@"bad":@YES}}];invalid[@"records"]=items;NSUInteger writes=nativePreferenceWrites;
+        Check(Reject(^{StateRestorePreferences(invalid,target);})&&nativePreferenceWrites==writes,@"unauthorized global domain reached import");
+    }
+    Check(PreferenceDomainName([@"x" stringByPaddingToLength:300 withString:@"x" startingAtIndex:0]),@"domain validator imposed arbitrary identifier length limit");
+    for(NSString *name in @[@"NSGlobalDomain",@".GlobalPreferences",@"kCFPreferencesAnyApplication",@"kCFPreferencesCurrentApplication"])Check([[NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:[@"Library/Preferences/" stringByAppendingFormat:@"%@.plist",name]]][@"physical"]isEqual:name],@"logical preference handling changed physical reserved-name file");
     nativePreferenceSyncFailure=YES;Check(Reject(^{StateCapturePreferences(target);}),@"failed cfprefsd synchronization ignored");nativePreferenceSyncFailure=NO;
     // A new current-only domain is cleared even when it was absent from the snapshot.
-    NSString *extra=[path stringByAppendingPathComponent:@"Library/Preferences/extra.domain.plist"];Check([@{} writeToFile:extra atomically:YES],@"create extra preference domain");nativePreferences[@[path,@"extra.domain",@"any"]]=@{@"remove":@YES};StateRestorePreferences(saved,target);Check([StateCapturePreferences(target)isEqual:saved],@"newly created preference domain was not cleared");
-    puts("native preferences: global/container and any/current-host roundtrip; equal-value no-op; exact domain validation, stale key removal and synchronization failure passed");
+    NSString *extra=[path stringByAppendingPathComponent:@"Library/Preferences/新增 Settings.plist"];Check([@{} writeToFile:extra atomically:YES],@"create extra preference domain");nativePreferences[@[path,@"新增 Settings",@"any"]]=@{@"remove":@YES};StateRestorePreferences(saved,target);Check([StateCapturePreferences(target)isEqual:saved],@"newly created preference domain was not cleared");
+    // An app update can add an extension absent from the original snapshot.
+    NSString *addedExtension=@"local.fixture.app.added-extension",*extensionPath=[root stringByAppendingPathComponent:@"added-extension-container"];
+    NSString *extensionPreferences=[extensionPath stringByAppendingPathComponent:@"Library/Preferences"];
+    Check([NSFileManager.defaultManager createDirectoryAtPath:extensionPreferences withIntermediateDirectories:YES attributes:nil error:NULL]&&[@{} writeToFile:[extensionPreferences stringByAppendingPathComponent:@"extension-sdk.plist"] atomically:YES],@"create added extension domain");
+    NSDictionary *upgradedTarget=@{@"bundleID":identifier,@"identifiers":@[identifier,extension,addedExtension],@"containers":[target[@"containers"] arrayByAddingObject:@{@"identifier":addedExtension,@"path":extensionPath}]};
+    NSArray *addedGlobalAny=@[@"kCFPreferencesNoContainer",addedExtension,@"any"],*addedGlobalHost=@[@"kCFPreferencesNoContainer",addedExtension,@"current"],*addedContainer=@[extensionPath,addedExtension,@"any"],*addedSDK=@[extensionPath,@"extension-sdk",@"current"];
+    for(NSArray *scope in @[addedGlobalAny,addedGlobalHost,addedContainer,addedSDK])nativePreferences[scope]=@{@"stale":@YES,@"future-field":@{@"opaque":@[@1,@2]}};
+    NSDictionary *unrelatedBefore=[nativePreferences[other]copy];
+    StateValidatePreferences(saved,upgradedTarget);
+    StateRestorePreferences(saved,upgradedTarget);
+    for(NSArray *scope in @[addedGlobalAny,addedGlobalHost,addedContainer,addedSDK])Check([nativePreferences[scope]count]==0,@"new extension preferences survived old snapshot restoration");
+    Check([StateCapturePreferences(target)isEqual:saved]&&[nativePreferences[other]isEqual:unrelatedBefore],@"upgrade restoration changed archived or unrelated preferences");
+    NSDictionary *upgradedCapture=StateCapturePreferences(upgradedTarget);
+    for(NSDictionary *item in upgradedCapture[@"records"])if([item[@"domain"]isEqual:addedExtension])Check([item[@"values"]count]==0,@"new extension capture is not empty");
+    NSUInteger upgradeWrites=nativePreferenceWrites;StateRestorePreferences(saved,upgradedTarget);Check(nativePreferenceWrites==upgradeWrites,@"empty newly added extension was rewritten on retry");
+    NSString *archivePath=[root stringByAppendingPathComponent:@"named-preferences.tar.zst"],*restoredPath=[root stringByAppendingPathComponent:@"restored-preferences"];
+    locale_t cLocale=newlocale(LC_CTYPE_MASK,"C",NULL);Check(cLocale!=NULL,@"create C locale regression fixture");locale_t callerLocale=uselocale(cLocale);Check(callerLocale!=NULL,@"select C locale regression fixture");
+    NSError *archiveError=nil;NSDictionary *archiveInfo=[SHDWStateArchive captureRoots:@{@"containers/data":path} payloads:@{} toPath:archivePath progress:nil error:&archiveError];
+    Check(archiveInfo!=nil,@"physical preference archive capture failed");
+    Check([NSFileManager.defaultManager createDirectoryAtPath:restoredPath withIntermediateDirectories:NO attributes:nil error:NULL]&&[SHDWStateArchive restorePath:archivePath info:archiveInfo roots:@{@"containers/data":restoredPath} progress:nil error:&archiveError],@"physical preference archive restore failed");
+    Check([SHDWStateArchive verifyRoots:@{@"containers/data":restoredPath} info:archiveInfo progress:nil error:&archiveError],@"physical named/Unicode/reserved preference files failed archive verification");
+    Check(uselocale(NULL)==cLocale,@"archive success changed caller thread locale");
+    Check([SHDWStateArchive captureRoots:@{@"containers/data":path} payloads:@{} toPath:archivePath progress:nil error:&archiveError]==nil&&uselocale(NULL)==cLocale,@"archive failure changed caller thread locale");
+    uselocale(callerLocale);freelocale(cLocale);
+    puts("native preferences: UTF-8/spaced/container/ByHost roundtrip; reserved aliases remain physical-only; unsafe scopes rejected before writes; exact global scope, added-extension upgrade and stale key removal passed");
 }
 
 @interface FixtureDefaults:NSObject
@@ -204,7 +255,14 @@ static void AnchorTests(NSString *root){
     puts("native loader anchor: temp-only UID authority double; real symlink trust/mode/dangling/conflict/cleanup checks passed");
 }
 
-int main(int argc,const char **argv){@autoreleasepool{Check(argc==2,@"fixture directory argument");KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
+static void CatalogProjectionTests(void) {
+    NSDictionary *bad=@{@"idfv":@"11111111-1111-4111-8111-111111111111",@"unavailable":@YES,@"error":@"corrupt",@"date":NSDate.date,@"recoverySource":@NO};
+    NSDictionary *good=@{@"idfv":@"22222222-2222-4222-8222-222222222222",@"finalizationPending":@YES,@"recoverySource":@YES,@"archiveInfo":@{@"archiveSize":@42},@"stateArchiveInfo":@{@"archiveSize":@8}};
+    NSArray *catalog=StateConciseCatalog(@[bad,good]);
+    Check(catalog.count==2&&[catalog[0][@"unavailable"]boolValue]&&[catalog[0][@"error"]isEqual:@"corrupt"]&&[catalog[0][@"size"]isEqual:@0],@"corrupt snapshot status lost in catalog transport");
+    Check([catalog[1][@"finalizationPending"]boolValue]&&[catalog[1][@"size"]isEqual:@50],@"pending finalization status lost in catalog transport");
+}
+int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
 '''
 
 

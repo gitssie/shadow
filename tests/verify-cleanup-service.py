@@ -41,7 +41,7 @@ static NSMutableArray *calls, *events;
     if ([failure isEqual:call]) {
         *error=[NSError errorWithDomain:@"fixture" code:99 userInfo:@{NSLocalizedDescriptionKey:@"fixture failure",@"stateMayBePartial":@NO}];return nil;
     }
-    if ([command isEqual:@"prepare"] || [command isEqual:@"recheck"]) assert([arguments[2] isEqual:@"stable-token"]);
+    if ([command isEqual:@"prepare"] || [command isEqual:@"finalize"] || [command isEqual:@"recheck"]) assert([arguments[2] isEqual:@"stable-token"]);
     return @{@"ok":@YES,@"token":@"stable-token",@"recheckVerified":@YES};
 }
 @end
@@ -64,24 +64,24 @@ static void Next(void) {
     switch(test++) {
     case 0:
         Run(@[@"fingerprint",@"receipts",@"keychain",@"web",@"preferences",@"files"],
-            @[@"inspect",@"prepare",@"files",@"preferences",@"web",@"keychain",@"receipts",@"refresh",@"recheck"],YES,^(NSError *e){assert(!e&&generation==1&&locked);});break;
+            @[@"inspect",@"prepare",@"files",@"preferences",@"web",@"keychain",@"receipts",@"refresh",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e&&generation==1&&locked);});break;
     case 1:
         locked=YES;
-        Run(@[@"files",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"unlock",@"refresh",@"recheck"],YES,^(NSError *e){assert(!e&&generation==2&&locked);});break;
+        Run(@[@"files",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"unlock",@"refresh",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e&&generation==2&&locked);});break;
     case 2:
         enabled=NO;
         Run(@[@"fingerprint"],@[],NO,^(NSError *e){assert(e.code==4&&generation==2);});break;
     case 3:
         locked=YES;
-        Run(@[@"receipts",@"files"],@[@"inspect",@"prepare",@"files",@"receipts",@"recheck"],YES,^(NSError *e){assert(!e&&generation==2&&locked);assert([events containsObject:@"fingerprint:skipped"]);});break;
+        Run(@[@"receipts",@"files"],@[@"inspect",@"prepare",@"files",@"receipts",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e&&generation==2&&locked);assert([events containsObject:@"fingerprint:skipped"]);});break;
     case 4:
         failure=@"web";
         Run(@[@"files",@"web",@"keychain",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"web"],NO,^(NSError *e){assert([e.userInfo[@"stateMayBePartial"]boolValue]&&generation==2);assert([events.lastObject isEqual:@"web:failed"]);});break;
     case 5:
         failure=@"recheck";
-        Run(@[@"files"],@[@"inspect",@"prepare",@"files",@"recheck"],NO,^(NSError *e){assert([events.lastObject isEqual:@"recheck:failed"]&&[e.userInfo[@"stateMayBePartial"]boolValue]);});break;
+        Run(@[@"files"],@[@"inspect",@"prepare",@"files",@"finalize",@"recheck"],NO,^(NSError *e){assert([events.lastObject isEqual:@"recheck:failed"]&&[e.userInfo[@"stateMayBePartial"]boolValue]);});break;
     case 6:
-        Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"refresh",@"recheck"],YES,^(NSError *e){assert(generation==3&&locked);});break;
+        Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"refresh",@"finalize",@"recheck"],YES,^(NSError *e){assert(generation==3&&locked);});break;
     case 7:
         Run(@[@"files",@"files"],@[],NO,^(NSError *e){assert(e.code==2);});break;
     case 8:
@@ -90,6 +90,9 @@ static void Next(void) {
     case 9:
         locked=YES;rejectRefresh=YES;
         Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"unlock",@"refresh",@"lock"],NO,^(NSError *e){assert(locked&&generation==3&&e.code==98);});break;
+    case 10:
+        failure=@"finalize";
+        Run(@[@"files"],@[@"inspect",@"prepare",@"files",@"finalize"],NO,^(NSError *e){assert([events.lastObject isEqual:@"recheck:failed"]&&[e.userInfo[@"stateMayBePartial"]boolValue]);});break;
     default:
         puts("cleanup service: ordered stages, automatic unlock/lock restoration, disabled preflight, optional refresh, fail-stop and mandatory final recheck passed");exit(0);
     }

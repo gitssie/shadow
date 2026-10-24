@@ -1,6 +1,7 @@
 #import "BackupActionsViewController.h"
 #import "Services/InstalledApplications.h"
 #import "Services/OperationCoordinator.h"
+#import "Services/BackupPolicy.h"
 #import "Appearance/Theme.h"
 
 @interface SHDWBackupActionsViewController ()
@@ -21,10 +22,10 @@
     [super viewDidLoad];
     self.view.accessibilityIdentifier = @"backup.actions-sheet";
     UIStackView *card = [UIStackView new]; card.axis = UILayoutConstraintAxisVertical; card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 16; card.clipsToBounds = YES;
-    BOOL pending = [self.snapshot[@"restorePending"] boolValue], recoverySource = [self.snapshot[@"recoverySource"] boolValue];
+    BOOL recoverySource = [self.snapshot[@"recoverySource"] boolValue], unavailable = [self.snapshot[@"unavailable"] boolValue];
     BOOL sameIDFV = self.currentIDFV.length && [[[[NSUUID alloc] initWithUUIDString:self.currentIDFV] UUIDString] isEqual:[[[NSUUID alloc] initWithUUIDString:self.snapshot[@"idfv"]] UUIDString]];
     NSArray *actions = @[@"restore", @"edit", @"recheck", @"delete"];
-    NSArray *titles = @[recoverySource ? @"Retry restore" : @"Restore backup", @"Edit backup", @"Recheck backup", @"Delete backup"];
+    NSArray *titles = @[SHDWBackupFinalizationOnly(self.snapshot, sameIDFV) ? @"Finish verification" : (recoverySource ? @"Retry restore" : @"Restore backup"), @"Edit backup", @"Recheck backup", @"Delete backup"];
     NSArray *symbols = @[@"arrow.counterclockwise", @"square.and.pencil", @"checkmark.shield", @"trash"];
     for (NSUInteger index = 0; index < actions.count; index++) {
         UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom]; button.tag = index;
@@ -35,7 +36,7 @@
         button.accessibilityLabel = title.text;
         [NSLayoutConstraint activateConstraints:@[[icon.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:16], [icon.centerYAnchor constraintEqualToAnchor:button.centerYAnchor], [icon.widthAnchor constraintEqualToConstant:20], [icon.heightAnchor constraintEqualToConstant:20], [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:12], [title.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-16], [title.topAnchor constraintEqualToAnchor:button.topAnchor constant:12], [title.bottomAnchor constraintEqualToAnchor:button.bottomAnchor constant:-12]]];
         button.accessibilityIdentifier = [@"backup.action." stringByAppendingString:actions[index]];
-        button.enabled = index == 0 ? (!sameIDFV && !(pending && !recoverySource)) : ((index == 1 || index == 3) ? !recoverySource : YES); button.alpha = button.enabled ? 1 : 0.4;
+        button.enabled = index == 0 ? SHDWBackupCanRestore(self.snapshot, sameIDFV) : (index == 3 ? !recoverySource : (!unavailable && (index != 1 || !recoverySource))); button.alpha = button.enabled ? 1 : 0.4;
         [button addTarget:self action:@selector(selectAction:) forControlEvents:UIControlEventTouchUpInside]; [button.heightAnchor constraintGreaterThanOrEqualToConstant:48].active = YES; [card addArrangedSubview:button];
     }
     [self.contentStack addArrangedSubview:card];

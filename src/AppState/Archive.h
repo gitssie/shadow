@@ -26,9 +26,15 @@ typedef void (^SHDWStateProgress)(NSDictionary *event);
                                                            error:(NSError **)error;
 // Callers must preflight the complete archive and stop the target before
 // clearing destination contents. Extraction does not delete destination files.
+// After all post-extraction writes, synchronizeRoots must precede commit.
 + (BOOL)restorePath:(NSString *)path info:(NSDictionary *)info
               roots:(NSDictionary<NSString *, NSString *> *)roots
            progress:(nullable SHDWStateProgress)progress error:(NSError **)error;
+// Persist regular-file data and directories from children to parents without
+// following symbolic links. Call after any post-extraction preference writes
+// and before committing restoration state. Sync failures leave restore pending.
++ (BOOL)synchronizeRoots:(NSDictionary<NSString *, NSString *> *)roots
+               progress:(nullable SHDWStateProgress)progress error:(NSError **)error;
 + (BOOL)verifyRoots:(NSDictionary<NSString *, NSString *> *)roots info:(NSDictionary *)info
            progress:(nullable SHDWStateProgress)progress error:(NSError **)error;
 @end

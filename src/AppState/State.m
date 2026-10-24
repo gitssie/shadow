@@ -105,8 +105,43 @@ static BOOL MigrateStorage(int fd, uid_t uid, gid_t gid, NSError **error) {
 }
 static BOOL Overlaps(NSString *a, NSString *b) { return [a isEqual:b] || [a hasPrefix:[b stringByAppendingString:@"/"]] || [b hasPrefix:[a stringByAppendingString:@"/"]]; }
 static BOOL SameNode(struct stat a, struct stat b) { return a.st_dev == b.st_dev && a.st_ino == b.st_ino; }
+static id LogicalPreferences(id payload) {
+    if (![payload isKindOfClass:NSDictionary.class] || ![payload[@"records"] isKindOfClass:NSArray.class]) return payload;
+    NSMutableDictionary *records = [NSMutableDictionary new];
+    for (NSDictionary *record in payload[@"records"]) {
+        if (![record isKindOfClass:NSDictionary.class] || ![record[@"values"] isKindOfClass:NSDictionary.class] || !record[@"container"] || !record[@"domain"] || !record[@"host"]) return payload;
+        if ([record[@"values"] count]) records[@[record[@"container"], record[@"domain"], record[@"host"]]] = record[@"values"];
+    }
+    return @{@"version":payload[@"version"] ?: @0, @"records":records};
+}
 static BOOL MetadataName(const char *name) {
     return !strcmp(name, ".com.apple.mobile_container_manager.metadata.plist") || !strcmp(name, ".com.apple.mobile_container_manager.acl.plist");
+}
+static BOOL EmptyPreferenceArtifact(NSString *root, NSString *relative, struct stat observed) {
+    NSArray *parts = [relative componentsSeparatedByString:@"/"];
+    if ((parts.count != 3 && parts.count != 4) || ![parts[0] isEqual:@"Library"] || ![parts[1] isEqual:@"Preferences"] || (parts.count == 4 && ![parts[2] isEqual:@"ByHost"]) || ![relative.pathExtension isEqual:@"plist"] || !S_ISREG(observed.st_mode)) return NO;
+    int parent = open(root.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC), file = -1;
+    if (parent < 0) return NO;
+    @try {
+        for (NSUInteger i = 0; i + 1 < parts.count; i++) {
+            int next = openat(parent, [parts[i] fileSystemRepresentation], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (next < 0) return NO;
+            close(parent); parent = next;
+        }
+        file = openat(parent, [parts.lastObject fileSystemRepresentation], O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+        struct stat before, after;
+        if (file < 0 || fstat(file, &before) || !S_ISREG(before.st_mode) || !SameNode(before, observed) || before.st_size <= 0 || (uint64_t)before.st_size > MaximumPlistSize) return NO;
+        NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)before.st_size]; NSUInteger offset = 0;
+        while (offset < data.length) {
+            ssize_t count = read(file, (char *)data.mutableBytes + offset, data.length - offset);
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) return NO;
+            offset += (NSUInteger)count;
+        }
+        if (fstat(file, &after) || !SameNode(before, after) || before.st_size != after.st_size || before.st_mtimespec.tv_sec != after.st_mtimespec.tv_sec || before.st_mtimespec.tv_nsec != after.st_mtimespec.tv_nsec) return NO;
+        id value = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:NULL];
+        return [value isKindOfClass:NSDictionary.class] && [value count] == 0;
+    } @finally { if (file >= 0) close(file); close(parent); }
 }
 static NSDictionary *Metadata(id metadata, NSString *fallback, NSError **error) {
     if (!metadata) return @{ @"title": [fallback substringToIndex:MIN(fallback.length, (NSUInteger)100)], @"note": @"" };
@@ -175,6 +210,31 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         }
     } @finally { closedir(directory); }
     return success;
+}
+
+
+// Call only while holding this application's exclusive operation lock: no
+// capture can still be active then. Abandoned captures also include the old
+// snapshot left at staging after an atomic replacement whose cleanup failed.
+static void CollectAbandonedSnapshots(int parent) {
+    struct stat owner;
+    if (fstat(parent, &owner)) return;
+    DIR *stream = fdopendir(openat(parent, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    if (!stream) return;
+    NSMutableArray *names = [NSMutableArray new]; struct dirent *entry;
+    while ((entry = readdir(stream))) {
+        NSString *name = [[NSString alloc] initWithUTF8String:entry->d_name];
+        NSUInteger prefix = [name hasPrefix:@".capture-"] ? 9 : [name hasPrefix:@".delete-"] ? 8 : 0;
+        if (!prefix || !UUIDValue([name substringFromIndex:prefix])) continue;
+        struct stat info;
+        if (!fstatat(parent, entry->d_name, &info, AT_SYMLINK_NOFOLLOW) &&
+            info.st_dev == owner.st_dev && PrivateNode(info, YES, owner.st_uid, owner.st_gid)) [names addObject:name];
+    }
+    closedir(stream);
+    // Failed removals stay named for the next exclusive operation to retry.
+    // Collection is best effort and must not invalidate a published snapshot.
+    for (NSString *name in names) RemoveChild(parent, name.fileSystemRepresentation, nil, NULL);
+    if (names.count) fsync(parent);
 }
 
 @interface SHDWStateDirectory : NSObject
@@ -257,6 +317,7 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
     id pending = ReadPlistAt(directory.fd, @"pending.plist", self.ownerUID, self.ownerGID, error);
     if (![pending isKindOfClass:NSDictionary.class] || !Same(pending[@"format"], StateFormat) || !UUIDValue(pending[@"idfv"]) || !Same(pending[@"idfv"], UUIDValue(pending[@"idfv"])) || !Same(pending[@"bundleID"], directory.path.lastPathComponent) || ![pending[@"archiveSHA"] isKindOfClass:NSString.class] || [pending[@"archiveSHA"] length] != 64 || ![pending[@"date"] isKindOfClass:NSDate.class]) { if (error && !*error) Fail(error, @"Restoration state is invalid."); return nil; }
     if ((![pending[@"stateArchiveSHA"] isKindOfClass:NSString.class] || [pending[@"stateArchiveSHA"] length] != 64)) { Fail(error, @"Restoration state archive identity is invalid."); return nil; }
+    if (pending[@"phase"] && ![@[@"restoring", @"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]]) { Fail(error, @"Restoration phase is invalid."); return nil; }
     return pending;
 }
 - (NSDictionary *)target:(NSString *)bundle error:(NSError **)error {
@@ -310,7 +371,6 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"path"] isKindOfClass:NSString.class]) return Fail(error, @"Archive entry is invalid.");
         if (![entry[@"path"] hasPrefix:@"containers/"]) continue;
         if (![entry[@"uid"] isKindOfClass:NSNumber.class] || ![entry[@"gid"] isKindOfClass:NSNumber.class] || ![entry[@"mode"] isKindOfClass:NSNumber.class] ||
-            ![entry[@"uid"] isEqual:@(self.ownerUID)] || ![entry[@"gid"] isEqual:@(self.ownerGID)] ||
             [entry[@"mode"] unsignedLongLongValue] > 07777 || ([entry[@"mode"] unsignedLongLongValue] & (S_ISUID | S_ISGID))) return Fail(error, @"Application archive ownership or permissions are not supported.");
     }
     return YES;
@@ -394,7 +454,10 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
     NSDictionary *identity = @{ @"data": fingerprint[@"data"], @"configuration": fingerprint[@"configuration"] };
     NSData *identityData = Encode(identity, error), *keychainData = Encode(records, error), *preferencesData = Encode(preferences, error); if (!identityData || !keychainData || !preferencesData || identityData.length > MaximumPayloadSize || keychainData.length > MaximumPayloadSize || preferencesData.length > MaximumPayloadSize) { if (error && !*error) Fail(error, @"Snapshot identity or credentials are too large."); return nil; }
     NSString *stage = [@".capture-" stringByAppendingString:NSUUID.UUID.UUIDString];
-    if (![self guard:context directory:directory refresh:YES error:error] || !MakeDirectory(directory.fd, stage.fileSystemRepresentation, self.ownerUID, self.ownerGID, NO, error)) { if (error && !*error) POSIXFail(error, @"Cannot create snapshot staging."); return nil; }
+    if (![self guard:context directory:directory refresh:YES error:error]) return nil;
+    // Reclaim only after request/source preflight; invalid requests remain read-only.
+    CollectAbandonedSnapshots(directory.fd);
+    if (!MakeDirectory(directory.fd, stage.fileSystemRepresentation, self.ownerUID, self.ownerGID, NO, error)) { if (error && !*error) POSIXFail(error, @"Cannot create snapshot staging."); return nil; }
     int stageFD = openat(directory.fd, stage.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (stageFD < 0) { POSIXFail(error, @"Cannot open snapshot staging."); unlinkat(directory.fd, stage.fileSystemRepresentation, AT_REMOVEDIR); return nil; }
     BOOL keepStage = NO, published = NO; NSDictionary *result = nil;
@@ -455,6 +518,7 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         close(stageFD);
         if (!keepStage && !published) { NSError *cleanupError = nil; if (!RemoveChild(directory.fd, stage.fileSystemRepresentation, nil, &cleanupError) && error && !*error) *error = cleanupError; }
     }
+    if (result) CollectAbandonedSnapshots(directory.fd);
     return result;
 }
 - (NSDictionary *)backupBundle:(NSString *)bundleID metadata:(NSDictionary *)metadata error:(NSError **)error {
@@ -482,9 +546,20 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
             for (;;) {
                 errno = 0; struct dirent *entry = readdir(stream); if (!entry) { if (errno) valid = POSIXFail(error, @"Cannot enumerate snapshots."); break; }
                 if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-                NSString *idfv = @(entry->d_name); if (!Same(idfv, UUIDValue(idfv))) { valid = Fail(error, @"Invalid snapshot directory."); break; }
-                NSDictionary *manifest = [self manifest:bundleID idfv:idfv directory:directory verify:NO error:error]; if (!manifest) { valid = NO; break; }
-                NSMutableDictionary *item = [manifest mutableCopy]; item[@"restorePending"] = @(pending.count > 0); item[@"recoverySource"] = @(Same(pending[@"idfv"], idfv)); [entries addObject:item];
+                NSString *idfv = @(entry->d_name); if (!Same(idfv, UUIDValue(idfv))) continue;
+                NSError *itemError = nil;
+                NSDictionary *manifest = [self manifest:bundleID idfv:idfv directory:directory verify:NO error:&itemError];
+                NSMutableDictionary *item;
+                if (manifest) item = [manifest mutableCopy];
+                else {
+                    struct stat info; NSDate *date = [NSDate dateWithTimeIntervalSince1970:0];
+                    if (!fstatat(directory.snapshots, entry->d_name, &info, AT_SYMLINK_NOFOLLOW)) date = [NSDate dateWithTimeIntervalSince1970:info.st_mtimespec.tv_sec];
+                    item = [@{@"bundleID":bundleID, @"idfv":idfv, @"title":idfv, @"note":@"", @"date":date, @"unavailable":@YES, @"error":itemError.localizedDescription ?: @"Snapshot is unavailable."} mutableCopy];
+                }
+                BOOL source = Same(pending[@"idfv"], idfv);
+                item[@"restorePending"] = @(pending.count > 0); item[@"recoverySource"] = @(source);
+                item[@"finalizationPending"] = @(source && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]]);
+                [entries addObject:item];
             }
         } @finally { closedir(stream); }
         if (!valid || ![self checkDirectory:directory error:error]) return nil;
@@ -509,6 +584,7 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         NSMutableDictionary *manifest = [[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error] mutableCopy]; if (!manifest) return NO; [manifest addEntriesFromDictionary:display];
         if (![self checkDirectory:directory error:error]) return NO;
         int fd = openat(directory.snapshots, canonical.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) return POSIXFail(error, @"Cannot open the snapshot.");
+        CollectAbandonedSnapshots(directory.fd);
         BOOL success = WritePlistAt(fd, @"manifest.plist", manifest, error); close(fd); return success;
     } @finally { [operationDirectory releaseLock]; }
 }
@@ -518,9 +594,46 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         if (error) *error = nil; NSString *canonical = UUIDValue(idfv); if (!canonical) return Fail(error, @"Invalid snapshot identity.");
         SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return NO;
         NSDictionary *pending = [self pending:directory error:error]; if (!pending) return NO; if (Same(pending[@"idfv"], canonical)) return Fail(error, @"The pending restoration source cannot be deleted.");
-        if (![self manifest:bundleID idfv:canonical directory:directory verify:NO error:error] || ![self checkDirectory:directory error:error]) return NO;
-        return RemoveChild(directory.snapshots, canonical.fileSystemRepresentation, nil, error) && (fsync(directory.snapshots) == 0 || POSIXFail(error, @"Cannot synchronize snapshot deletion."));
+        if (![self checkDirectory:directory error:error]) return NO;
+        CollectAbandonedSnapshots(directory.fd);
+        NSString *tombstone = [@".delete-" stringByAppendingString:NSUUID.UUID.UUIDString];
+        if (renameat(directory.snapshots, canonical.fileSystemRepresentation, directory.fd, tombstone.fileSystemRepresentation)) return POSIXFail(error, @"Cannot remove the snapshot from the catalog.");
+        if (fsync(directory.snapshots) || fsync(directory.fd)) return POSIXFail(error, @"Cannot synchronize snapshot deletion.");
+        // Publication is already removed atomically. Interrupted physical cleanup
+        // remains outside the catalog and is retried by the next writer.
+        RemoveChild(directory.fd, tombstone.fileSystemRepresentation, nil, NULL);
+        return YES;
     } @finally { [operationDirectory releaseLock]; }
+}
+- (BOOL)verifyRestoredPayloads:(NSDictionary *)payloads manifest:(NSDictionary *)manifest context:(NSDictionary *)context directory:(SHDWStateDirectory *)directory roots:(NSDictionary *)roots identifiers:(NSSet *)ids error:(NSError **)error {
+    NSDictionary *target = context[@"target"];
+    [self event:@"restore" stage:@"recheck"];
+    NSArray *actualRecords = [self.backend captureKeychainForTarget:target error:error];
+    NSDictionary *preferences = [self.backend capturePreferencesForTarget:target error:error];
+    if (!actualRecords || !preferences || !Same(LogicalPreferences(payloads[@"preferences"]), LogicalPreferences(preferences)) || ![self records:actualRecords equal:payloads[@"keychain"]]) {
+        if (error && !*error) Fail(error, @"Restored data or credentials did not pass verification."); return NO;
+    }
+    if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:[self archiveProgressForPhase:@"restore"] error:error]) return NO;
+    for (NSString *identifier in target[@"containers"]) if (![ids containsObject:identifier]) {
+        NSString *path = target[@"containers"][identifier]; __block NSError *enumerationError = nil;
+        NSDirectoryEnumerator *entries = [NSFileManager.defaultManager enumeratorAtURL:[NSURL fileURLWithPath:path isDirectory:YES] includingPropertiesForKeys:nil options:0 errorHandler:^BOOL(NSURL *url, NSError *failure) { (void)url; enumerationError = failure; return NO; }];
+        if (!entries) return Fail(error, @"Cannot verify an additional application container.");
+        for (NSURL *url in entries) {
+            NSString *relative = [url.path substringFromIndex:path.length + 1]; struct stat info;
+            if (lstat(url.path.fileSystemRepresentation, &info)) return POSIXFail(error, @"Cannot inspect an additional application container.");
+            if (MetadataName(relative.fileSystemRepresentation)) { if (S_ISREG(info.st_mode)) continue; }
+            else if (S_ISDIR(info.st_mode) && [@[@"Documents", @"Library", @"Library/Caches", @"Library/Preferences", @"Library/Preferences/ByHost", @"tmp"] containsObject:relative]) continue;
+            else if (EmptyPreferenceArtifact(path, relative, info)) continue;
+            return Fail(error, @"An additional application container contains unexpected data after restoration.");
+        }
+        if (enumerationError) { if (error) *error = enumerationError; return NO; }
+    }
+    return [self guard:context directory:directory refresh:YES error:error];
+}
+- (BOOL)verifyRestoredFingerprint:(NSDictionary *)expected context:(NSDictionary *)context error:(NSError **)error {
+    NSDictionary *actual = [self fingerprint:context error:error];
+    if (actual && Same(actual[@"data"], expected[@"data"]) && Same(actual[@"configuration"], expected[@"configuration"]) && [actual[@"locked"] boolValue]) return YES;
+    if (error && !*error) Fail(error, @"Restored fingerprint did not pass verification."); return NO;
 }
 - (NSDictionary *)restoreBundle:(NSString *)bundleID idfv:(NSString *)idfv saveCurrent:(BOOL)saveCurrent error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
@@ -530,6 +643,7 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
             NSString *canonical = UUIDValue(idfv); if (!canonical) { Fail(error, @"Invalid snapshot identity."); return nil; }
             SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return nil;
             NSDictionary *pending = [self pending:directory error:error]; if (!pending) return nil;
+            recovery = pending.count ? pending : nil; mutated = pending.count > 0;
             if (pending.count && (!Same(pending[@"idfv"], canonical) || saveCurrent)) { Fail(error, @"Retry the pending source without saving the incomplete current state."); return nil; }
             NSDictionary *manifest = [self manifest:bundleID idfv:canonical directory:directory verify:YES error:error]; if (!manifest) return nil;
             if (pending.count && (!Same(pending[@"archiveSHA"], manifest[@"archiveInfo"][@"sha256"]) || !Same(pending[@"stateArchiveSHA"], manifest[@"stateArchiveInfo"][@"sha256"]))) { Fail(error, @"The restoration source changed."); return nil; }
@@ -538,46 +652,66 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
             NSDictionary *target = context[@"target"];
             NSString *currentIDFV = [self.backend currentVendorIdentifierForTarget:target error:error];
             if (![currentIDFV isKindOfClass:NSString.class]) { if (error && !*error) Fail(error, @"Cannot read the current application IDFV."); return nil; }
-            if (Same(UUIDValue(currentIDFV), canonical)) { Fail(error, @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
-            if (!Same(manifest[@"version"], target[@"version"]) || !Same(manifest[@"build"], target[@"build"]) || ![[NSSet setWithArray:manifest[@"keychainGroups"]] isEqual:[NSSet setWithArray:target[@"keychainGroups"]]]) { Fail(error, @"The installed application is incompatible with this snapshot."); return nil; }
+            BOOL sameIdentity = Same(UUIDValue(currentIDFV), canonical);
+            BOOL finalizing = sameIdentity && pending.count && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]];
+            if (sameIdentity && !finalizing) { Fail(error, @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
             NSMutableDictionary *roots = [NSMutableDictionary new]; NSMutableSet *ids = [NSMutableSet new];
-            for (NSString *prefix in manifest[@"roots"]) { NSString *identifier = manifest[@"roots"][prefix][@"containerID"]; if ([ids containsObject:identifier] || !target[@"containers"][identifier]) { Fail(error, @"Snapshot containers differ from the installed application."); return nil; } [ids addObject:identifier]; char *physical = realpath([target[@"containers"][identifier] fileSystemRepresentation], NULL); if (!physical) { Fail(error, @"A restoration container is unavailable."); return nil; } roots[prefix] = @(physical); free(physical); }
-            if (![ids isEqual:[NSSet setWithArray:[target[@"containers"] allKeys]]]) { Fail(error, @"Snapshot containers differ from the installed application."); return nil; }
+            for (NSString *prefix in manifest[@"roots"]) {
+                NSString *identifier = manifest[@"roots"][prefix][@"containerID"];
+                if ([ids containsObject:identifier]) { Fail(error, @"Snapshot container identities are duplicated."); return nil; }
+                if (!target[@"containers"][identifier]) { Fail(error, [NSString stringWithFormat:@"The snapshot container %@ has no authorized destination in the installed application.", identifier]); return nil; }
+                [ids addObject:identifier]; char *physical = realpath([target[@"containers"][identifier] fileSystemRepresentation], NULL);
+                if (!physical) { Fail(error, @"A restoration container is unavailable."); return nil; } roots[prefix] = @(physical); free(physical);
+            }
             [self event:@"restore" stage:@"stop"];
             if (![self.backend stopTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error] || ![self.backend validateKeychain:payloads[@"keychain"] target:target error:error] || ![self.backend validateFingerprint:payloads[@"fingerprint"] target:target error:error] || ![self.backend validatePreferences:payloads[@"preferences"] target:target error:error]) return nil;
-            if (saveCurrent) {
-                NSDictionary *live = [self fingerprint:context error:error]; if (!live) return nil;
-                if (Same(live[@"data"][@"VendorIdentifier"], canonical)) { Fail(error, @"Saving the current state would overwrite the selected restoration source. Restore without saving it instead."); return nil; }
-                if (![self backup:bundleID metadata:nil directory:directory error:error]) return nil;
-            }
-            if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
-            NSMutableDictionary *source = [@{ @"format": manifest[@"format"], @"bundleID": bundleID, @"idfv": canonical, @"archiveSHA": manifest[@"archiveInfo"][@"sha256"], @"date": NSDate.date } mutableCopy];
-            if (manifest[@"stateArchiveInfo"]) source[@"stateArchiveSHA"] = manifest[@"stateArchiveInfo"][@"sha256"];
-            recovery = pending.count ? pending : source;
-            if (!pending.count && !WritePlistAt(directory.fd, @"pending.plist", recovery, error)) return nil;
-            SHDWStateProgress progress = [self archiveProgressForPhase:@"restore"];
-            [self event:@"restore" stage:@"keychain"];
-            if (![self guard:context directory:directory refresh:YES error:error]) return nil;
-            mutated = YES; if (![self.backend restoreKeychain:payloads[@"keychain"] target:target error:error]) return nil;
-            for (NSString *prefix in roots) {
-                [self event:@"restore" stage:@"clear"];
+            CollectAbandonedSnapshots(directory.fd);
+            if (finalizing) {
+                // This path never clears or restores application state. It only
+                // verifies the already committed state before releasing pending.
+                if (![self.backend flushPreferencesForTarget:target error:error] || ![self verifyRestoredPayloads:payloads manifest:manifest context:context directory:directory roots:roots identifiers:ids error:error] ||
+                    ![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:[self archiveProgressForPhase:@"restore"] error:error] ||
+                    ![self verifyRestoredFingerprint:payloads[@"fingerprint"] context:context error:error]) return nil;
+            } else {
+                if (saveCurrent) {
+                    NSDictionary *live = [self fingerprint:context error:error]; if (!live) return nil;
+                    if (Same(live[@"data"][@"VendorIdentifier"], canonical)) { Fail(error, @"Saving the current state would overwrite the selected restoration source. Restore without saving it instead."); return nil; }
+                    if (![self backup:bundleID metadata:nil directory:directory error:error]) return nil;
+                }
+                if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
+                NSMutableDictionary *source = [@{ @"format": manifest[@"format"], @"bundleID": bundleID, @"idfv": canonical, @"archiveSHA": manifest[@"archiveInfo"][@"sha256"], @"date": NSDate.date, @"phase":@"restoring" } mutableCopy];
+                source[@"stateArchiveSHA"] = manifest[@"stateArchiveInfo"][@"sha256"];
+                recovery = source;
+                if (!WritePlistAt(directory.fd, @"pending.plist", recovery, error)) return nil;
+                SHDWStateProgress progress = [self archiveProgressForPhase:@"restore"];
+                [self event:@"restore" stage:@"keychain"];
                 if (![self guard:context directory:directory refresh:YES error:error]) return nil;
-                int fd = open([roots[prefix] fileSystemRepresentation], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) { POSIXFail(error, @"Cannot open the restoration container."); return nil; }
-                BOOL cleared = NO; @try { cleared = ClearDirectory(fd, YES, progress, error); } @finally { close(fd); } if (!cleared) return nil;
+                mutated = YES; if (![self.backend restoreKeychain:payloads[@"keychain"] target:target error:error]) return nil;
+                for (NSString *identifier in target[@"containers"]) {
+                    [self event:@"restore" stage:@"clear"];
+                    if (![self guard:context directory:directory refresh:YES error:error]) return nil;
+                    int fd = open([target[@"containers"][identifier] fileSystemRepresentation], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) { POSIXFail(error, @"Cannot open the restoration container."); return nil; }
+                    BOOL cleared = NO; @try { cleared = ClearDirectory(fd, YES, progress, error); } @finally { close(fd); } if (!cleared) return nil;
+                }
+                NSString *archive = [[directory.path stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[canonical stringByAppendingPathComponent:@"data.tar.zst"]];
+                if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive restorePath:archive info:manifest[@"archiveInfo"] roots:roots progress:progress error:error]) return nil;
+                [self event:@"restore" stage:@"preferences"];
+                if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restorePreferences:payloads[@"preferences"] target:target error:error] || ![self.backend flushPreferencesForTarget:target error:error]) return nil;
+                if (![self verifyRestoredPayloads:payloads manifest:manifest context:context directory:directory roots:roots identifiers:ids error:error]) return nil;
+                // Preference replay can create files after extraction; use one barrier
+                // after all data writes, including directories created implicitly.
+                // Persist all current destinations before committing the identity.
+                if (![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:progress error:error] ||
+                    ![self guard:context directory:directory refresh:YES error:error]) return nil;
+                source[@"phase"] = @"identity-pending";
+                if (!WritePlistAt(directory.fd, @"pending.plist", source, error)) return nil;
+                [self event:@"restore" stage:@"fingerprint"];
+                if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restoreFingerprint:payloads[@"fingerprint"] target:target error:error]) return nil;
+                source[@"phase"] = @"identity-committed";
+                if (!WritePlistAt(directory.fd, @"pending.plist", source, error) || ![self guard:context directory:directory refresh:YES error:error] || ![self verifyRestoredFingerprint:payloads[@"fingerprint"] context:context error:error]) return nil;
             }
-            NSString *archive = [[directory.path stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[canonical stringByAppendingPathComponent:@"data.tar.zst"]];
-            if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive restorePath:archive info:manifest[@"archiveInfo"] roots:roots progress:progress error:error]) return nil;
-            [self event:@"restore" stage:@"preferences"];
-            if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restorePreferences:payloads[@"preferences"] target:target error:error]) return nil;
-            [self event:@"restore" stage:@"fingerprint"];
-            if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restoreFingerprint:payloads[@"fingerprint"] target:target error:error]) return nil;
-            if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:target error:error]) return nil;
-            [self event:@"restore" stage:@"recheck"];
-            NSArray *actualRecords = [self.backend captureKeychainForTarget:target error:error]; NSDictionary *actualFingerprint = [self fingerprint:context error:error];
-            if (!actualRecords || !actualFingerprint || !Same(payloads[@"preferences"], [self.backend capturePreferencesForTarget:target error:error]) || ![self records:actualRecords equal:payloads[@"keychain"]] || !Same(actualFingerprint[@"data"], payloads[@"fingerprint"][@"data"]) || !Same(actualFingerprint[@"configuration"], payloads[@"fingerprint"][@"configuration"]) || ![actualFingerprint[@"locked"] boolValue]) { if (error && !*error) Fail(error, @"Restored data, credentials, or fingerprint did not pass verification."); return nil; }
-            if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:progress error:error]) return nil;
             if (![self guard:context directory:directory refresh:YES error:error] || unlinkat(directory.fd, "pending.plist", 0) || fsync(directory.fd)) { if (error && !*error) POSIXFail(error, @"Cannot complete the verified restoration."); return nil; }
-            restored = YES; return @{ @"idfv": canonical, @"restored": @YES, @"locked": @YES };
+            restored = YES; return @{ @"idfv": canonical, @"restored": @YES, @"locked": @YES, @"finalized":@(finalizing) };
         } @catch (NSException *exception) { Fail(error, exception.reason ?: @"Restoration failed."); return nil; }
         @finally {
             if (mutated && !restored) {
@@ -589,4 +723,5 @@ static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress prog
         }
     } @finally { [operationDirectory releaseLock]; }
 }
+
 @end

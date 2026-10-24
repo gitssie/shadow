@@ -166,3 +166,15 @@
 "This backup belongs to the current IDFV and cannot be restored." = "This backup belongs to the current IDFV and cannot be restored.";
 "Back up before cleaning?" = "Back up before cleaning?";
 "Cleaning removes current app data. Back up first to keep it." = "Cleaning removes current app data. Back up first to keep it.";
+
+"Finish verification" = "Finish verification";
+"Verify the restored data and finish the interrupted operation." = "Verify the restored data and finish the interrupted operation.";
+"Backup unavailable" = "Backup unavailable";
+
+"Container data" = "Container data";
+
+"External preferences and caches" = "External preferences and caches";
+
+"External web data" = "External web data";
+
+"Application receipts" = "Application receipts";
