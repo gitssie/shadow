@@ -99,7 +99,8 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
 - (NSDictionary *)resolveBundle:(NSString *)bundleID error:(NSError **)error {
     @try {
         NSDictionary *scope = Resolve(bundleID), *authority = scope[@"target"];
-        Require([authority[@"ownershipComplete"] boolValue] && ![authority[@"preservedSharedGroups"] count] && ![authority[@"sharedKeychainGroups"] count], @"Shared or unverifiable application resources cannot be backed up safely"); ValidatedKeychainScope(authority);
+        RequireKeychainOwnership(authority);
+        Require(![authority[@"preservedSharedGroups"] count], @"Shared or unverifiable application resources cannot be backed up safely"); ValidatedKeychainScope(authority);
         NSDictionary *info = ReadPlist([authority[@"bundlePath"] stringByAppendingPathComponent:@"Info.plist"]); NSString *version = info[@"CFBundleShortVersionString"], *build = info[@"CFBundleVersion"];
         Require([version isKindOfClass:NSString.class] && version.length && [build isKindOfClass:NSString.class] && build.length, @"The installed application's version is unavailable");
         NSMutableDictionary *containers = [NSMutableDictionary new];
@@ -212,7 +213,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
         else if ([action isEqual:@"edit"]) { if ([store editBundle:identifier idfv:request[@"idfv"] metadata:request[@"metadata"] error:&error]) result = @{@"edited":@YES}; }
         else if ([action isEqual:@"delete"]) { if ([store deleteBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"deleted":@YES}; }
         else if ([store recheckBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"verified":@YES};
-        if (!result) return @{@"ok":@NO, @"error":error.localizedDescription ?: @"Application state operation failed", @"partial":@([error.userInfo[@"stateMayBePartial"] boolValue]), @"stateMayBePartial":@([error.userInfo[@"stateMayBePartial"] boolValue])};
+        if (!result) return @{@"ok":@NO, @"details":failureDetails ?: @{}, @"error":error.localizedDescription ?: @"Application state operation failed", @"partial":@([error.userInfo[@"stateMayBePartial"] boolValue]), @"stateMayBePartial":@([error.userInfo[@"stateMayBePartial"] boolValue])};
         return @{@"ok":@YES, @"result":[StateEncode(result) base64EncodedStringWithOptions:0]};
     } @finally { close(lock); }
 }

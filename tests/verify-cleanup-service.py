@@ -108,5 +108,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-cleanup-service-") as temp:
                     "-I" + str(root / "src/Shadow.app"),
                     str(path / "test.m"), str(root / "src/Shadow.app/Services/CleanupService.m"),
                     str(root / "src/Shadow.app/Services/OperationCoordinator.m"),
+                    str(root / "src/Shadow.app/Services/OwnershipDiagnostics.m"),
                     "-o", str(path / "test")], check=True)
     subprocess.run([str(path / "test")], check=True, timeout=40)

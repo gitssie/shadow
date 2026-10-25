@@ -261,3 +261,19 @@
 "Not confirmed yet." = "暂未确认";
 
 "Loading" = "加载中";
+
+"Keychain groups are shared with other apps." = "钥匙串分组与其他应用共用，已停止操作。";
+
+"Cannot check keychain permissions for some apps." = "部分应用的钥匙串权限无法检查，已停止操作。";
+
+"Shared keychain group" = "共用分组";
+
+"Cannot check app" = "无法检查的应用";
+
+"DER-only signed entitlements unavailable" = "暂不支持读取此应用的 DER 格式权限。";
+
+"Ambiguous signed access group" = "此应用声明了无法识别的权限分组。";
+
+"Unreadable target signature" = "无法读取此应用的签名。";
+
+"Unreadable ownership" = "无法读取此应用的权限。";

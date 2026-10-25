@@ -266,6 +266,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     }
     Require(containers.count > 0 && [containers[0][@"identifier"] isEqual:identifier], @"Application data container unavailable");
     NSMutableSet *sharedKeys = [NSMutableSet new], *sharedGroups = [NSMutableSet new];
+    NSMutableDictionary *sharedKeychainOwners = [NSMutableDictionary new];
     NSMutableArray *ownershipIssues = [NSMutableArray new];
     BOOL ownershipComplete = YES;
     for (NSString *other in apps) {
@@ -278,7 +279,13 @@ static NSDictionary *Resolve(NSString *identifier) {
         for (NSString *bundle in otherBundles) {
             @try {
                 NSDictionary *entitlements = Entitlements(bundle);
-                for (NSString *group in KeychainGroups(entitlements)) if ([keychain containsObject:group]) [sharedKeys addObject:group];
+                for (NSString *group in KeychainGroups(entitlements)) if ([keychain containsObject:group]) {
+                    [sharedKeys addObject:group];
+                    NSMutableArray *owners = sharedKeychainOwners[group];
+                    if (!owners) sharedKeychainOwners[group] = owners = [NSMutableArray new];
+                    NSString *bid = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"])[@"CFBundleIdentifier"];
+                    if (![owners containsObject:bid]) [owners addObject:bid];
+                }
                 for (NSString *group in StringList(entitlements[@"com.apple.security.application-groups"])) if ([groups containsObject:group]) [sharedGroups addObject:group];
             } @catch (NSException *exception) {
                 ownershipComplete = NO;
@@ -295,7 +302,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     NSDictionary *target = @{@"bundleID":identifier, @"bundlePath":app, @"identifiers":identifiers, @"team":team,
         @"containers":containers, @"executables":executables, @"keychainGroups":[[keychain allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"preservedSharedGroups":shared, @"sharedKeychainGroups":[[sharedKeys allObjects] sortedArrayUsingSelector:@selector(compare:)],
-        @"ownershipComplete":@(ownershipComplete), @"ownershipIssues":ownershipIssues, @"bundleInode":@(bundleStat.st_ino)};
+        @"sharedKeychainOwners":sharedKeychainOwners, @"ownershipComplete":@(ownershipComplete), @"ownershipIssues":ownershipIssues, @"bundleInode":@(bundleStat.st_ino)};
     return @{@"target":target, @"token":Hash(target)};
 }
 static BOOL RemoveAt(int parent, const char *name) {
@@ -708,8 +715,18 @@ static void PreserveWorkerLoaderAnchor(NSString *parent, NSString *directory) {
     NSString *relocated = [directory stringByAppendingPathComponent:@".jbroot"];
     Require(!symlink(destination.fileSystemRepresentation, relocated.fileSystemRepresentation) && [Canonical(relocated) isEqual:destination], @"Cannot preserve the private worker loader anchor");
 }
+// Preserve the reason and conflicting apps; never infer which app wrote an item.
+static void RequireKeychainOwnership(NSDictionary *target) {
+    if ([target[@"ownershipComplete"] boolValue] && ![target[@"sharedKeychainGroups"] count]) return;
+    failureDetails = @{@"kind":@"keychainOwnership", @"bundleID":target[@"bundleID"] ?: @"",
+        @"keychainGroups":target[@"keychainGroups"] ?: @[],
+        @"sharedKeychainGroups":target[@"sharedKeychainGroups"] ?: @[],
+        @"sharedKeychainOwners":target[@"sharedKeychainOwners"] ?: @{},
+        @"ownershipIssues":target[@"ownershipIssues"] ?: @[]};
+    Fail([target[@"sharedKeychainGroups"] count] ? @"Keychain groups are shared with other apps." : @"Cannot check keychain permissions for some apps.");
+}
 static NSDictionary *ScopedWorker(NSDictionary *target, NSString *mode, NSDictionary *request) {
-    Require([target[@"ownershipComplete"] boolValue] && ![target[@"sharedKeychainGroups"] count], @"Keychain access groups are shared or ownership cannot be verified");
+    RequireKeychainOwnership(target);
     NSArray *groups = ValidatedKeychainScope(target);
     if (!groups.count && ![mode hasPrefix:@"state-"]) return @{@"ok":@YES, @"classCounts":@{}, @"countsQueried":@NO};
     NSString *parent = OwnExecutable(), *identifier = target[@"bundleID"], *token = Hash(target);

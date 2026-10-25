@@ -261,3 +261,19 @@
 "Not confirmed yet." = "Not confirmed yet.";
 
 "Loading" = "Loading";
+
+"Keychain groups are shared with other apps." = "Keychain groups are shared with other apps.";
+
+"Cannot check keychain permissions for some apps." = "Cannot check keychain permissions for some apps.";
+
+"Shared keychain group" = "Shared keychain group";
+
+"Cannot check app" = "Cannot check app";
+
+"DER-only signed entitlements unavailable" = "DER-only signed entitlements unavailable";
+
+"Ambiguous signed access group" = "Ambiguous signed access group";
+
+"Unreadable target signature" = "Unreadable target signature";
+
+"Unreadable ownership" = "Unreadable ownership";

@@ -265,6 +265,19 @@ int main(int argc, const char *argv[]) {
         BOOL unsupportedDER = NO;
         @try { Entitlements(signatureBundle); } @catch (NSException *exception) { unsupportedDER = [exception.reason containsString:@"DER-only"]; }
         Require(unsupportedDER, @"DER-only ownership silently treated as empty");
+        NSDictionary *ownership = @{@"bundleID":@"example.app", @"keychainGroups":@[@"TEAM.example.app"],
+            @"ownershipComplete":@YES, @"sharedKeychainGroups":@[@"TEAM.example.app"],
+            @"sharedKeychainOwners":@{@"TEAM.example.app":@[@"other.app"]}, @"ownershipIssues":@[]};
+        BOOL rejectedShared = NO;
+        @try { RequireKeychainOwnership(ownership); } @catch (NSException *exception) { rejectedShared = [exception.reason isEqual:@"Keychain groups are shared with other apps."]; }
+        Require(rejectedShared && [failureDetails[@"sharedKeychainOwners"][@"TEAM.example.app"] containsObject:@"other.app"], @"shared group lost conflicting app diagnostics");
+        NSMutableDictionary *unreadable = [ownership mutableCopy]; unreadable[@"ownershipComplete"] = @NO; unreadable[@"sharedKeychainGroups"] = @[]; unreadable[@"sharedKeychainOwners"] = @{};
+        unreadable[@"ownershipIssues"] = @[@{@"bundleID":@"unreadable.app", @"reason":@"DER-only signed entitlements unavailable"}];
+        BOOL rejectedUnreadable = NO;
+        @try { RequireKeychainOwnership(unreadable); } @catch (NSException *exception) { rejectedUnreadable = [exception.reason isEqual:@"Cannot check keychain permissions for some apps."]; }
+        Require(rejectedUnreadable && [failureDetails[@"ownershipIssues"][0][@"bundleID"] isEqual:@"unreadable.app"] && !fakeDeletes && !fakeCopies, @"unreadable ownership lost app diagnostics or touched keychain");
+        NSMutableDictionary *exclusive = [ownership mutableCopy]; exclusive[@"sharedKeychainGroups"] = @[];
+        RequireKeychainOwnership(exclusive); failureDetails = nil;
         fakeItems = [@{@"TEAM.example.app":[@{(__bridge id)kSecClassCertificate:@YES, (__bridge id)kSecClassKey:@YES, (__bridge id)kSecClassGenericPassword:@YES, (__bridge id)kSecClassInternetPassword:@YES} mutableCopy], @"TEAM.control.app":[@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy]} mutableCopy];
         Require(KeychainWork(@[@"TEAM.example.app"], NO, NO) == 0 && fakeDeletes == 0, @"keychain preflight mutated items");
         Require([keychainClassCounts[(__bridge id)kSecClassIdentity] unsignedIntegerValue] == 1 && [keychainClassCounts[(__bridge id)kSecClassGenericPassword] unsignedIntegerValue] == 1, @"keychain preflight aggregate counts incorrect");

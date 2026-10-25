@@ -43,7 +43,7 @@ elif scenario == "truncated":
 elif scenario == "missing":
     emit({"event": "progress", "progress": {"phase": "backup", "bytes": 1}})
 elif scenario == "failure":
-    emit({"ok": False, "error": "fixture rejected operation", "partial": True})
+    emit({"ok": False, "error": "fixture rejected operation", "partial": True, "details": {"kind": "keychainOwnership", "sharedKeychainGroups": ["TEAM.shared"], "sharedKeychainOwners": {"TEAM.shared": ["other.app"]}, "ownershipIssues": []}})
 elif scenario == "invalid-base64":
     emit({"ok": True, "result": "!not-base64!"})
 elif scenario == "invalid-plist":
@@ -171,6 +171,7 @@ static void Transport(NSDictionary *item) {
         Check(![SHDWOperationCoordinator isRunning],@"transport did not release operation gate");
         if(expected){Check([result[@"request"] isEqual:request],@"base64 binary plist request/result roundtrip");if([item[@"fixture"] isEqual:@"split"])Check(progressCount>0&&lastBytes==17,@"split UTF-8 progress missing");if([item[@"fixture"] isEqual:@"stream"])Check(progressCount>0&&lastBytes==4096,@"stream final progress missing");}
         else Check([error.userInfo[@"stateMayBePartial"] boolValue]==[item[@"partial"] boolValue],[NSString stringWithFormat:@"%@ %@ incorrect partial-state flag %@",action,item[@"fixture"],error]);
+        if([item[@"fixture"] isEqual:@"failure"])Check([error.localizedDescription containsString:@"other.app"]&&[error.localizedDescription containsString:@"TEAM.shared"]&&[error.userInfo[@"helperDetails"][@"kind"] isEqual:@"keychainOwnership"],@"ownership details lost in backup transport");
         if([item[@"fixture"] isEqual:@"timeout"])Check(NSProcessInfo.processInfo.systemUptime-start<2,@"transport timeout was unbounded");
         Later(^{int status=0;Check(waitpid(-1,&status,WNOHANG)==-1&&errno==ECHILD,@"helper remained alive/unreaped after completion");Check(completions==1,@"delayed duplicate completion");Next();});
     }];
@@ -239,7 +240,7 @@ def main():
             fixture.chmod(0o700)
         harness = temp / "main.m"
         harness.write_text(HARNESS)
-        sources = [ROOT / "src/Shadow.app/Services" / (name + ".m") for name in ("BackupService", "OperationCoordinator", "CleanupService")]
+        sources = [ROOT / "src/Shadow.app/Services" / (name + ".m") for name in ("BackupService", "OperationCoordinator", "CleanupService", "OwnershipDiagnostics")]
         binary = temp / "check"
         command = ["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-incomplete-implementation", "-framework", "Foundation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1", "-I" + str(ROOT / "src/Shadow.framework/Headers"), "-I" + str(ROOT / "src/Shadow.app"), str(harness), *map(str, sources), "-o", str(binary)]
         subprocess.run(command, check=True)
