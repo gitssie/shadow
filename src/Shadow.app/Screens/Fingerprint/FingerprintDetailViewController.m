@@ -86,7 +86,7 @@
     } else {
         BOOL enabled = [[SHDWFingerprintStore sharedStore] shadowEnabledForApplication:self.bundleIdentifier];
         cell.textLabel.text = SHDWText(@"Shadow status");
-        UISwitch *status = [UISwitch new]; status.onTintColor = SHDWAccent(); status.on = enabled; [status addTarget:self action:@selector(shadowChanged:) forControlEvents:UIControlEventValueChanged]; status.accessibilityIdentifier = @"fingerprint.shadow-status"; cell.accessoryView = status;
+        UISwitch *status = [UISwitch new]; status.onTintColor = SHDWAccent(); status.on = enabled; status.enabled = ![[SHDWFingerprintStore sharedStore] lockedForApplication:self.bundleIdentifier]; [status addTarget:self action:@selector(shadowChanged:) forControlEvents:UIControlEventValueChanged]; status.accessibilityIdentifier = @"fingerprint.shadow-status"; cell.accessoryView = status;
     } return cell;
 }
 - (void)enabledChanged:(UISwitch *)toggle { NSError *error = nil; if (![[SHDWFingerprintStore sharedStore] setEnabled:toggle.on forApplication:self.bundleIdentifier error:&error]) { toggle.on = !toggle.on; SHDWShowError(self, error); } }
