@@ -115,6 +115,7 @@ static NSArray *Bundles(NSString *app) {
 }
 static uint32_t BE32(const uint8_t *bytes) { uint32_t value; memcpy(&value, bytes, 4); return OSSwapBigToHostInt32(value); }
 static uint64_t BE64(const uint8_t *bytes) { uint64_t value; memcpy(&value, bytes, 8); return OSSwapBigToHostInt64(value); }
+#include "EntitlementDER.inc"
 static NSDictionary *ReadExecutableEntitlements(NSString *path) {
     Require([Canonical(path) isEqual:path], @"Invalid executable alias");
     NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL];
@@ -152,21 +153,24 @@ static NSDictionary *ReadExecutableEntitlements(NSString *path) {
             Require(BE32(blob) == 0xfade0cc0 && BE32(blob + 4) <= link.datasize, @"Invalid signature blob");
             uint32_t blobLength = BE32(blob + 4), count = BE32(blob + 8);
             Require(count <= 4096 && 12 + (uint64_t)count * 8 <= blobLength, @"Invalid signature slots");
-            BOOL hasDER = NO;
+            NSDictionary *xmlValue = nil; const uint8_t *derBytes = NULL; NSUInteger derLength = 0;
             for (uint32_t j = 0; j < count; j++) {
-                if (BE32(blob + 12 + j * 8) == 7) hasDER = YES;
-                if (BE32(blob + 12 + j * 8) != 5) continue;
+                uint32_t slot = BE32(blob + 12 + j * 8);
+                if (slot != 5 && slot != 7) continue;
                 uint32_t offset = BE32(blob + 16 + j * 8);
                 Require(offset <= blobLength && blobLength - offset >= 8, @"Invalid entitlement bounds");
                 uint32_t extent = BE32(blob + offset + 4);
-                Require(BE32(blob + offset) == 0xfade7171 && extent >= 8 && extent <= blobLength - offset, @"Invalid entitlement blob");
+                Require(BE32(blob + offset) == (slot == 5 ? 0xfade7171 : 0xfade7172) && extent >= 8 && extent <= blobLength - offset, @"Invalid entitlement blob");
+                if (slot == 7) { Require(!derBytes, @"Duplicate signed entitlements"); derBytes = blob + offset + 8; derLength = extent - 8; continue; }
+                Require(!xmlValue, @"Duplicate signed entitlements");
                 NSData *xml = [NSData dataWithBytes:blob + offset + 8 length:extent - 8];
                 id value = [NSPropertyListSerialization propertyListWithData:xml options:0 format:NULL error:NULL];
                 Require([value isKindOfClass:NSDictionary.class], @"Unreadable signed entitlements");
-                return value;
+                xmlValue = value;
             }
-            Require(!hasDER, @"DER-only signed entitlements unavailable");
-            return @{};
+            // Preserve the existing XML path; DER fills the previously unsupported DER-only case.
+            if (xmlValue) return xmlValue;
+            return derBytes ? DEREntitlements(derBytes, derLength) : @{};
         }
         cursor += command.cmdsize;
     }
@@ -193,6 +197,27 @@ static NSArray *KeychainGroups(NSDictionary *entitlements) {
     if (groups) return StringList(groups);
     NSString *applicationID = entitlements[@"application-identifier"];
     return Identifier(applicationID) ? @[applicationID] : @[];
+}
+// A wildcard grants access; it is not the name of a jointly owned group.
+// Exact target scopes remain validated by StringList and ValidatedKeychainScope.
+static NSDictionary *ObservedAccess(NSDictionary *entitlements) {
+    NSMutableDictionary *result = [NSMutableDictionary new];
+    @try {
+        id declared = entitlements[@"keychain-access-groups"];
+        NSArray *values = declared ?: KeychainGroups(entitlements);
+        Require([values isKindOfClass:NSArray.class], @"Invalid signed access groups");
+        NSMutableArray *exact = [NSMutableArray new], *broad = [NSMutableArray new];
+        for (id value in values) {
+            Require([value isKindOfClass:NSString.class], @"Invalid signed access groups");
+            BOOL wildcard = [value isEqual:@"*"] || ([value hasSuffix:@".*"] && Identifier([value substringToIndex:[value length] - 2]));
+            Require(wildcard || Identifier(value), @"Ambiguous signed access group");
+            [(wildcard ? broad : exact) addObject:value];
+        }
+        result[@"keychain"] = exact; result[@"broad"] = broad;
+    } @catch (NSException *exception) { result[@"keychainIssue"] = exception.reason ?: @"Unreadable ownership"; }
+    @try { result[@"groups"] = StringList(entitlements[@"com.apple.security.application-groups"]); }
+    @catch (NSException *exception) { result[@"groupIssue"] = exception.reason ?: @"Unreadable ownership"; }
+    return result;
 }
 static NSString *ValidateBundleIdentity(NSDictionary *info, NSDictionary *entitlements, NSString *mainID, NSString *team) {
     NSString *identifier = info[@"CFBundleIdentifier"], *applicationID = entitlements[@"application-identifier"];
@@ -267,8 +292,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     Require(containers.count > 0 && [containers[0][@"identifier"] isEqual:identifier], @"Application data container unavailable");
     NSMutableSet *sharedKeys = [NSMutableSet new], *sharedGroups = [NSMutableSet new];
     NSMutableDictionary *sharedKeychainOwners = [NSMutableDictionary new];
-    NSMutableArray *ownershipIssues = [NSMutableArray new];
-    BOOL ownershipComplete = YES;
+    NSMutableArray *ownershipIssues = [NSMutableArray new], *groupOwnershipIssues = [NSMutableArray new], *broadAccess = [NSMutableArray new];
     for (NSString *other in apps) {
         if ([other isEqual:app]) continue;
         NSArray *otherBundles = Bundles(other);
@@ -277,32 +301,42 @@ static NSDictionary *Resolve(NSString *identifier) {
             Require(BundleIdentifier(claimedID) && ![identifiers containsObject:claimedID], @"Application identity is claimed by another installed bundle");
         }
         for (NSString *bundle in otherBundles) {
-            @try {
-                NSDictionary *entitlements = Entitlements(bundle);
-                for (NSString *group in KeychainGroups(entitlements)) if ([keychain containsObject:group]) {
-                    [sharedKeys addObject:group];
-                    NSMutableArray *owners = sharedKeychainOwners[group];
-                    if (!owners) sharedKeychainOwners[group] = owners = [NSMutableArray new];
-                    NSString *bid = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"])[@"CFBundleIdentifier"];
-                    if (![owners containsObject:bid]) [owners addObject:bid];
-                }
-                for (NSString *group in StringList(entitlements[@"com.apple.security.application-groups"])) if ([groups containsObject:group]) [sharedGroups addObject:group];
-            } @catch (NSException *exception) {
-                ownershipComplete = NO;
-                NSString *bid = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"])[@"CFBundleIdentifier"];
-                [ownershipIssues addObject:@{@"bundleID":bid, @"reason":exception.reason ?: @"Unreadable ownership"}];
+            NSString *bid = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"])[@"CFBundleIdentifier"];
+            NSDictionary *access;
+            @try { access = ObservedAccess(Entitlements(bundle)); }
+            @catch (NSException *exception) {
+                NSDictionary *issue = @{@"bundleID":bid, @"reason":exception.reason ?: @"Unreadable ownership"};
+                [ownershipIssues addObject:issue]; [groupOwnershipIssues addObject:issue]; continue;
+            }
+            if (access[@"keychainIssue"]) [ownershipIssues addObject:@{@"bundleID":bid, @"reason":access[@"keychainIssue"]}];
+            if (access[@"groupIssue"]) [groupOwnershipIssues addObject:@{@"bundleID":bid, @"reason":access[@"groupIssue"]}];
+            for (NSString *group in access[@"keychain"]) if ([keychain containsObject:group]) {
+                [sharedKeys addObject:group];
+                NSMutableArray *owners = sharedKeychainOwners[group];
+                if (!owners) sharedKeychainOwners[group] = owners = [NSMutableArray new];
+                if (![owners containsObject:bid]) [owners addObject:bid];
+            }
+            for (NSString *group in access[@"groups"]) if ([groups containsObject:group]) [sharedGroups addObject:group];
+            for (NSString *pattern in access[@"broad"]) {
+                BOOL relevant = [pattern isEqual:@"*"];
+                NSString *prefix = [pattern substringToIndex:pattern.length - 1];
+                for (NSString *group in keychain) if ([group hasPrefix:prefix]) relevant = YES;
+                if (relevant) [broadAccess addObject:@{@"bundleID":bid, @"pattern":pattern}];
             }
         }
     }
+    BOOL keychainComplete = !ownershipIssues.count, groupComplete = !groupOwnershipIssues.count;
     for (NSString *group in [[groups allObjects] sortedArrayUsingSelector:@selector(compare:)]) {
-        if (!ownershipComplete || [sharedGroups containsObject:group]) { [shared addObject:group]; continue; }
+        if (!groupComplete || [sharedGroups containsObject:group]) { [shared addObject:group]; continue; }
         if (groupURLs[group]) [containers addObject:RegisteredContainer(groupURLs[group], GroupRoot, group)];
     }
     struct stat bundleStat; Require(!stat(app.fileSystemRepresentation, &bundleStat), @"Unreadable installed application");
     NSDictionary *target = @{@"bundleID":identifier, @"bundlePath":app, @"identifiers":identifiers, @"team":team,
         @"containers":containers, @"executables":executables, @"keychainGroups":[[keychain allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"preservedSharedGroups":shared, @"sharedKeychainGroups":[[sharedKeys allObjects] sortedArrayUsingSelector:@selector(compare:)],
-        @"sharedKeychainOwners":sharedKeychainOwners, @"ownershipComplete":@(ownershipComplete), @"ownershipIssues":ownershipIssues, @"bundleInode":@(bundleStat.st_ino)};
+        @"sharedKeychainOwners":sharedKeychainOwners, @"ownershipComplete":@(keychainComplete && groupComplete),
+        @"keychainOwnershipComplete":@(keychainComplete), @"groupOwnershipComplete":@(groupComplete),
+        @"ownershipIssues":ownershipIssues, @"groupOwnershipIssues":groupOwnershipIssues, @"broadKeychainAccess":broadAccess, @"bundleInode":@(bundleStat.st_ino)};
     return @{@"target":target, @"token":Hash(target)};
 }
 static BOOL RemoveAt(int parent, const char *name) {
@@ -716,8 +750,12 @@ static void PreserveWorkerLoaderAnchor(NSString *parent, NSString *directory) {
     Require(!symlink(destination.fileSystemRepresentation, relocated.fileSystemRepresentation) && [Canonical(relocated) isEqual:destination], @"Cannot preserve the private worker loader anchor");
 }
 // Preserve the reason and conflicting apps; never infer which app wrote an item.
+static BOOL KeychainOwnershipComplete(NSDictionary *target) {
+    if ([target[@"keychainGroups"] isKindOfClass:NSArray.class] && ![target[@"keychainGroups"] count]) return YES;
+    return [(target[@"keychainOwnershipComplete"] ?: target[@"ownershipComplete"]) boolValue];
+}
 static void RequireKeychainOwnership(NSDictionary *target) {
-    if ([target[@"ownershipComplete"] boolValue] && ![target[@"sharedKeychainGroups"] count]) return;
+    if (KeychainOwnershipComplete(target) && ![target[@"sharedKeychainGroups"] count]) return;
     failureDetails = @{@"kind":@"keychainOwnership", @"bundleID":target[@"bundleID"] ?: @"",
         @"keychainGroups":target[@"keychainGroups"] ?: @[],
         @"sharedKeychainGroups":target[@"sharedKeychainGroups"] ?: @[],
@@ -802,7 +840,7 @@ static NSDictionary *Execute(int argc, const char *argv[]) {
         struct stat parentStat; Require(!stat([manifest[@"parent"] fileSystemRepresentation], &parentStat) && S_ISREG(parentStat.st_mode) && parentStat.st_uid == 0 && !(parentStat.st_mode & 022), @"Untrusted cleanup helper parent");
         keychainParent = getppid();
         NSDictionary *scope = Resolve(identifier), *target = scope[@"target"];
-        Require([scope[@"token"] isEqual:[NSString stringWithUTF8String:argv[3]]] && [target[@"ownershipComplete"] boolValue] && ![target[@"sharedKeychainGroups"] count], @"Keychain worker ownership changed");
+        Require([scope[@"token"] isEqual:[NSString stringWithUTF8String:argv[3]]] && KeychainOwnershipComplete(target) && ![target[@"sharedKeychainGroups"] count], @"Keychain worker ownership changed");
         ValidatedKeychainScope(target);
         Require([manifest[@"groups"] isEqual:target[@"keychainGroups"]] && [StringList(ExecutableEntitlements(own)[@"keychain-access-groups"]) isEqual:target[@"keychainGroups"]], @"Keychain worker signed scope changed");
         NSString *mode = [NSString stringWithUTF8String:argv[4]];
@@ -825,7 +863,7 @@ static NSDictionary *Execute(int argc, const char *argv[]) {
         Require(argc == 3, @"Unexpected inspection arguments");
         return @{@"ok":@YES, @"token":scope[@"token"], @"target":target,
             @"capabilities":@{@"files":@YES, @"preferences":@YES, @"web":@YES, @"receipts":@YES,
-                @"keychain":@([target[@"ownershipComplete"] boolValue] && ![target[@"sharedKeychainGroups"] count])}};
+                @"keychain":@(KeychainOwnershipComplete(target) && ![target[@"sharedKeychainGroups"] count])}};
     }
     Require(argc == 5 && [scope[@"token"] isEqual:[NSString stringWithUTF8String:argv[3]]], @"Application identity changed; inspect it again");
     int lock = SessionLock(identifier);

@@ -94,6 +94,7 @@ verify-cleanup:
 	python3 verify-process-stop.py
 	python3 verify-cleanup-engine.py
 	python3 verify-ownership-diagnostics.py
+	python3 verify-entitlement-der.py
 	python3 verify-cleanup-service.py
 
 .PHONY: verify-cleanup

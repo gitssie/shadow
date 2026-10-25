@@ -277,3 +277,9 @@
 "Unreadable target signature" = "无法读取此应用的签名。";
 
 "Unreadable ownership" = "无法读取此应用的权限。";
+
+"Invalid DER signed entitlements" = "无法读取此应用的签名权限数据。";
+
+"Unsupported DER signed entitlement type" = "暂不支持此应用的签名权限格式。";
+
+"Duplicate signed entitlements" = "此应用包含重复的签名权限数据。";

@@ -277,3 +277,9 @@
 "Unreadable target signature" = "Unreadable target signature";
 
 "Unreadable ownership" = "Unreadable ownership";
+
+"Invalid DER signed entitlements" = "Invalid DER signed entitlements";
+
+"Unsupported DER signed entitlement type" = "Unsupported DER signed entitlement type";
+
+"Duplicate signed entitlements" = "Duplicate signed entitlements";

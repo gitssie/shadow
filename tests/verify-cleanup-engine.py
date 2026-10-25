@@ -263,8 +263,28 @@ int main(int argc, const char *argv[]) {
         EntitlementReadLifetime(argc>2 ? Canonical([NSString stringWithUTF8String:argv[2]]) : [signatureBundle stringByAppendingPathComponent:@"Example App"], [Canonical(root) stringByAppendingPathComponent:@"large-signed-copy"]);
         SignatureFixture(signatureBundle, YES);
         BOOL unsupportedDER = NO;
-        @try { Entitlements(signatureBundle); } @catch (NSException *exception) { unsupportedDER = [exception.reason containsString:@"DER-only"]; }
-        Require(unsupportedDER, @"DER-only ownership silently treated as empty");
+        @try { Entitlements(signatureBundle); } @catch (NSException *exception) { unsupportedDER = exception.reason.length > 0; }
+        Require(unsupportedDER, @"malformed DER ownership silently treated as empty");
+        NSData *derFixture = [[NSData alloc] initWithBase64EncodedString:@"MVIwLAwWa2V5Y2hhaW4tYWNjZXNzLWdyb3VwczASDBBURUFNLmV4YW1wbGUuYXBwMAkMBGZsYWcBAQEwFwwGbmVzdGVkMQ0wCwwFdmFsdWUMAm9r" options:0];
+        NSDictionary *der = DEREntitlements(derFixture.bytes, derFixture.length);
+        Require([der[@"keychain-access-groups"] isEqual:@[@"TEAM.example.app"]] && [der[@"flag"] boolValue] && [der[@"nested"][@"value"] isEqual:@"ok"], @"DER entitlement dictionary/array decoding failed");
+        // Exercise the same DER payload through a DER-only Mach-O signature slot.
+        struct mach_header_64 derHeader = {0}; derHeader.magic = MH_MAGIC_64; derHeader.ncmds = 1; derHeader.sizeofcmds = sizeof(struct linkedit_data_command);
+        struct linkedit_data_command derLink = {0}; derLink.cmd = LC_CODE_SIGNATURE; derLink.cmdsize = sizeof(derLink); derLink.dataoff = sizeof(derHeader) + sizeof(derLink); derLink.datasize = (uint32_t)(28 + derFixture.length);
+        uint32_t derSlots[] = {OSSwapHostToBigInt32(0xfade0cc0), OSSwapHostToBigInt32(derLink.datasize), OSSwapHostToBigInt32(1), OSSwapHostToBigInt32(7), OSSwapHostToBigInt32(20), OSSwapHostToBigInt32(0xfade7172), OSSwapHostToBigInt32((uint32_t)(8 + derFixture.length))};
+        NSMutableData *derExecutable = [NSMutableData dataWithBytes:&derHeader length:sizeof(derHeader)];
+        [derExecutable appendBytes:&derLink length:sizeof(derLink)]; [derExecutable appendBytes:derSlots length:sizeof(derSlots)]; [derExecutable appendData:derFixture];
+        Require([derExecutable writeToFile:[signatureBundle stringByAppendingPathComponent:@"Example App"] atomically:YES] && [Entitlements(signatureBundle) isEqual:der], @"DER-only Mach-O signature was not decoded");
+        for (NSData *bad in @[[derFixture subdataWithRange:NSMakeRange(0, derFixture.length - 1)], [derFixture subdataWithRange:NSMakeRange(0, 1)], [NSData dataWithBytes:"\x31\x80" length:2]]) {
+            BOOL rejected = NO; @try { DEREntitlements(bad.bytes, bad.length); } @catch (NSException *exception) { (void)exception; rejected = YES; }
+            Require(rejected, @"malformed DER accepted as ownership evidence");
+        }
+        NSDictionary *mixedAccess = ObservedAccess(@{@"keychain-access-groups":@[@"*", @"TEAM.*", @"TEAM.example.app"], @"com.apple.security.application-groups":@[@"invalid*group"]});
+        Require(!mixedAccess[@"keychainIssue"] && [mixedAccess[@"keychain"] isEqual:@[@"TEAM.example.app"]] && [mixedAccess[@"broad"] count] == 2 && mixedAccess[@"groupIssue"], @"wildcard capability or container error contaminated keychain ownership");
+        NSDictionary *invalidKeychain = ObservedAccess(@{@"keychain-access-groups":@[@1], @"com.apple.security.application-groups":@[@"group.good"]});
+        Require(invalidKeychain[@"keychainIssue"] && !invalidKeychain[@"groupIssue"] && [invalidKeychain[@"groups"] isEqual:@[@"group.good"]], @"keychain parse failure contaminated container ownership");
+        BOOL wildcardTargetRejected = NO; @try { StringList(@[@"*"]); } @catch (NSException *exception) { (void)exception; wildcardTargetRejected = YES; }
+        Require(wildcardTargetRejected, @"target deletion scope accepted wildcard capability");
         NSDictionary *ownership = @{@"bundleID":@"example.app", @"keychainGroups":@[@"TEAM.example.app"],
             @"ownershipComplete":@YES, @"sharedKeychainGroups":@[@"TEAM.example.app"],
             @"sharedKeychainOwners":@{@"TEAM.example.app":@[@"other.app"]}, @"ownershipIssues":@[]};
@@ -277,6 +297,9 @@ int main(int argc, const char *argv[]) {
         @try { RequireKeychainOwnership(unreadable); } @catch (NSException *exception) { rejectedUnreadable = [exception.reason isEqual:@"Cannot check keychain permissions for some apps."]; }
         Require(rejectedUnreadable && [failureDetails[@"ownershipIssues"][0][@"bundleID"] isEqual:@"unreadable.app"] && !fakeDeletes && !fakeCopies, @"unreadable ownership lost app diagnostics or touched keychain");
         NSMutableDictionary *exclusive = [ownership mutableCopy]; exclusive[@"sharedKeychainGroups"] = @[];
+        exclusive[@"ownershipComplete"] = @NO; exclusive[@"keychainOwnershipComplete"] = @YES;
+        RequireKeychainOwnership(exclusive);
+        exclusive[@"keychainGroups"] = @[]; exclusive[@"keychainOwnershipComplete"] = @NO;
         RequireKeychainOwnership(exclusive); failureDetails = nil;
         fakeItems = [@{@"TEAM.example.app":[@{(__bridge id)kSecClassCertificate:@YES, (__bridge id)kSecClassKey:@YES, (__bridge id)kSecClassGenericPassword:@YES, (__bridge id)kSecClassInternetPassword:@YES} mutableCopy], @"TEAM.control.app":[@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy]} mutableCopy];
         Require(KeychainWork(@[@"TEAM.example.app"], NO, NO) == 0 && fakeDeletes == 0, @"keychain preflight mutated items");
