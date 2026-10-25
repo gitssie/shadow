@@ -1,0 +1,25 @@
+{
+  "class": "DepictionTabView",
+  "tintColor": "#287f78",
+  "tabs": [
+    {
+      "tabname": "Shadow",
+      "class": "DepictionStackView",
+      "views": [
+        {
+          "class": "DepictionHeaderView",
+          "title": "Shadow"
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "**4.0.1** · rootless\n\nA modern jailbreak detection bypass."
+        },
+        {
+          "class": "DepictionButtonView",
+          "text": "GitHub",
+          "action": "https://github.com/gitssie/shadow"
+        }
+      ]
+    }
+  ]
+}
