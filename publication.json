@@ -1,9 +1,9 @@
 {
-  "version": "4.0.1",
+  "version": "4.0.2",
   "lane": "rootless",
-  "tag": "dbe03ecf6dca7fb5e070155cb2438c6e18f7fb60",
-  "sha256": "fd83096c94970148707cb6ffbf61cf123f55b3cb38a59cefa9eefa0adebcfd0f",
-  "filename": "me.jjolano.shadow_4.0.1_iphoneos-arm64.deb",
-  "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.1_iphoneos-arm64.deb",
+  "tag": "fb0ec1e5ccc1006bbba2192d5a1e56c38609d7cf",
+  "sha256": "1ee6d6c7742e3eed9c6c6ca191457e48d7864a817d7babff8ca05aaf490111f2",
+  "filename": "me.jjolano.shadow_4.0.2_iphoneos-arm64.deb",
+  "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.2_iphoneos-arm64.deb",
   "source_url": "https://gitssie.github.io/shadow/"
 }

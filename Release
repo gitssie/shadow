@@ -5,17 +5,17 @@ Codename: shadow
 Architectures: iphoneos-arm64
 Components: main
 Description: Shadow Sileo repository
-Date: Sun, 25 Oct 2026 13:23:06 GMT
+Date: Sun, 25 Oct 2026 14:01:57 GMT
 Acquire-By-Hash: no
 MD5Sum:
- e196c718d0e41c435d1423e6c867e282              991 Packages
- 7e2cfe38266f345004e7e7aef6203073              537 Packages.gz
- 937273ab6a495b9a217f15b787385a78              608 Packages.xz
+ 2d8ab309bd8b231b18cf1f6653c09ecf              991 Packages
+ e472d282985f40fc395e6690d5411ea8              537 Packages.gz
+ eed95a91d251af1b42f7c711f2e853a8              608 Packages.xz
 SHA1:
- c816ec203892f141ac8748eeaca6f29c2407b4a4              991 Packages
- 8b395ea2aa816edada83a7aef452c3b5fdf9bf4f              537 Packages.gz
- ccde74ff182c5d3904f57ba9f6fdea4a98c8feb9              608 Packages.xz
+ 9b47d37d3da3853a0f39f4a826f6527c83e62f67              991 Packages
+ dcf1440a8c95db513adb0dc3054f28b3a14e5b46              537 Packages.gz
+ bfd98192ac63e03a031a561adfdf289589c2f6fa              608 Packages.xz
 SHA256:
- f6ddfc1f75705b20cb716343569aa48b813912255dd7fd4d0e3106f26898382d              991 Packages
- e834f06fb059a847717a55948c63dc3fae33ee4158bfd1eb8594a13cf5b69fa3              537 Packages.gz
- ae59aa9e1f0301a3a64d7a13dd759d97592c0c23dde7807fe3a07911f1fd69a2              608 Packages.xz
+ c487f03a9b933676e7eea32c059763f2ad8a607e6817ee8c54ce96fdd9b29803              991 Packages
+ d1532daca26075df727d777d94aa1471f71aec39b87392612ab600140e5b80d3              537 Packages.gz
+ 7ce2e1b097e464030392a447b7864cbf45fcc144153ad7d4096471f72ca18d38              608 Packages.xz
