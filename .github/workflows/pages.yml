@@ -1,0 +1,41 @@
+name: Sileo source
+on:
+  push:
+    branches: [gh-pages]
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+concurrency:
+  group: sileo-pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download and validate selected CI build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json, subprocess
+          from pathlib import Path
+          selected = json.loads(Path('pages/deployment.json').read_text())
+          revision = subprocess.check_output(['gh', 'api', 'repos/gitssie/shadow/actions/runs/' + str(selected['run_id']), '--jq', '.head_sha'], text=True).strip()
+          assert revision == selected['revision']
+          subprocess.check_call(['gh', 'run', 'download', str(selected['run_id']), '--repo', 'gitssie/shadow', '--name', selected['artifact'], '--dir', 'package'])
+          package = Path('package') / selected['filename']
+          assert hashlib.sha256(package.read_bytes()).hexdigest() == selected['sha256']
+          subprocess.check_call(['python3', 'scripts/render-github-pages.py', '--package', str(package), '--lane', selected['lane'], '--tag', selected['revision'], '--control', 'pages/control', '--output', '_site'])
+          PYCODE
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - uses: actions/deploy-pages@v4
+        id: deploy
