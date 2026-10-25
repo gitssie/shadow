@@ -12,14 +12,14 @@ Maintainer: jjolano
 Author: jjolano
 Section: System
 Architecture: iphoneos-arm64
-Version: 4.0.2
+Version: 4.0.3
 Installed-Size: 5680
 Homepage: https://gitssie.github.io/shadow/
 Depiction: https://gitssie.github.io/shadow/
 SileoDepiction: https://gitssie.github.io/shadow/depiction.json
-Filename: https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.2_iphoneos-arm64.deb
-Size: 1145576
-MD5sum: e8c8f63891d4e6eef014426c2f420d8a
-SHA1: 186908db999788c31105fa291fb44333d6001875
-SHA256: 1ee6d6c7742e3eed9c6c6ca191457e48d7864a817d7babff8ca05aaf490111f2
+Filename: https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.3_iphoneos-arm64.deb
+Size: 1146452
+MD5sum: 84f4d82f64ecc9df9c679f95b8777a07
+SHA1: 5477e90018dac48034416ad7c091c13a4eede0d0
+SHA256: dbc9da2a26a54e5e37a563b527f7551dbfa23b08673672d738a54c20374854ad
 
