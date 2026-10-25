@@ -457,7 +457,7 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
         fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600); Check(fd >= 0, @"Cannot create private archive file"); created = YES;
         writer = archive_write_new(); Check(writer != NULL, @"Cannot allocate archive writer");
         Check(archive_write_set_format_pax(writer) == ARCHIVE_OK && archive_write_add_filter_zstd(writer) == ARCHIVE_OK &&
-            archive_write_set_filter_option(writer, "zstd", "compression-level", "1") == ARCHIVE_OK && archive_write_open_fd(writer, fd) == ARCHIVE_OK, @"Cannot initialize PAX and Zstd archive");
+            archive_write_set_filter_option(writer, "zstd", "compression-level", "3") == ARCHIVE_OK && archive_write_open_fd(writer, fd) == ARCHIVE_OK, @"Cannot initialize PAX and Zstd archive");
         NSMutableArray *entries = [NSMutableArray new]; NSMutableDictionary *inodes = [NSMutableDictionary new]; unsigned long long bytes = 0;
         for (ArchiveRoot *root in opened) CaptureNode(writer, root, root.fd, @".", @"", entries, inodes, progress, &bytes);
         for (NSString *name in [[payloads allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
@@ -469,7 +469,7 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
         }
         Check(archive_write_close(writer) == ARCHIVE_OK && !fsync(fd), @"Cannot flush completed archive"); archive_write_free(writer); writer = NULL; close(fd); fd = -1;
         for (ArchiveRoot *root in opened) [root pin];
-        NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@1, @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
+        NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@3, @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
         NSError *verification = nil;
         Check([self verifyRoots:roots info:info progress:progress error:&verification], verification.localizedDescription ?: @"Capture sources changed before completion");
         ReadArchive(path, info, progress, nil); complete = YES; return info;

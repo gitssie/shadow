@@ -6,5 +6,6 @@ FOUNDATION_EXPORT UIColor *SHDWAccent(void);
 FOUNDATION_EXPORT UIColor *SHDWDestructiveColor(void);
 FOUNDATION_EXPORT NSString *SHDWText(NSString *key);
 FOUNDATION_EXPORT UIImage * _Nullable SHDWSymbol(NSString *name, CGFloat size);
+FOUNDATION_EXPORT UIImage *SHDWIPSwitchSymbol(CGFloat size);
 FOUNDATION_EXPORT void SHDWShowError(UIViewController *controller, NSError * _Nullable error);
 NS_ASSUME_NONNULL_END

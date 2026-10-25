@@ -178,3 +178,86 @@
 "External web data" = "External web data";
 
 "Application receipts" = "Application receipts";
+
+"IP switching" = "IP switching";
+
+"Switch IP" = "Switch IP";
+
+"Label" = "Label";
+
+"Add URL" = "Add URL";
+
+"Not configured" = "Not configured";
+
+"Choose a switch URL" = "Choose a switch URL";
+
+"Checking IP…" = "Checking IP…";
+
+"Switching IP…" = "Switching IP…";
+
+"Waiting for network…" = "Waiting for network…";
+
+"Waiting for IP change…" = "Waiting for IP change…";
+
+"IP switched" = "IP switched";
+
+"Enter a label on the left and the full switch URL on the right. Swipe a row to delete it." = "Enter a label on the left and the full switch URL on the right. Swipe a row to delete it.";
+
+"Enter a name for this IP switch." = "Enter a name for this IP switch.";
+
+"Use a different name for each IP switch." = "Use a different name for each IP switch.";
+
+"Enter a valid HTTP or HTTPS URL without credentials or spaces." = "Enter a valid HTTP or HTTPS URL without credentials or spaces.";
+
+"Could not check the current public IP. No switch request was sent." = "Could not check the current public IP. No switch request was sent.";
+
+"IP lookup is rate limited. Try again later." = "IP lookup is rate limited. Try again later.";
+
+"The IP switch server rejected the request." = "The IP switch server rejected the request.";
+
+"An IP switch is already running." = "An IP switch is already running.";
+
+"Timed out waiting for a different public IP. Try again." = "Timed out waiting for a different public IP. Try again.";
+
+"The network request could not be completed. Check the URL and connection security." = "The network request could not be completed. Check the URL and connection security.";
+
+"Application data" = "Application data";
+
+
+"Verify cleanup" = "Verify cleanup";
+
+"Before switching" = "Before switching";
+
+"Latest query" = "Latest query";
+
+"Not obtained" = "Not obtained";
+
+"Last queried" = "Last queried";
+
+"Query again" = "Query again";
+
+"Querying IP and region…" = "Querying IP and region…";
+
+"Sending switch request…" = "Sending switch request…";
+
+"Result not yet confirmed" = "Result not yet confirmed";
+
+"IP change detected" = "IP change detected";
+
+"Query complete. IP unchanged." = "Query complete. IP unchanged.";
+
+"Query complete." = "Query complete.";
+
+"Query again only refreshes IP and region. It does not send another switch request." = "Query again only refreshes IP and region. It does not send another switch request.";
+
+"Could not query the current public IP." = "Could not query the current public IP.";
+
+"IP change has not been confirmed yet. Query again later." = "IP change has not been confirmed yet. Query again later.";
+
+"IP lookup is rate limited. IP change has not been confirmed yet. Query again later." = "IP lookup is rate limited. IP change has not been confirmed yet. Query again later.";
+
+"Waiting up to 120 seconds." = "Waiting up to 120 seconds.";
+
+"Not confirmed yet." = "Not confirmed yet.";
+
+"Loading" = "Loading";

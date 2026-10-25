@@ -98,10 +98,19 @@ static NSString *ProgressTitle(NSDictionary *event) {
 - (void)restore {
     if (!SHDWBackupCanRestore(self.snapshot, self.sameIDFV) || self.completed || self.service.running || [SHDWOperationCoordinator isRunning]) return;
     self.action.enabled = NO; self.saveCurrent.enabled = NO; self.closeButton.enabled = NO; self.modalInPresentation = YES;
-    [self.action setWorking:YES]; [self.action setTitle:SHDWText(SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV) ? @"Verifying backup" : @"Restoring data") forState:UIControlStateNormal]; self.status.textColor = UIColor.secondaryLabelColor;
+    BOOL finalizing = SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV);
+    BOOL backupCurrent = !self.sameIDFV && !self.requiresRecovery && self.saveCurrent.on;
+    [self.action setWorking:YES]; [self.action setTitle:SHDWText(finalizing ? @"Verifying backup" : (backupCurrent ? @"Backing up data" : @"Restoring data")) forState:UIControlStateNormal]; self.status.textColor = UIColor.secondaryLabelColor;
     __weak typeof(self) weakSelf = self;
-    [self.service performAction:@"restore" request:@{@"idfv": self.snapshot[@"idfv"], @"saveCurrent": @(!self.sameIDFV && !self.requiresRecovery && self.saveCurrent.on)} progress:^(NSDictionary *event) {
-        weakSelf.status.hidden = NO; weakSelf.status.text = ProgressTitle(event); [weakSelf requestSheetLayout];
+    [self.service performAction:@"restore" request:@{@"idfv": self.snapshot[@"idfv"], @"saveCurrent": @(backupCurrent)} progress:^(NSDictionary *event) {
+        typeof(self) self = weakSelf; if (!self) return;
+        // Keep the button on the enclosing operation even during its validation.
+        // Restore's initial stop event precedes the optional current-data backup.
+        if (!finalizing && [event[@"phase"] isEqual:@"backup"])
+            [self.action setTitle:SHDWText(@"Backing up data") forState:UIControlStateNormal];
+        else if (!finalizing && [event[@"phase"] isEqual:@"restore"] && ![event[@"stage"] isEqual:@"stop"])
+            [self.action setTitle:SHDWText(@"Restoring data") forState:UIControlStateNormal];
+        self.status.hidden = NO; self.status.text = ProgressTitle(event); [self requestSheetLayout];
     } completion:^(id result, NSError *error) {
         typeof(self) self = weakSelf; if (!self) return; (void)result;
         [self.action setWorking:NO]; self.closeButton.enabled = YES; self.modalInPresentation = NO; self.completed = error == nil;

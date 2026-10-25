@@ -5,6 +5,10 @@
 #import "Screens/Fingerprint/FingerprintDetailViewController.h"
 #import "Services/InstalledApplications.h"
 #import "Services/BackupService.h"
+#import "Services/IPSwitchService.h"
+#import "Services/IPSwitchConfiguration.h"
+#import "Screens/Settings/SettingsViewController.h"
+#import "IPSwitchDialogViewController.h"
 #import "Services/OperationCoordinator.h"
 #import "Views/AppSelectorView.h"
 #import "Views/FingerprintActionControl.h"
@@ -18,6 +22,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
 @property(nonatomic, strong) SHDWFingerprintActionControl *refreshControl;
 @property(nonatomic, strong) SHDWFingerprintSummaryView *summary;
 @property(nonatomic, strong) UIButton *addButton;
+@property(nonatomic, strong) UIButton *ipSwitchButton;
 @property(nonatomic, strong) UIButton *manageButton;
 @property(nonatomic, strong) UIButton *lockButton;
 @property(nonatomic, strong) NSLayoutConstraint *selectorHeight;
@@ -37,8 +42,11 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     self.selector.selectionChanged = ^(SHDWInstalledApplication *app) { typeof(self) self = weakSelf; if (!self || self.busy || [SHDWOperationCoordinator isRunning]) return; self.selected = app; [self.refreshControl setWorking:NO]; [self renderSelection]; };
     self.refreshControl = [SHDWFingerprintActionControl new]; [self.refreshControl addTarget:self action:@selector(refreshFingerprint) forControlEvents:UIControlEventTouchUpInside];
     self.summary = [SHDWFingerprintSummaryView new]; self.summary.cleanupTapped = ^{ [weakSelf showCleanup]; }; [self.summary addTarget:self action:@selector(showDetails) forControlEvents:UIControlEventTouchUpInside];
-    UIImageView *mark = [[UIImageView alloc] initWithImage:SHDWSymbol(@"touchid", 30)]; mark.tintColor = SHDWAccent(); mark.contentMode = UIViewContentModeScaleAspectFit;
-    UIStackView *brand = [[UIStackView alloc] initWithArrangedSubviews:@[mark]]; brand.alignment = UIStackViewAlignmentCenter;
+    UIImageView *mark = [[UIImageView alloc] initWithImage:SHDWSymbol(@"touchid", 30)]; mark.tintColor = SHDWAccent(); mark.contentMode = UIViewContentModeScaleAspectFit; mark.accessibilityIdentifier = @"home.fingerprint-logo";
+    self.ipSwitchButton = [UIButton buttonWithType:UIButtonTypeSystem]; self.ipSwitchButton.tintColor = SHDWAccent();
+    [self.ipSwitchButton setImage:SHDWIPSwitchSymbol(17) forState:UIControlStateNormal];
+    [self.ipSwitchButton addTarget:self action:@selector(chooseIPSwitch) forControlEvents:UIControlEventTouchUpInside]; self.ipSwitchButton.accessibilityIdentifier = @"home.switch-ip"; self.ipSwitchButton.accessibilityLabel = SHDWText(@"Switch IP");
+    UIStackView *brand = [[UIStackView alloc] initWithArrangedSubviews:@[mark, self.ipSwitchButton]]; brand.alignment = UIStackViewAlignmentCenter; brand.spacing = 8;
     self.manageButton = [UIButton buttonWithType:UIButtonTypeSystem]; self.manageButton.tintColor = SHDWAccent(); [self.manageButton setImage:SHDWSymbol(@"plus", 17) forState:UIControlStateNormal]; [self.manageButton addTarget:self action:@selector(manageApplications) forControlEvents:UIControlEventTouchUpInside]; self.manageButton.accessibilityLabel = SHDWText(@"Applications"); self.manageButton.accessibilityIdentifier = @"home.manage-applications";
     self.lockButton = [UIButton buttonWithType:UIButtonTypeCustom]; self.lockButton.tintColor = SHDWAccent(); [self.lockButton addTarget:self action:@selector(lockFingerprint) forControlEvents:UIControlEventTouchUpInside]; self.lockButton.accessibilityIdentifier = @"home.lock-fingerprint";
     self.addButton = [UIButton buttonWithType:UIButtonTypeSystem]; [self.addButton setTitle:SHDWText(@"Add application") forState:UIControlStateNormal]; [self.addButton setImage:SHDWSymbol(@"plus.circle.fill", 22) forState:UIControlStateNormal]; self.addButton.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline]; self.addButton.backgroundColor = UIColor.whiteColor; self.addButton.layer.cornerRadius = 16; [self.addButton addTarget:self action:@selector(manageApplications) forControlEvents:UIControlEventTouchUpInside]; self.addButton.accessibilityIdentifier = @"home.add-application";
@@ -48,7 +56,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     self.selectorHeight = [self.selector.heightAnchor constraintEqualToConstant:70]; self.selectorHeight.active = YES;
     [NSLayoutConstraint activateConstraints:@[
-        [brand.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:22], [brand.topAnchor constraintEqualToAnchor:safe.topAnchor constant:20], [brand.heightAnchor constraintEqualToConstant:44], [mark.widthAnchor constraintEqualToConstant:30],
+        [brand.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:22], [brand.topAnchor constraintEqualToAnchor:safe.topAnchor constant:20], [brand.heightAnchor constraintEqualToConstant:44], [mark.widthAnchor constraintEqualToConstant:30], [self.ipSwitchButton.widthAnchor constraintEqualToConstant:44], [self.ipSwitchButton.heightAnchor constraintEqualToConstant:44],
         [self.manageButton.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16], [self.manageButton.centerYAnchor constraintEqualToAnchor:brand.centerYAnchor], [self.manageButton.widthAnchor constraintEqualToConstant:44], [self.manageButton.heightAnchor constraintEqualToConstant:44], [brand.trailingAnchor constraintLessThanOrEqualToAnchor:self.lockButton.leadingAnchor constant:-8], [self.lockButton.trailingAnchor constraintEqualToAnchor:self.manageButton.leadingAnchor constant:-8], [self.lockButton.centerYAnchor constraintEqualToAnchor:brand.centerYAnchor], [self.lockButton.widthAnchor constraintEqualToConstant:44], [self.lockButton.heightAnchor constraintEqualToConstant:44],
         [self.selector.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:16], [self.selector.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16], [self.selector.topAnchor constraintEqualToAnchor:brand.bottomAnchor constant:20], [self.selector.heightAnchor constraintGreaterThanOrEqualToConstant:70],
         [self.summary.leadingAnchor constraintEqualToAnchor:self.selector.leadingAnchor], [self.summary.trailingAnchor constraintEqualToAnchor:self.selector.trailingAnchor], [self.summary.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-20], [self.summary.heightAnchor constraintGreaterThanOrEqualToConstant:76],
@@ -74,6 +82,8 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     [self renderSelection];
 }
 - (void)renderSelection {
+    BOOL switchingIP = SHDWIPSwitchService.sharedService.running;
+    self.ipSwitchButton.enabled = !switchingIP && !self.busy && ![SHDWOperationCoordinator isRunning];
     BOOL present = self.selected != nil; BOOL unavailable = self.busy || [SHDWOperationCoordinator isRunning]; self.selector.enabled = !unavailable; self.summary.enabled = !unavailable; self.manageButton.enabled = !unavailable; self.addButton.enabled = !unavailable; self.refreshControl.userInteractionEnabled = !unavailable; self.selector.hidden = !present && !self.registered.count; self.refreshControl.hidden = !present; self.summary.hidden = !present; self.addButton.hidden = present || self.registered.count > 0;
     if (present) { [NSUserDefaults.standardUserDefaults setObject:self.selected.bundleIdentifier forKey:SHDWSelectedApplicationKey]; [self.selector showApplication:self.selected fingerprint:[[SHDWFingerprintStore sharedStore] deviceFingerprintForApplication:self.selected.bundleIdentifier]]; }
     if (!present) [self.selector showApplication:nil fingerprint:nil];
@@ -89,6 +99,14 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     NSDictionary *systemProfile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
     [self.summary showSystemVersion:systemProfile[@"Version"] ?: UIDevice.currentDevice.systemVersion region:[NSLocale.currentLocale objectForKey:NSLocaleCountryCode] ?: @"—"];
     [self.summary showUpdatedAt:present ? [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"UpdatedAt"] : nil];
+}
+- (void)chooseIPSwitch {
+    if (self.busy || [SHDWOperationCoordinator isRunning] || SHDWIPSwitchService.sharedService.running) return;
+    [self.selector setExpanded:NO animated:NO];
+    NSArray *entries = SHDWIPSwitchConfiguration.configurations;
+    if (!entries.count) { [self.navigationController pushViewController:[SHDWIPSwitchSettingsViewController new] animated:YES]; return; }
+    SHDWIPSwitchDialogViewController *dialog = [[SHDWIPSwitchDialogViewController alloc] initWithEntries:entries];
+    [self presentViewController:dialog animated:YES completion:nil];
 }
 - (void)manageApplications {
     if (self.busy || [SHDWOperationCoordinator isRunning]) return;

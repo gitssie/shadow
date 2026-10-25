@@ -16,6 +16,12 @@
 	<string>13</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<!-- Switch endpoints are user-configured and may use plain HTTP. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIDeviceFamily</key>

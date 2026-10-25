@@ -52,7 +52,7 @@ source ownership/permissions fail backup rather than creating an unusable snapsh
 
 ## Archive and checks
 
-`Archive` writes PAX tar with Zstandard level 1. Regular file contents are read in
+`Archive` writes PAX tar with Zstandard level 3. Regular file contents are read in
 128 KiB chunks. Every regular file has SHA-256 verification, including binary
 files; each complete compressed archive also has SHA-256 and size verification.
 Recheck streams the archive without extracting a temporary copy. Metadata is

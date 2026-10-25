@@ -151,3 +151,8 @@ network-queries:
 	python3 verify-network-queries.py
 
 .PHONY: network-queries
+
+.PHONY: verify-ip-switch
+verify-ip-switch:
+	python3 verify-ip-switch-config.py
+	python3 verify-ip-switch.py
