@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -29,10 +28,11 @@ def publish(lane, dry_run):
         run("git", "archive", "--format=tar", "--output=" + str(archive), revision)
         run("tar", "-xf", str(archive), "-C", str(source))
         run("bash", "./build.sh", lane, cwd=source)
-        packages = list((source / "build").glob("*.deb"))
-        if len(packages) != 1:
-            raise ValueError("expected exactly one built package")
-        package = packages[0]
+        # build.sh also stages dependency packages; publish its selected Shadow package.
+        selected = (source / ".theos/last_package").read_text().strip()
+        package = source / "build" / Path(selected).name
+        if not package.is_file():
+            raise ValueError("the selected build package is missing")
         version = run("dpkg-deb", "--field", str(package), "Version", capture=True).strip()
         tag = "shadow-" + version + "-" + revision[:7]
         run("python3", str(source / "scripts/render-github-pages.py"), "--package", str(package),
