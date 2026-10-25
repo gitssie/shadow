@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render Shadow's flat Sileo source; packages are hosted on GitHub Releases."""
+"""Render Shadow's flat Sileo source; packages are included in the Pages deployment artifact."""
 import argparse
 import gzip
 import hashlib
@@ -33,12 +33,12 @@ def control(text):
     return result
 
 
-def render(package, lane, tag, output):
+def render(package, lane, tag, output, expected_control=None):
     if not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
         raise ValueError("invalid release tag")
     if package.is_symlink() or not package.is_file():
         raise ValueError("package must be a regular file")
-    expected = control(subprocess.check_output(
+    expected = control(expected_control.read_text() if expected_control else subprocess.check_output(
         ["bash", str(ROOT / "scripts/gen-control.sh"), lane], text=True))
     fields = control(subprocess.check_output(["dpkg-deb", "--field", str(package)], text=True))
     for key, value in expected.items():
@@ -52,12 +52,14 @@ def render(package, lane, tag, output):
     data = package.read_bytes()
     hashes = {name: hashlib.new(algorithm, data).hexdigest()
               for name, algorithm in (("MD5sum", "md5"), ("SHA1", "sha1"), ("SHA256", "sha256"))}
-    release_url = f"https://github.com/{REPOSITORY}/releases/tag/{tag}"
-    package_url = f"https://github.com/{REPOSITORY}/releases/download/{tag}/{filename}"
+    release_url = f"https://github.com/{REPOSITORY}"
+    package_url = f"{SOURCE}/pool/{filename}"
     fields.update(Homepage=SOURCE + "/", Depiction=SOURCE + "/", SileoDepiction=SOURCE + "/depiction.json",
                   Filename=package_url, Size=str(len(data)), **hashes)
     index = ("\n".join(f"{key}: {value}" for key, value in fields.items()) + "\n\n").encode()
     output.mkdir(parents=True, exist_ok=True)
+    (output / "pool").mkdir()
+    shutil.copyfile(package, output / "pool" / filename)
     indexes = {"Packages": index, "Packages.gz": gzip.compress(index, mtime=0),
                "Packages.xz": lzma.compress(index)}
     for name, content in indexes.items():
@@ -99,5 +101,6 @@ if __name__ == "__main__":
     parser.add_argument("--lane", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--control", type=Path)
     args = parser.parse_args()
-    print(json.dumps(render(args.package, args.lane, args.tag, args.output)))
+    print(json.dumps(render(args.package, args.lane, args.tag, args.output, args.control)))

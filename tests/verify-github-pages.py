@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-pages-test-") as temporary:
     assert "{{" not in page and "sileo://source/https://gitssie.github.io/shadow/" in page
     assert metadata["package_url"] in page
     assert json.loads((output / "depiction.json").read_text())["class"] == "DepictionTabView"
-    assert not list(output.rglob("*.deb"))
+    assert (output / "pool" / package.name).read_bytes() == package.read_bytes()
     assert (output / ".nojekyll").exists()
     for lane, tag, destination in (("roothide", "test", temporary / "wrong"),
                                    ("rootless", "../bad", temporary / "bad"),
