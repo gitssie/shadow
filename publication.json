@@ -1,0 +1,9 @@
+{
+  "version": "4.0.0",
+  "lane": "rootless",
+  "tag": "shadow-4.0.0-3fc74bb",
+  "sha256": "370887fdc18432831160338e9da25a68164e2df2caa3c86ced87ed56e22ee3ae",
+  "filename": "me.jjolano.shadow_4.0.0_iphoneos-arm64.deb",
+  "package_url": "https://github.com/gitssie/shadow/releases/download/shadow-4.0.0-3fc74bb/me.jjolano.shadow_4.0.0_iphoneos-arm64.deb",
+  "source_url": "https://gitssie.github.io/shadow/"
+}
