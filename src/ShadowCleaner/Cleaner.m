@@ -198,25 +198,29 @@ static NSArray *KeychainGroups(NSDictionary *entitlements) {
     NSString *applicationID = entitlements[@"application-identifier"];
     return Identifier(applicationID) ? @[applicationID] : @[];
 }
-// A wildcard grants access; it is not the name of a jointly owned group.
-// Exact target scopes remain validated by StringList and ValidatedKeychainScope.
+// Wildcards grant broad access; only exact identifiers claim a shared resource.
+// Target deletion scopes continue to use the strict StringList validation.
+static NSDictionary *ObservedGroups(id values) {
+    Require([values isKindOfClass:NSArray.class], @"Invalid signed access groups");
+    NSMutableArray *exact = [NSMutableArray new], *broad = [NSMutableArray new];
+    for (id value in values) {
+        Require([value isKindOfClass:NSString.class], @"Invalid signed access groups");
+        BOOL wildcard = [value isEqual:@"*"] || ([value hasSuffix:@".*"] && Identifier([value substringToIndex:[value length] - 2]));
+        Require(wildcard || Identifier(value), @"Ambiguous signed access group");
+        [(wildcard ? broad : exact) addObject:value];
+    }
+    return @{@"exact":exact, @"broad":broad};
+}
 static NSDictionary *ObservedAccess(NSDictionary *entitlements) {
     NSMutableDictionary *result = [NSMutableDictionary new];
     @try {
-        id declared = entitlements[@"keychain-access-groups"];
-        NSArray *values = declared ?: KeychainGroups(entitlements);
-        Require([values isKindOfClass:NSArray.class], @"Invalid signed access groups");
-        NSMutableArray *exact = [NSMutableArray new], *broad = [NSMutableArray new];
-        for (id value in values) {
-            Require([value isKindOfClass:NSString.class], @"Invalid signed access groups");
-            BOOL wildcard = [value isEqual:@"*"] || ([value hasSuffix:@".*"] && Identifier([value substringToIndex:[value length] - 2]));
-            Require(wildcard || Identifier(value), @"Ambiguous signed access group");
-            [(wildcard ? broad : exact) addObject:value];
-        }
-        result[@"keychain"] = exact; result[@"broad"] = broad;
+        NSDictionary *access = ObservedGroups(entitlements[@"keychain-access-groups"] ?: KeychainGroups(entitlements));
+        result[@"keychain"] = access[@"exact"]; result[@"broad"] = access[@"broad"];
     } @catch (NSException *exception) { result[@"keychainIssue"] = exception.reason ?: @"Unreadable ownership"; }
-    @try { result[@"groups"] = StringList(entitlements[@"com.apple.security.application-groups"]); }
-    @catch (NSException *exception) { result[@"groupIssue"] = exception.reason ?: @"Unreadable ownership"; }
+    @try {
+        NSDictionary *access = ObservedGroups(entitlements[@"com.apple.security.application-groups"] ?: @[]);
+        result[@"groups"] = access[@"exact"]; result[@"broadGroups"] = access[@"broad"];
+    } @catch (NSException *exception) { result[@"groupIssue"] = exception.reason ?: @"Unreadable ownership"; }
     return result;
 }
 static NSString *ValidateBundleIdentity(NSDictionary *info, NSDictionary *entitlements, NSString *mainID, NSString *team) {
@@ -291,8 +295,8 @@ static NSDictionary *Resolve(NSString *identifier) {
     }
     Require(containers.count > 0 && [containers[0][@"identifier"] isEqual:identifier], @"Application data container unavailable");
     NSMutableSet *sharedKeys = [NSMutableSet new], *sharedGroups = [NSMutableSet new];
-    NSMutableDictionary *sharedKeychainOwners = [NSMutableDictionary new];
-    NSMutableArray *ownershipIssues = [NSMutableArray new], *groupOwnershipIssues = [NSMutableArray new], *broadAccess = [NSMutableArray new];
+    NSMutableDictionary *sharedKeychainOwners = [NSMutableDictionary new], *sharedGroupOwners = [NSMutableDictionary new];
+    NSMutableArray *ownershipIssues = [NSMutableArray new], *groupOwnershipIssues = [NSMutableArray new], *broadAccess = [NSMutableArray new], *broadGroupAccess = [NSMutableArray new];
     for (NSString *other in apps) {
         if ([other isEqual:app]) continue;
         NSArray *otherBundles = Bundles(other);
@@ -316,7 +320,18 @@ static NSDictionary *Resolve(NSString *identifier) {
                 if (!owners) sharedKeychainOwners[group] = owners = [NSMutableArray new];
                 if (![owners containsObject:bid]) [owners addObject:bid];
             }
-            for (NSString *group in access[@"groups"]) if ([groups containsObject:group]) [sharedGroups addObject:group];
+            for (NSString *group in access[@"groups"]) if ([groups containsObject:group]) {
+                [sharedGroups addObject:group];
+                NSMutableArray *owners = sharedGroupOwners[group];
+                if (!owners) sharedGroupOwners[group] = owners = [NSMutableArray new];
+                if (![owners containsObject:bid]) [owners addObject:bid];
+            }
+            for (NSString *pattern in access[@"broadGroups"]) {
+                BOOL relevant = [pattern isEqual:@"*"];
+                NSString *prefix = [pattern substringToIndex:pattern.length - 1];
+                for (NSString *group in groups) if ([group hasPrefix:prefix]) relevant = YES;
+                if (relevant) [broadGroupAccess addObject:@{@"bundleID":bid, @"pattern":pattern}];
+            }
             for (NSString *pattern in access[@"broad"]) {
                 BOOL relevant = [pattern isEqual:@"*"];
                 NSString *prefix = [pattern substringToIndex:pattern.length - 1];
@@ -333,7 +348,8 @@ static NSDictionary *Resolve(NSString *identifier) {
     struct stat bundleStat; Require(!stat(app.fileSystemRepresentation, &bundleStat), @"Unreadable installed application");
     NSDictionary *target = @{@"bundleID":identifier, @"bundlePath":app, @"identifiers":identifiers, @"team":team,
         @"containers":containers, @"executables":executables, @"keychainGroups":[[keychain allObjects] sortedArrayUsingSelector:@selector(compare:)],
-        @"preservedSharedGroups":shared, @"sharedKeychainGroups":[[sharedKeys allObjects] sortedArrayUsingSelector:@selector(compare:)],
+        @"preservedSharedGroups":shared, @"sharedAppGroups":[[sharedGroups allObjects] sortedArrayUsingSelector:@selector(compare:)],
+        @"sharedGroupOwners":sharedGroupOwners, @"broadAppGroupAccess":broadGroupAccess, @"sharedKeychainGroups":[[sharedKeys allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"sharedKeychainOwners":sharedKeychainOwners, @"ownershipComplete":@(keychainComplete && groupComplete),
         @"keychainOwnershipComplete":@(keychainComplete), @"groupOwnershipComplete":@(groupComplete),
         @"ownershipIssues":ownershipIssues, @"groupOwnershipIssues":groupOwnershipIssues, @"broadKeychainAccess":broadAccess, @"bundleInode":@(bundleStat.st_ino)};
@@ -762,6 +778,15 @@ static void RequireKeychainOwnership(NSDictionary *target) {
         @"sharedKeychainOwners":target[@"sharedKeychainOwners"] ?: @{},
         @"ownershipIssues":target[@"ownershipIssues"] ?: @[]};
     Fail([target[@"sharedKeychainGroups"] count] ? @"Keychain groups are shared with other apps." : @"Cannot check keychain permissions for some apps.");
+}
+static void RequireContainerOwnership(NSDictionary *target) {
+    if (![target[@"preservedSharedGroups"] count]) return;
+    failureDetails = @{@"kind":@"containerOwnership", @"bundleID":target[@"bundleID"] ?: @"",
+        @"containerGroups":target[@"preservedSharedGroups"] ?: @[],
+        @"sharedAppGroups":target[@"sharedAppGroups"] ?: @[],
+        @"sharedGroupOwners":target[@"sharedGroupOwners"] ?: @{},
+        @"ownershipIssues":target[@"groupOwnershipIssues"] ?: @[]};
+    Fail([target[@"sharedAppGroups"] count] ? @"Application group containers are shared with other apps." : @"Cannot check app group permissions for some apps.");
 }
 static NSDictionary *ScopedWorker(NSDictionary *target, NSString *mode, NSDictionary *request) {
     RequireKeychainOwnership(target);

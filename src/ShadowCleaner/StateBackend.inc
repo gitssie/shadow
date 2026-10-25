@@ -100,7 +100,7 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
     @try {
         NSDictionary *scope = Resolve(bundleID), *authority = scope[@"target"];
         RequireKeychainOwnership(authority);
-        Require(![authority[@"preservedSharedGroups"] count], @"Shared or unverifiable application resources cannot be backed up safely"); ValidatedKeychainScope(authority);
+        RequireContainerOwnership(authority); ValidatedKeychainScope(authority);
         NSDictionary *info = ReadPlist([authority[@"bundlePath"] stringByAppendingPathComponent:@"Info.plist"]); NSString *version = info[@"CFBundleShortVersionString"], *build = info[@"CFBundleVersion"];
         Require([version isKindOfClass:NSString.class] && version.length && [build isKindOfClass:NSString.class] && build.length, @"The installed application's version is unavailable");
         NSMutableDictionary *containers = [NSMutableDictionary new];

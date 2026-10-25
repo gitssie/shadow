@@ -283,3 +283,13 @@
 "Unsupported DER signed entitlement type" = "暂不支持此应用的签名权限格式。";
 
 "Duplicate signed entitlements" = "此应用包含重复的签名权限数据。";
+
+"Application group containers are shared with other apps." = "应用共享容器被其他应用共用，已停止备份。";
+
+"Cannot check app group permissions for some apps." = "部分应用的共享容器权限无法检查，已停止备份。";
+
+"Shared app group" = "共用的应用分组";
+
+"App group being checked" = "待核实的应用分组";
+
+"Keychain group being checked" = "待核实的钥匙串分组";

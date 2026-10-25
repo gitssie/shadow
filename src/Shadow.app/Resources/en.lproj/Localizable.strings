@@ -283,3 +283,13 @@
 "Unsupported DER signed entitlement type" = "Unsupported DER signed entitlement type";
 
 "Duplicate signed entitlements" = "Duplicate signed entitlements";
+
+"Application group containers are shared with other apps." = "Application group containers are shared with other apps.";
+
+"Cannot check app group permissions for some apps." = "Cannot check app group permissions for some apps.";
+
+"Shared app group" = "Shared app group";
+
+"App group being checked" = "App group being checked";
+
+"Keychain group being checked" = "Keychain group being checked";

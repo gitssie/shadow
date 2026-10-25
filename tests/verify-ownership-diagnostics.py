@@ -16,6 +16,9 @@ int main(void) { @autoreleasepool {
     for (NSString *value in @[@"localized:blocked", @"TEAM.shared", @"other.app", @"unreadable.app", @"localized:DER-only signed entitlements unavailable"]) if (![message containsString:value]) return 1;
     if (![SHDWOwnershipErrorDescription(@"ordinary", @{}) isEqual:@"localized:ordinary"]) return 2;
     if (![SHDWOwnershipErrorDescription(@"ordinary", nil) isEqual:@"localized:ordinary"]) return 3;
+    NSDictionary *container = @{@"kind":@"containerOwnership", @"containerGroups":@[@"group.shared",@"group.unverified"], @"sharedAppGroups":@[@"group.shared"], @"sharedGroupOwners":@{@"group.shared":@[@"other.container.app"]}, @"ownershipIssues":@[@{@"bundleID":@"unreadable.container.app", @"reason":@"Unreadable target signature"}]};
+    NSString *containerMessage = SHDWOwnershipErrorDescription(@"blocked", container);
+    for (NSString *value in @[@"localized:Shared app group: group.shared", @"localized:App group being checked: group.unverified", @"other.container.app", @"unreadable.container.app", @"localized:Unreadable target signature"]) if (![containerMessage containsString:value]) return 4;
     puts("Ownership diagnostics: localized reasons, conflicting apps and ordinary errors passed");
 } return 0; }
 ''')

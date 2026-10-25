@@ -281,6 +281,15 @@ int main(int argc, const char *argv[]) {
         }
         NSDictionary *mixedAccess = ObservedAccess(@{@"keychain-access-groups":@[@"*", @"TEAM.*", @"TEAM.example.app"], @"com.apple.security.application-groups":@[@"invalid*group"]});
         Require(!mixedAccess[@"keychainIssue"] && [mixedAccess[@"keychain"] isEqual:@[@"TEAM.example.app"]] && [mixedAccess[@"broad"] count] == 2 && mixedAccess[@"groupIssue"], @"wildcard capability or container error contaminated keychain ownership");
+        NSDictionary *broadContainers = ObservedAccess(@{@"com.apple.security.application-groups":@[@"*", @"group.*", @"group.target"]});
+        Require(!broadContainers[@"groupIssue"] && [broadContainers[@"groups"] isEqual:@[@"group.target"]] && [broadContainers[@"broadGroups"] count] == 2, @"broad container access incorrectly blocked ownership inspection");
+        NSDictionary *sharedContainer = @{@"bundleID":@"example.app", @"preservedSharedGroups":@[@"group.target"], @"sharedAppGroups":@[@"group.target"], @"sharedGroupOwners":@{@"group.target":@[@"other.app"]}, @"groupOwnershipIssues":@[]};
+        BOOL containerBlocked = NO; @try { RequireContainerOwnership(sharedContainer); } @catch (NSException *exception) { containerBlocked = [exception.reason isEqual:@"Application group containers are shared with other apps."]; }
+        Require(containerBlocked && [failureDetails[@"kind"] isEqual:@"containerOwnership"] && [failureDetails[@"sharedGroupOwners"][@"group.target"] containsObject:@"other.app"], @"shared container lost group/app diagnostics");
+        NSMutableDictionary *unknownContainer = [sharedContainer mutableCopy]; unknownContainer[@"sharedAppGroups"] = @[]; unknownContainer[@"sharedGroupOwners"] = @{}; unknownContainer[@"groupOwnershipIssues"] = @[@{@"bundleID":@"unreadable.app", @"reason":@"Unreadable target signature"}];
+        containerBlocked = NO; @try { RequireContainerOwnership(unknownContainer); } @catch (NSException *exception) { containerBlocked = [exception.reason isEqual:@"Cannot check app group permissions for some apps."]; }
+        Require(containerBlocked && [failureDetails[@"containerGroups"] containsObject:@"group.target"] && [failureDetails[@"ownershipIssues"][0][@"bundleID"] isEqual:@"unreadable.app"], @"unknown container lost group/failure diagnostics");
+        RequireContainerOwnership(@{@"preservedSharedGroups":@[]}); failureDetails = nil;
         NSDictionary *invalidKeychain = ObservedAccess(@{@"keychain-access-groups":@[@1], @"com.apple.security.application-groups":@[@"group.good"]});
         Require(invalidKeychain[@"keychainIssue"] && !invalidKeychain[@"groupIssue"] && [invalidKeychain[@"groups"] isEqual:@[@"group.good"]], @"keychain parse failure contaminated container ownership");
         BOOL wildcardTargetRejected = NO; @try { StringList(@[@"*"]); } @catch (NSException *exception) { (void)exception; wildcardTargetRejected = YES; }
