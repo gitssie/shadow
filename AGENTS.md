@@ -32,7 +32,8 @@
 - Control files rendered by `scripts/gen-control.sh <lane>` from `packaging/controls/control.<lane>.in`; `build.sh` does this per lane.
 
 ## Boundaries (never do)
-- Never commit: `private/`, `vendor/HookKit.framework/`, `.theos/`, `packages/`, `build/`, `artifacts/`, `.detector-deps/`, `*.deb`.
+- Never commit to source branches: `private/`, `vendor/HookKit.framework/`, `.theos/`, `packages/`, `build/`, `artifacts/`, `.detector-deps/`, `*.deb`.
+- Publication exception: finished `.deb` files may be committed only to the dedicated `gh-pages` branch for the user-requested local-build Sileo source. Never create GitHub Releases or compile app packages on GitHub for this publication flow.
 - Never add to source comments/docs: detector-bypass how-to, jbroot probe orders, hook-lane rationale, installer tables, NSLog oracles.
 - Keep `-fvisibility=hidden` + `-Wl,-x` and `exported_symbols.txt` / `exported_symbols-roothide.txt` in sync.
 - Preserve roothide `@loader_path/.jbroot` install-name (no fixed `/var/jb` links) and legacy no-`os_unfair_lock` (both enforced by `check-binary-compat.sh`).
