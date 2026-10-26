@@ -4,6 +4,37 @@
 #import <Foundation/Foundation.h>
 #include <string.h>
 
+// Stock system mounts use exact namespace components, not all of Preboot.
+static inline BOOL shdw_is_stock_cryptex_path(const char *_Nullable path) {
+  if (!path)
+    return NO;
+  static const char *const prefixes[] = {
+      "/private/preboot/Cryptexes/", "/preboot/Cryptexes/"};
+  for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+    size_t length = strlen(prefixes[i]);
+    if (strncmp(path, prefixes[i], length) != 0)
+      continue;
+    const char *name = path + length;
+    size_t namespaceLength = strcspn(name, "/");
+    if (!((namespaceLength == 2 && strncmp(name, "OS", 2) == 0) ||
+          (namespaceLength == 3 && strncmp(name, "App", 3) == 0)))
+      return NO;
+    for (const char *component = name + namespaceLength; *component;) {
+      if (*component == '/') {
+        component++;
+        continue;
+      }
+      size_t count = strcspn(component, "/");
+      if ((count == 2 && strncmp(component, "..", 2) == 0) ||
+          memchr(component, '%', count))
+        return NO;
+      component += count;
+    }
+    return YES;
+  }
+  return NO;
+}
+
 // Pure matching against a root captured by the caller; never discovers a root.
 static inline BOOL
 shdw_is_restricted_root_with_prefix(const char *_Nullable path,
@@ -16,6 +47,17 @@ shdw_is_restricted_root_with_prefix(const char *_Nullable path,
   if (strcmp(path, "/preboot") == 0)
     return NO;
 #endif
+  size_t length = root ? strlen(root) : 0;
+  if (length && strncmp(path, root, length) == 0) {
+#if defined(SHADOW_ROOTHIDE) || defined(SHADOW_TEST_HARNESS)
+    return YES;
+#else
+    if (root[length - 1] == '/' || path[length] == '\0' || path[length] == '/')
+      return YES;
+#endif
+  }
+  if (shdw_is_stock_cryptex_path(path))
+    return NO;
   if (strncmp(path, "/var/jb", 7) == 0 && (path[7] == '\0' || path[7] == '/'))
     return YES;
   if (strncmp(path, "/private/var/jb", 15) == 0 &&
@@ -38,14 +80,7 @@ shdw_is_restricted_root_with_prefix(const char *_Nullable path,
   if (strncmp(path, "/preboot", 8) == 0 && (path[8] == '\0' || path[8] == '/'))
     return YES;
 #endif
-  size_t length = root ? strlen(root) : 0;
-  if (!length || strncmp(path, root, length) != 0)
-    return NO;
-#if defined(SHADOW_ROOTHIDE) || defined(SHADOW_TEST_HARNESS)
-  return YES;
-#else
-  return root[length - 1] == '/' || path[length] == '\0' || path[length] == '/';
-#endif
+  return NO;
 }
 
 // Jailbreak-root path seam. Three rootless conventions exist in the wild:

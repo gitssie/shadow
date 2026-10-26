@@ -33,33 +33,67 @@ def control(text):
     return result
 
 
-def render(package, lane, tag, output, expected_control=None):
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
-        raise ValueError("invalid release tag")
+def read_package(package):
     if package.is_symlink() or not package.is_file():
         raise ValueError("package must be a regular file")
-    expected = control(expected_control.read_text() if expected_control else subprocess.check_output(
-        ["bash", str(ROOT / "scripts/gen-control.sh"), lane], text=True))
     fields = control(subprocess.check_output(["dpkg-deb", "--field", str(package)], text=True))
-    for key, value in expected.items():
-        if fields.get(key) != value:
-            raise ValueError("package does not match lane control: " + key)
     filename = "{Package}_{Version}_{Architecture}.deb".format(**fields)
     if package.name != filename or not re.fullmatch(r"[A-Za-z0-9.+~_-]+", filename):
         raise ValueError("unexpected package filename")
-    if output.exists() and any(output.iterdir()):
-        raise ValueError("output directory must be empty")
     data = package.read_bytes()
     hashes = {name: hashlib.new(algorithm, data).hexdigest()
               for name, algorithm in (("MD5sum", "md5"), ("SHA1", "sha1"), ("SHA256", "sha256"))}
+    fields.update(Filename=f"{SOURCE}/pool/{filename}", Size=str(len(data)), **hashes)
+    metadata = dict(package=fields["Package"], version=fields["Version"], architecture=fields["Architecture"],
+                    filename=filename, package_url=fields["Filename"], size=len(data),
+                    md5=hashes["MD5sum"], sha1=hashes["SHA1"], sha256=hashes["SHA256"])
+    return fields, data, metadata
+
+
+def validate_hookkit(shadow, dependency):
+    package_id = "me.jjolano.fmwk.hookkit"
+    if dependency["Package"] != package_id:
+        raise ValueError("dependency package must be " + package_id)
+    if dependency["Architecture"] != shadow["Architecture"]:
+        raise ValueError("HookKit architecture must match the Shadow lane")
+    requirements = [item.strip() for item in shadow.get("Depends", "").split(",")
+                    if re.match(re.escape(package_id) + r"(?:\s|\(|$)", item.strip())]
+    if not requirements:
+        raise ValueError("Shadow must declare its HookKit dependency")
+    for requirement in requirements:
+        match = re.fullmatch(re.escape(package_id) + r"\s*\((>=|<=|>>|<<|=)\s*([^\s()]+)\)", requirement)
+        if not match or subprocess.run(["dpkg", "--compare-versions", dependency["Version"],
+                                        match[1], match[2]], check=False).returncode != 0:
+            raise ValueError("HookKit version does not satisfy Shadow Depends")
+
+
+def render(package, lane, tag, output, expected_control=None, hookkit_package=None):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
+        raise ValueError("invalid release tag")
+    expected = control(expected_control.read_text() if expected_control else subprocess.check_output(
+        ["bash", str(ROOT / "scripts/gen-control.sh"), lane], text=True))
+    fields, data, primary = read_package(package)
+    for key, value in expected.items():
+        if fields.get(key) != value:
+            raise ValueError("package does not match lane control: " + key)
+    filename = primary["filename"]
+    packages = [(package, fields, primary)]
+    if hookkit_package is not None:
+        dependency, _, dependency_metadata = read_package(hookkit_package)
+        validate_hookkit(fields, dependency)
+        packages.append((hookkit_package, dependency, dependency_metadata))
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("output directory must be empty")
     release_url = f"https://github.com/{REPOSITORY}"
     package_url = f"{SOURCE}/pool/{filename}"
     fields.update(Homepage=SOURCE + "/", Depiction=SOURCE + "/", SileoDepiction=SOURCE + "/depiction.json",
-                  Filename=package_url, Size=str(len(data)), **hashes)
-    index = ("\n".join(f"{key}: {value}" for key, value in fields.items()) + "\n\n").encode()
+                  Filename=package_url)
+    index = "".join("\n".join(f"{key}: {value}" for key, value in entry.items()) + "\n\n"
+                    for _, entry, _ in packages).encode()
     output.mkdir(parents=True, exist_ok=True)
     (output / "pool").mkdir()
-    shutil.copyfile(package, output / "pool" / filename)
+    for source_package, _, entry in packages:
+        shutil.copyfile(source_package, output / "pool" / entry["filename"])
     indexes = {"Packages": index, "Packages.gz": gzip.compress(index, mtime=0),
                "Packages.xz": lzma.compress(index)}
     for name, content in indexes.items():
@@ -89,8 +123,9 @@ def render(package, lane, tag, output, expected_control=None):
     for name in ("icon.png", "CydiaIcon.png"):
         shutil.copyfile(ROOT / "src/Shadow.app/Resources/Icon120.png", output / name)
     (output / ".nojekyll").touch()
-    metadata = dict(version=fields["Version"], lane=lane, tag=tag, sha256=hashes["SHA256"], filename=filename,
-                    package_url=package_url, source_url=SOURCE + "/")
+    metadata = dict(version=fields["Version"], lane=lane, tag=tag, sha256=primary["sha256"], filename=filename,
+                    package_url=package_url, source_url=SOURCE + "/",
+                    packages=[entry for _, _, entry in packages])
     (output / "publication.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return metadata
 
@@ -102,5 +137,6 @@ if __name__ == "__main__":
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--control", type=Path)
+    parser.add_argument("--hookkit-package", type=Path, help="locally built HookKit dependency .deb")
     args = parser.parse_args()
-    print(json.dumps(render(args.package, args.lane, args.tag, args.output, args.control)))
+    print(json.dumps(render(args.package, args.lane, args.tag, args.output, args.control, args.hookkit_package)))

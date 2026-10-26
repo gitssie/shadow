@@ -34,14 +34,20 @@ def function(source, signature):
 
 standardizer = function((framework / "Core+Utilities.m").read_text(),
                         "+ (NSString *)getStandardizedPath:")
+cryptex = function((framework / "Core+Utilities.m").read_text(),
+                  "static NSString *shdwCanonicalStockCryptexPath(")
 matcher = function((framework / "RestrictionEngine.m").read_text(),
                    "static BOOL shdwSnapshotDeniesPath(")
 prefix = r'''
 #import <Foundation/Foundation.h>
+#import <Shadow/JBPath.h>
 #import "Ruleset.h"
 #import "RulesetCompiler.h"
 #include <assert.h>
 #include <string.h>
+BOOL shdw_is_restricted_root(const char *path) {
+    return shdw_is_restricted_root_with_prefix(path, NULL);
+}
 @interface Shadow : NSObject
 + (NSString *)getStandardizedPath:(NSString *)path;
 @end
@@ -116,11 +122,13 @@ with tempfile.TemporaryDirectory(prefix="shadow-pasteboard-rules-") as tmp:
     old_path.write_bytes(plistlib.dumps(old_rules))
     new_path.write_bytes(plistlib.dumps(rules))
     src, binary = tmp / "test.m", tmp / "test"
-    src.write_text(prefix + standardizer + middle + matcher + suffix)
+    src.write_text(prefix.replace("@implementation Shadow", cryptex + "\n@implementation Shadow") +
+                   standardizer + middle + matcher + suffix)
     subprocess.run([
         "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-Wno-incompatible-pointer-types", "-fsanitize=address,undefined", "-framework", "Foundation",
         "-I", str(framework), str(src), str(framework / "Ruleset.m"),
+        "-I", str(framework / "Headers"),
         str(framework / "RulesetCompiler.m"), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary), str(old_path), str(new_path)], check=True)

@@ -17,6 +17,14 @@ verify-at-path-rewrite:
 verify-path-standardize:
 	python3 verify-path-standardize.py
 
+verify-stock-cryptex:
+	python3 verify-stock-cryptex.py
+
+verify-cryptex-standardize:
+	python3 verify-cryptex-standardize.py
+
+.PHONY: verify-stock-cryptex verify-cryptex-standardize
+
 # Host check of the actual fresh fd/DIR path-policy bodies with mutation doubles.
 verify-fd-path-freshness:
 	python3 verify-fd-path-freshness.py
@@ -137,7 +145,7 @@ verify-rules-generation:
 verify-binary-compat:
 	bash BinaryCompatTests.sh
 
-test: verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
+test: verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-stock-cryptex verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
 
 clean:
 	rm -f harness harness.d
