@@ -65,6 +65,27 @@ int shdw_path_munge_path(char *path) {
   return 1;
 }
 
+int shdw_realpath_buffer_commit(char *destination, const char *source,
+                                size_t capacity, int approved) {
+  if (!destination || capacity == 0)
+    return 0;
+  if (!approved || !source) {
+    destination[0] = '\0';
+    return 0;
+  }
+
+  size_t len = 0;
+  while (len < capacity && source[len] != '\0')
+    len++;
+  if (len == capacity) {
+    destination[0] = '\0';
+    return 0;
+  }
+
+  memmove(destination, source, len + 1);
+  return 1;
+}
+
 #if defined(__APPLE__)
 
 #include <mach/mach.h>

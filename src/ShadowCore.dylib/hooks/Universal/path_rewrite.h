@@ -26,6 +26,11 @@ int shdw_path_munge_path(char *path);
 // shdw_path_munge_path() would corrupt a const argument.
 const char *shdw_path_rewrite_copy(const char *path, char *scratch,
                                    size_t scratch_size);
+// Commits a privately staged realpath only after policy approval. The source
+// must contain a NUL within capacity; rejection or an invalid source clears
+// only destination[0], so callers must never resolve into destination first.
+int shdw_realpath_buffer_commit(char *destination, const char *source,
+                                size_t capacity, int approved);
 
 // True when the page containing `ptr` is writable (vm_region query). Used
 // before munging so a read-only buffer (e.g. a __TEXT string constant) falls

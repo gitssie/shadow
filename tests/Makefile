@@ -9,6 +9,13 @@ verify-path-rewrite:
 		verify-path-rewrite.c ../src/ShadowCore.dylib/hooks/Universal/path_rewrite.c
 	/tmp/shadow-rewrite-test
 
+# Host check for staged realpath output: denied resolutions never reach the
+# caller buffer, while approved strings are copied completely and bounded.
+verify-realpath-buffer:
+	$(CC) -std=c99 -Wall -Wextra -o /tmp/shadow-realpath-buffer-test \
+		verify-realpath-buffer.c ../src/ShadowCore.dylib/hooks/Universal/path_rewrite.c
+	/tmp/shadow-realpath-buffer-test
+
 # Host check of the actual fstatat/faccessat hook bodies with policy doubles.
 verify-at-path-rewrite:
 	python3 verify-at-path-rewrite.py
@@ -88,9 +95,9 @@ verify-rules-generation:
 verify-binary-compat:
 	bash BinaryCompatTests.sh
 
-test: verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
+test: verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
 
 clean:
 	rm -f harness harness.d
 
-.PHONY: test verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
+.PHONY: test verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
