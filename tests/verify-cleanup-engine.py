@@ -25,10 +25,13 @@ static OSStatus fakeCopyError;
 static BOOL fakeEmptyIdentityArray;
 static BOOL fakeInvalidResult;
 static BOOL fakeSuccessNull;
+static NSArray *fakeAllowedGroups;
+static NSMutableArray *fakeDeletedGroups, *fakeQueriedGroups;
 static OSStatus FakeDelete(CFDictionaryRef raw) {
     NSDictionary *query = (__bridge NSDictionary *)raw;
     NSString *group = query[(__bridge id)kSecAttrAccessGroup], *itemClass = query[(__bridge id)kSecClass];
-    Require([group isEqual:@"TEAM.example.app"], @"keychain operation escaped target group");
+    Require([(fakeAllowedGroups ?: @[@"TEAM.example.app"]) containsObject:group], @"keychain operation escaped target group");
+    [fakeDeletedGroups addObject:group];
     Require(query[(__bridge id)kSecAttrSynchronizable] == (__bridge id)kSecAttrSynchronizableAny, @"keychain sync coverage missing");
     fakeDeletes++;
     if (![itemClass isEqual:(__bridge id)kSecClassIdentity]) [fakeItems[group] removeObjectForKey:itemClass];
@@ -38,6 +41,7 @@ static OSStatus FakeCopy(CFDictionaryRef raw, CFTypeRef *result) {
     fakeCopies++;
     NSDictionary *query = (__bridge NSDictionary *)raw;
     NSString *group = query[(__bridge id)kSecAttrAccessGroup], *itemClass = query[(__bridge id)kSecClass];
+    [fakeQueriedGroups addObject:group];
     if (fakeDeletes && fakeDeletes < 5) fakeEarlyQuery = YES;
     if (fakeCopyError) return fakeCopyError;
     if (fakeSuccessNull) return errSecSuccess;
@@ -341,6 +345,31 @@ int main(int argc, const char *argv[]) {
             Require(scopeRejected, @"cross-team or system keychain group accepted before signing");
         }
         Require([KeychainGroups(@{@"application-identifier":@"TEAM.example.app"}) isEqual:@[@"TEAM.example.app"]] && KeychainGroups(@{@"keychain-access-groups":@[]}).count == 0, @"implicit default access group incorrect");
+        NSDictionary *fullEntitlements = @{@"keychain-access-groups":@[@"TEAM.shared", @"TEAM.example.app", @"TEAM.shared"], @"application-identifier":@"TEAM.example.app", @"com.apple.security.application-groups":@[@"group.target", @"group.target"]};
+        NSArray *fullGroups = KeychainGroups(fullEntitlements);
+        Require([fullGroups isEqual:@[@"TEAM.shared", @"TEAM.example.app", @"group.target"]], @"complete iOS keychain union or deduplication incorrect");
+        Require([KeychainGroups(@{@"keychain-access-groups":@[], @"application-identifier":@"TEAM.example.app"}) isEqual:@[@"TEAM.example.app"]], @"explicit empty list incorrectly removed app-ID access");
+        NSDictionary *observed = ObservedAccess(fullEntitlements);
+        Require([observed[@"keychain"] isEqual:fullGroups], @"sharing scan differs from target keychain scope");
+        NSDictionary *implicitOwner = ObservedAccess(@{@"application-identifier":@"TEAM.other", @"com.apple.security.application-groups":@[@"group.target"]});
+        Require([implicitOwner[@"keychain"] containsObject:@"group.target"] && [implicitOwner[@"keychain"] containsObject:@"TEAM.other"], @"implicit shared App Group or app-ID access was not detected");
+        Require([ValidatedKeychainScope(@{@"team":@"TEAM", @"appGroups":@[@"group.target"], @"keychainGroups":fullGroups}) isEqual:fullGroups], @"signed App Group scope was rejected");
+        for (NSString *untrusted in @[@"group.other", @"group.com.apple.private", @"systemgroup.private", @"*"]) {
+            BOOL rejected = NO; @try { ValidatedKeychainScope(@{@"team":@"TEAM", @"appGroups":@[@"group.target"], @"keychainGroups":@[untrusted]}); } @catch (NSException *e) { (void)e;rejected=YES; }
+            Require(rejected,@"unrelated/system/wildcard group was added to deletion scope");
+        }
+        fakeSuccessNull = NO; fakeEmptyIdentityArray = NO; fakeAllowedGroups = fullGroups;
+        fakeDeletedGroups = [NSMutableArray new]; fakeQueriedGroups = [NSMutableArray new];
+        fakeItems = [@{@"TEAM.control.app":[@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy]} mutableCopy];
+        for (NSString *group in fullGroups) fakeItems[group] = [@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy];
+        NSUInteger deletesBefore = fakeDeletes;
+        Require(KeychainWork(fullGroups, YES, NO) == 0 && fakeDeletes - deletesBefore == 15 && [[NSSet setWithArray:fakeDeletedGroups] isEqual:[NSSet setWithArray:fullGroups]], @"not every explicit/app-ID/App-Group class received SecItemDelete");
+        Require(KeychainWork(fullGroups, NO, YES) == 0 && fakeQueriedGroups.count == 15 && [[NSSet setWithArray:fakeQueriedGroups] isEqual:[NSSet setWithArray:fullGroups]], @"post-delete verification omitted app-ID or App Group");
+        Require([fakeItems[@"TEAM.control.app"] count] == 1, @"full keychain cleanup changed an unrelated group");
+        deletesBefore = fakeDeletes;
+        Require(KeychainWork(fullGroups, YES, NO) == 0 && fakeDeletes - deletesBefore == 15, @"empty groups skipped deletion instead of receiving an explicit delete");
+        fakeItems[@"group.target"] = [@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy];
+        Require(KeychainWork(fullGroups, NO, YES) == 4, @"App Group residual was incorrectly reported as empty");
         NSDictionary *process = RunBounded(@"/usr/bin/printf", @[@"{}"], 1.0);
         Require([process[@"status"] intValue] == 0 && [process[@"output"] length] == 2, @"bounded child response incorrect");
         double started = MonotonicSeconds(); BOOL timedOut = NO;

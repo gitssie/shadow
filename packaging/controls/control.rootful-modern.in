@@ -7,7 +7,7 @@ Recommends: mobilesubstrate, preferenceloader
 Provides: me.jjolano.shadow.beta
 Replaces: me.jjolano.shadow.beta, me.jjolano.shadow.legacy
 Conflicts: me.jjolano.shadow.beta, me.jjolano.shadow.legacy
-Version: 4.0.3
+Version: 4.0.4
 Architecture: @PACKAGE_ARCH@
 Description: A modern jailbreak detection bypass.
 Maintainer: jjolano

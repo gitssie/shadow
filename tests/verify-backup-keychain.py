@@ -21,6 +21,7 @@ static NSString *const Other = @"TEAM.control.app";
 static NSMutableArray<NSMutableDictionary *> *items;
 static NSMutableArray<NSDictionary *> *calls;
 static NSUInteger mutations;
+static NSArray *allowedGroups;
 static NSInteger mode;
 static id unsupportedResult;
 static pid_t parentPID = 1234, keychainParent = 1234;
@@ -57,7 +58,7 @@ static void *FakeDlsym(void *handle, const char *symbol) {
 #undef getppid
 
 static void RecordCall(NSString *kind, NSDictionary *query) {
-    Check([query[(__bridge id)kSecAttrAccessGroup] isEqual:Group], @"credential operation escaped exact target group");
+    Check([(allowedGroups ?: @[Group]) containsObject:query[(__bridge id)kSecAttrAccessGroup]], @"credential operation escaped exact target group");
     [calls addObject:@{@"kind":kind,@"query":query}];
 }
 static BOOL Matches(NSDictionary *item, NSDictionary *query) {
@@ -178,6 +179,17 @@ int main(void) { @autoreleasepool {
     NSMutableDictionary *acl=[generic mutableCopy];[acl removeObjectForKey:(__bridge id)kSecAttrAccessible];acl[@"ArchivedACL"]=Bytes();Reset(@[control]);StateRestoreRecords(@[acl],@[],groups);Check(SameRecords(StateExportRecords(groups),@[acl]),@"encoded ACL bridge roundtrip failed");
     Reset(@[generic,control]);parentPID++;RejectedWithoutMutation(^{StateRestoreRecords(@[generic],@[generic],groups);},@"orphan worker mutated credentials");
     Reset(@[generic,control]);loseParentAfterMutation=YES;Check(Reject(^{StateRestoreRecords(@[generic],@[generic],groups);}) && mutations==1,@"parent loss was not rechecked before next mutation");Check([items containsObject:control],@"parent loss changed other group");
+    NSArray *fullGroups = @[Group,@"TEAM.main.app",@"group.target"];
+    NSMutableDictionary *mainRecord = [generic mutableCopy], *groupRecord = [generic mutableCopy];
+    mainRecord[(__bridge id)kSecAttrAccessGroup] = @"TEAM.main.app"; groupRecord[(__bridge id)kSecAttrAccessGroup] = @"group.target";
+    allowedGroups = fullGroups;
+    Reset(@[generic,mainRecord,groupRecord,control]);NSArray *fullSaved = StateExportRecords(fullGroups);
+    Check(fullSaved.count == 3 && SameRecords(fullSaved,@[generic,mainRecord,groupRecord]),@"backup omitted app-ID or App Group records");
+    Reset(@[control]);StateRestoreRecords(fullSaved,@[],fullGroups);
+    Check(SameRecords(StateExportRecords(fullGroups),fullSaved) && [items containsObject:control],@"restore omitted app-ID/App-Group records or touched unrelated credentials");
+    NSMutableSet *deletedGroups=[NSMutableSet new];for(NSDictionary *call in calls)if([call[@"kind"] isEqual:@"delete"])[deletedGroups addObject:call[@"query"][(__bridge id)kSecAttrAccessGroup]];
+    Check([deletedGroups isEqual:[NSSet setWithArray:fullGroups]],@"restore replacement did not clear every authorized group");
+    allowedGroups = nil;
     PayloadBoundaryTests(groups);
     puts("backup keychain: passed (Security calls stubbed; no user Keychain access)");
 }return 0;}
