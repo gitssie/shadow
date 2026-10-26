@@ -78,10 +78,14 @@ typedef int BOOL;
 #define NO 0
 
 /* ---- doubles for the production helpers the extracted body calls ---- */
-static char *shdw_env_procargs_path = NULL;
-static size_t shdw_env_procargs_path_cap = 0;
-
-static BOOL shdw_env_tls_arm(void) { return YES; }
+typedef struct {
+    char *procargs_path;
+    size_t procargs_path_cap;
+} shdw_env_thread_state;
+static shdw_env_thread_state test_state;
+static shdw_env_thread_state *shdw_env_tls_get(BOOL create) {
+    (void)create; return &test_state;
+}
 
 BOOL shdw_env_entry_hidden(const char *var) {
     return strncmp(var, "DYLD_", 5) == 0 ||
@@ -325,7 +329,7 @@ int main(void) {
     CHECK(len == before && memcmp(snapshot, payload, len) == 0,
           "an argc the payload cannot hold must pass through untouched");
 
-    free(shdw_env_procargs_path);
+    free(test_state.procargs_path);
 
     if (failures) { printf("%d assertion(s) failed\n", failures); return 1; }
     printf("procargs filter: all assertions passed\n");

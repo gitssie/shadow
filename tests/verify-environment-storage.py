@@ -36,17 +36,25 @@ def body(first, last):
     return source[start:anchor(source, last, start)]
 
 
-storage = body("static _Thread_local char* shdw_env_path_storage", "// Shared PATH component filter")
+storage = body("typedef struct {", "// Shared PATH component filter")
 storage += body("static void shdw_env_path_cache_invalidate(void)", "static int (*original_setenv)")
 prefix = r'''
 #include <assert.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <stdio.h>
 typedef bool BOOL;
 #define NO false
-static int failure, freed, registrations;
-static void checked_free(void *p) { if(p) freed++; free(p); }
+#define YES true
+static int failure;
+static atomic_int freed, registrations;
+static void checked_free(void *p) { if(p) atomic_fetch_add(&freed, 1); free(p); }
+static void *checked_calloc(size_t n, size_t size) {
+    if(failure == 3) return NULL;
+    return calloc(n, size);
+}
 static int create_key(pthread_key_t *key, void (*destroy)(void *)) {
     if(failure == 1) return 11;
     return pthread_key_create(key, destroy);
@@ -61,6 +69,7 @@ static void *get_key(pthread_key_t key) {
     return pthread_getspecific(key);
 }
 #define free checked_free
+#define calloc checked_calloc
 #define pthread_key_create create_key
 #define pthread_setspecific set_key
 #define pthread_getspecific get_key
@@ -68,35 +77,48 @@ static void *get_key(pthread_key_t key) {
 suffix = r'''
 static void *worker(void *unused) {
     (void)unused;
+    assert(shdw_env_tls_get(NO) == NULL);
+    shdw_env_path_cache_invalidate();  // no state allocation just to invalidate
     if(failure) {
-        assert(!shdw_env_tls_arm());
+        assert(shdw_env_tls_get(YES) == NULL);
         if(failure == 1) return NULL;
-        failure = 0;  // setspecific failure is retryable on the next call
+        failure = 0;  // allocation/registration failure is retryable
     }
-    assert(shdw_env_tls_arm());
-    int before = registrations;
-    assert(shdw_env_tls_arm());
-    assert(registrations == before);
-    shdw_env_path_storage = malloc(8);
-    shdw_env_path_cache_input = malloc(8);
-    shdw_env_path_cache_capacity = 8;
+    shdw_env_thread_state *state = shdw_env_tls_get(YES);
+    assert(state);
+    assert(shdw_env_tls_get(YES) == state);
+    state->path_storage = malloc(8);
+    state->path_cache_input = malloc(8);
+    state->path_cache_capacity = 8;
     shdw_env_path_cache_invalidate();
-    assert(!shdw_env_path_cache_input && !shdw_env_path_cache_capacity);
-    shdw_env_path_cache_input = malloc(8);
-    shdw_env_snapshot_filtered = malloc(8);
-    shdw_env_snapshot_path = malloc(8);
-    shdw_env_procargs_path = malloc(8);
+    assert(!state->path_cache_input && !state->path_cache_capacity);
+    state->path_cache_input = malloc(8);
+    state->snapshot_filtered = malloc(8);
+    state->snapshot_path = malloc(8);
+    state->procargs_path = malloc(8);
     return NULL;
 }
 int main(int argc, char **argv) {
     assert(argc == 2);
     failure = atoi(argv[1]);
-    int expected = failure == 1 ? 0 : 6;
+    int expected = failure == 1 ? 0 : (failure == 2 ? 8 : 7);
     pthread_t thread;
     assert(pthread_create(&thread, NULL, worker, NULL) == 0);
     assert(pthread_join(thread, NULL) == 0);
-    assert(freed == expected);
-    assert(shdw_env_path_storage == NULL);  // worker storage is isolated
+    assert(atomic_load(&freed) == expected);
+    assert(shdw_env_tls_get(NO) == NULL);  // worker state is isolated
+    if(failure != 1) {
+        // Exercise simultaneous thread teardown and repeated allocation reuse.
+        for(int batch = 0; batch < 32; batch++) {
+            pthread_t threads[4];
+            for(int i = 0; i < 4; i++)
+                assert(pthread_create(&threads[i], NULL, worker, NULL) == 0);
+            for(int i = 0; i < 4; i++)
+                assert(pthread_join(threads[i], NULL) == 0);
+        }
+        assert(atomic_load(&freed) == expected + 128 * 7);
+    }
+    printf("environment lifecycle mode=%s: all allocations released\n", argv[1]);
     return 0;
 }
 '''
@@ -106,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-env-storage-") as tmp:
     test.write_text(prefix + storage + suffix)
     subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra",
                     "-Werror", "-pthread", str(test), "-o", str(binary)], check=True)
-    for failure in range(3):
+    for failure in range(4):
         subprocess.run([str(binary), str(failure)], check=True)
 
 # Static ownership contract: capacity must be saved even when realloc stays put.
@@ -120,7 +142,7 @@ assert 'hasPrefix:@"DYLD_"' not in dict_fn, (
     "the dictionary view must not keep a private env-key list")
 
 procargs = source[anchor(source, "void shdw_procargs2_filter("):]
-assert not re.search(anchor_pattern("if(path_entry_storage != shdw_env_procargs_path)"), procargs)
-assert re.search(anchor_pattern("shdw_env_procargs_path_cap = path_entry_capacity;"), procargs)
-assert re.search(anchor_pattern("e[5] && shdw_env_tls_arm()"), procargs)
+assert not re.search(anchor_pattern("if(path_entry_storage != state->procargs_path)"), procargs)
+assert re.search(anchor_pattern("state->procargs_path_cap = path_entry_capacity;"), procargs)
+assert re.search(anchor_pattern("e[5] && (state = shdw_env_tls_get(YES)) != NULL"), procargs)
 print("verify-environment-storage: thread cleanup, setup failures, and capacity contract passed")
