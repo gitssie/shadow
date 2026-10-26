@@ -1,9 +1,33 @@
 {
-  "version": "4.0.4",
+  "version": "4.0.5",
   "lane": "rootless",
-  "tag": "abb2b017364ffff04487b29c7d192723d5451db9",
-  "sha256": "1924e13aabff6739cb4ed8f180479afd24617f62ecedf80eda0ac2103b1dfcd1",
-  "filename": "me.jjolano.shadow_4.0.4_iphoneos-arm64.deb",
-  "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.4_iphoneos-arm64.deb",
-  "source_url": "https://gitssie.github.io/shadow/"
+  "tag": "451494843fd304f28241619eb919dc55f1a1758c",
+  "sha256": "5c702fb8ffd2f0edd5e46a5588d6beed69705bf5feb1adc9fb007b8f65cee99f",
+  "filename": "me.jjolano.shadow_4.0.5_iphoneos-arm64.deb",
+  "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.5_iphoneos-arm64.deb",
+  "source_url": "https://gitssie.github.io/shadow/",
+  "packages": [
+    {
+      "package": "me.jjolano.shadow",
+      "version": "4.0.5",
+      "architecture": "iphoneos-arm64",
+      "filename": "me.jjolano.shadow_4.0.5_iphoneos-arm64.deb",
+      "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.5_iphoneos-arm64.deb",
+      "size": 1152194,
+      "md5": "7b0cec0d3e35326ded37763299a469ad",
+      "sha1": "9773f53d7acfd8f02ccb4c1dfe44c2cefb6c523d",
+      "sha256": "5c702fb8ffd2f0edd5e46a5588d6beed69705bf5feb1adc9fb007b8f65cee99f"
+    },
+    {
+      "package": "me.jjolano.fmwk.hookkit",
+      "version": "3.0.5+shadow.1-1",
+      "architecture": "iphoneos-arm64",
+      "filename": "me.jjolano.fmwk.hookkit_3.0.5+shadow.1-1_iphoneos-arm64.deb",
+      "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.fmwk.hookkit_3.0.5+shadow.1-1_iphoneos-arm64.deb",
+      "size": 131596,
+      "md5": "fa2ed741c2764152961bb9b7e7e1e136",
+      "sha1": "f1de7ae96418981bb4a18257f56e194ac5d93fcf",
+      "sha256": "18da9285c3227bf4916814c112a7242d0efc9bb2cb5791b07a8822932a5a4b5a"
+    }
+  ]
 }

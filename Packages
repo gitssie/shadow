@@ -1,7 +1,7 @@
 Package: me.jjolano.shadow
 Name: Shadow
 Pre-Depends: dpkg
-Depends: firmware (>= 15.0), ldid, com.opa334.altlist, com.opa334.libsandy, me.jjolano.fmwk.hookkit (>= 3.0.4)
+Depends: firmware (>= 15.0), ldid, com.opa334.altlist, com.opa334.libsandy, me.jjolano.fmwk.hookkit (= 3.0.5+shadow.1-1)
 Suggests: com.ps.injectionfoundation
 Recommends: mobilesubstrate, preferenceloader
 Provides: me.jjolano.shadow.beta
@@ -12,14 +12,33 @@ Maintainer: jjolano
 Author: jjolano
 Section: System
 Architecture: iphoneos-arm64
-Version: 4.0.4
-Installed-Size: 5680
+Version: 4.0.5
+Installed-Size: 5728
+Filename: https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.5_iphoneos-arm64.deb
+Size: 1152194
+MD5sum: 7b0cec0d3e35326ded37763299a469ad
+SHA1: 9773f53d7acfd8f02ccb4c1dfe44c2cefb6c523d
+SHA256: 5c702fb8ffd2f0edd5e46a5588d6beed69705bf5feb1adc9fb007b8f65cee99f
 Homepage: https://gitssie.github.io/shadow/
 Depiction: https://gitssie.github.io/shadow/
 SileoDepiction: https://gitssie.github.io/shadow/depiction.json
-Filename: https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.4_iphoneos-arm64.deb
-Size: 1148062
-MD5sum: c3f7038c6f76693489085836a93b1ca6
-SHA1: 5770236ed9fac20ea89b7185bc62ab04a7fda804
-SHA256: 1924e13aabff6739cb4ed8f180479afd24617f62ecedf80eda0ac2103b1dfcd1
+
+Package: me.jjolano.fmwk.hookkit
+Name: HookKit Framework
+Depends: firmware (>= 15.0)
+Conflicts: me.jjolano.hkmodule.dobby, me.jjolano.hkmodule.ellekit, me.jjolano.hkmodule.fishhook, me.jjolano.hkmodule.libhooker, me.jjolano.hkmodule.substitute, me.jjolano.hkmodule.substrate, me.jjolano.fmwk.hookkit.legacy
+Replaces: me.jjolano.hkmodule.dobby, me.jjolano.hkmodule.ellekit, me.jjolano.hkmodule.fishhook, me.jjolano.hkmodule.libhooker, me.jjolano.hkmodule.substitute, me.jjolano.hkmodule.substrate, me.jjolano.fmwk.hookkit.legacy
+Description: An iOS developer framework for unified hooking methods.
+Maintainer: jjolano <jjolano@me.com>
+Author: jjolano <jjolano@me.com>
+Section: Development
+Tag: role::developer
+Architecture: iphoneos-arm64
+Version: 3.0.5+shadow.1-1
+Installed-Size: 964
+Filename: https://gitssie.github.io/shadow/pool/me.jjolano.fmwk.hookkit_3.0.5+shadow.1-1_iphoneos-arm64.deb
+Size: 131596
+MD5sum: fa2ed741c2764152961bb9b7e7e1e136
+SHA1: f1de7ae96418981bb4a18257f56e194ac5d93fcf
+SHA256: 18da9285c3227bf4916814c112a7242d0efc9bb2cb5791b07a8822932a5a4b5a
 
