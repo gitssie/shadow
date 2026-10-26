@@ -71,6 +71,9 @@ extern char*** _NSGetArgv();
     NSString* preferenceIdentifier = SHDWFingerprintOwnerForBundle(bundleIdentifier, [NSBundle mainBundle]);
     NSUserDefaults* defaults = [[NSUserDefaults alloc] initWithSuiteName:@SHADOW_PREFS_PLIST];
     NSDictionary* app_settings = preferenceIdentifier ? [defaults objectForKey:preferenceIdentifier] : nil;
+    if(![app_settings isKindOfClass:[NSDictionary class]]) {
+        app_settings = nil;
+    }
     // Sandboxed cfprefsd can omit another app's dictionary despite libSandy's file grant.
     if(!app_settings && preferenceIdentifier) {
         id fileSettings = [NSDictionary dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST][preferenceIdentifier];

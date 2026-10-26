@@ -25,6 +25,7 @@
 #import <sys/event.h>
 #import <sys/syscall.h>
 #import <fcntl.h>
+#import <string.h>
 #import <unistd.h>
 
 #if defined(__arm64__)
@@ -115,6 +116,7 @@ __attribute__((used, noinline)) int shdw_svc_should_deny(uint64_t sysno, uint64_
            && shdw_svc_rewriteable((int)sysno, a1)
            && moff != (size_t)-1
            && shdw_path_buf_writable(path + moff)
+           && (unsigned char)path[moff] != 0x01
            && shdw_path_munge_path((char*)path)) {
             return 0;
         }
@@ -149,6 +151,7 @@ __attribute__((used, noinline)) int shdw_svc_should_deny(uint64_t sysno, uint64_
            && shdw_svc_rewriteable((int)sysno, a2)
            && moff != (size_t)-1
            && shdw_path_buf_writable(path + moff)
+           && (unsigned char)path[moff] != 0x01
            && shdw_path_munge_path((char*)path)) {
             return 0;
         }
@@ -183,8 +186,9 @@ __attribute__((used, noinline)) int shdw_svc_should_deny(uint64_t sysno, uint64_
 
         if(changelist && nchanges > 0) {
             pid_t self = getpid();
+            long limit = nchanges > SHDW_KEVENT_SCAN_MAX ? SHDW_KEVENT_SCAN_MAX : nchanges;
 
-            for(long i = 0; i < nchanges; i++) {
+            for(long i = 0; i < limit; i++) {
                 int16_t filter;
                 uint64_t ident;
 
