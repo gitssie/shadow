@@ -116,4 +116,18 @@ if env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW
     fail 'app registration failure was hidden'
 fi
 
+# Installing the package must not create or chmod either preference store.
+assert test ! -e "$tmp/rootfs-clean/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+mkdir -p "$tmp/rootfs-clean/var/mobile/Library/Preferences"
+prefs="$tmp/rootfs-clean/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+printf '%s\n' 'existing-preference-sentinel' > "$prefs"
+chmod 0600 "$prefs"
+before=$(ls -ln "$prefs")
+: >"$tmp/log"; printf '%s\n' absent >"$tmp/state"
+env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_ROOTFS_ROOT="$tmp/rootfs-clean" \
+    FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/state" FAKE_PROGRAM=/var/jb/usr/libexec/shadowd \
+    SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \
+    SHADOW_UICACHE_BIN="$tmp/bin/uicache" sh "$root/packaging/layout/DEBIAN/postinst" configure
+assert grep -F -q 'existing-preference-sentinel' "$prefs"
+assert test "$before" = "$(ls -ln "$prefs")"
 printf 'PASS maintainer scripts\n'

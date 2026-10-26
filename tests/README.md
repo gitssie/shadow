@@ -45,6 +45,9 @@ The optional `make -C tests verify-cleanup` requires macOS Foundation and Xcode
 command-line tools. It exercises cleanup traversal against temporary fixtures,
 including category boundaries, receipt preservation, container metadata,
 symlink and identity rejection, and detection of data left after cleanup.
+Late application UI snapshots are removed in a scoped finalization stage before
+the independent read-only recheck. Fixtures cover grouped snapshot directories,
+unselected preservation, changed sessions and unsafe ancestor/leaf rejection.
 Keychain doubles cover exact group scope, empty results, deletion without
 intermediate readback, and final residual detection. When `ldid` is available,
 it also checks signing and reading back an executable with exact access groups.
@@ -103,3 +106,13 @@ The full engine/detector/adversary/fuzz/device harness is private and
 not part of this repo (no URL). The engine-linked batteries were removed
 from `tests/Makefile`. For local harness discovery, follow `AGENTS.md`; neither
 host checks nor an old harness executable verify the installed iOS harness UI.
+
+`verify-process-stop.py` exercises the production termination barrier with deterministic process fixtures: delayed service flushes, natural exit, scoped SIGTERM, timeout before deletion, PID reuse, and unrelated/shared-container WebKit services. Device validation is still required for Darwin process inspection.
+The cleanup engine fixture also covers notification extension containers and receipt removal without touching another extension.
+
+Backup recovery regressions cover atomic tombstone deletion, per-snapshot corruption isolation, committed-IDFV verification-only finalization, added extension preference scopes, and scoped absolute symlink relocation. Installer tests ensure install does not create or change either preference store.
+
+`make verify-fingerprint` also checks persisted IDFV reads, immutable process
+snapshots, containing-app configuration for extensions, and scoped native
+accessor consistency. These host checks use Foundation and runtime doubles;
+private selector availability and actual hook installation require device checks.

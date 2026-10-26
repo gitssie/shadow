@@ -15,6 +15,11 @@ __attribute__((visibility("default")))
 - (NSDictionary<NSString *, id> *)getPreferencesForIdentifier:
     (NSString *)bundleIdentifier;
 - (NSDictionary *)fingerprintDataForIdentifier:(NSString *)bundleIdentifier;
+- (NSString *)fingerprintOwnerIdentifierForIdentifier:(NSString *)bundleIdentifier;
+- (NSUUID *)storedFingerprintVendorIdentifierForIdentifier:(NSString *)bundleIdentifier;
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier;
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier
+                                   vendorIdentifier:(NSUUID *__autoreleasing *)vendorIdentifier;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier
                             lockOnSuccess:(BOOL)lockOnSuccess;

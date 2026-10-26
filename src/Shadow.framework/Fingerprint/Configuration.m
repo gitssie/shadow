@@ -55,6 +55,10 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
     profiles = @[@{@"ID":@"iphone14-5_ios18.7.1_22H31", @"Name":@"iOS 18.7.1", @"Version":@"18.7.1",
     @"Build":@"22H31", @"Darwin":@"24.6.0",
     @"Kernel":@"Darwin Kernel Version 24.6.0: Tue Aug 12 00:02:59 PDT 2025; root:xnu-11417.140.69.700.6~5/RELEASE_ARM64_T8110",
+    @"ProductTypes":@[@"iPhone14,5"]},
+    @{@"ID":@"iphone14-5_ios18.7.8_22H352", @"Name":@"iOS 18.7.8", @"Version":@"18.7.8",
+    @"Build":@"22H352", @"Darwin":@"24.6.0",
+    @"Kernel":@"Darwin Kernel Version 24.6.0: Wed Mar 4 22:15:14 PST 2026; root:xnu-11417.140.69.706.9~1/RELEASE_ARM64_T8110",
     @"ProductTypes":@[@"iPhone14,5"]}];
   });
   return profiles;

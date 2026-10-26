@@ -2,6 +2,7 @@
 
 #import "../common.h"
 #import <Shadow/SHDWPlugin.h>
+#import <Shadow/FingerprintOwner.h>
 #import <libSandy.h>
 #import <dlfcn.h>
 
@@ -67,11 +68,12 @@ extern char*** _NSGetArgv();
         libSandy_applyProfile("ShadowSettings");
     }
 
+    NSString* preferenceIdentifier = SHDWFingerprintOwnerForBundle(bundleIdentifier, [NSBundle mainBundle]);
     NSUserDefaults* defaults = [[NSUserDefaults alloc] initWithSuiteName:@SHADOW_PREFS_PLIST];
-    NSDictionary* app_settings = bundleIdentifier ? [defaults objectForKey:bundleIdentifier] : nil;
+    NSDictionary* app_settings = preferenceIdentifier ? [defaults objectForKey:preferenceIdentifier] : nil;
     // Sandboxed cfprefsd can omit another app's dictionary despite libSandy's file grant.
-    if(!app_settings && bundleIdentifier) {
-        id fileSettings = [NSDictionary dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST][bundleIdentifier];
+    if(!app_settings && preferenceIdentifier) {
+        id fileSettings = [NSDictionary dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST][preferenceIdentifier];
         app_settings = [fileSettings isKindOfClass:[NSDictionary class]] ? fileSettings : nil;
     }
 

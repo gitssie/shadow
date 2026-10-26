@@ -22,6 +22,7 @@ source = r'''
 #import <Shadow/FingerprintConfiguration.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintOwner.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -168,7 +169,9 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert(![[defaults dictionaryForKey:@"b.app"][@"Fingerprint_Locked"] boolValue]);
   assert(![store profileForBundleIdentifier:@"b.app"]);
   assert(![store deviceFingerprintForApplication:@"b.app"]);
-  assert(![[settings getPreferencesForIdentifier:@"b.app"][SHDWUniversalFingerprintID] boolValue]);
+  assert([[settings getPreferencesForIdentifier:@"b.app"][SHDWUniversalFingerprintID] boolValue]);
+  assert(![settings storedFingerprintVendorIdentifierForIdentifier:@"b.app"]);
+  assert(![settings runtimeFingerprintDataForIdentifier:@"b.app"]);
   assert([[defaults dictionaryForKey:@"b.app"][@"Fingerprint_Managed"] boolValue]);
   assert(![defaults dictionaryForKey:@"b.app"][@"Fingerprint_Data"]);
   assert([store refreshApplication:@"b.app" error:&error]);
@@ -350,7 +353,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([defaults boolForKey:SHDWSingleToggleMigrationID]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
-  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 1);
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 2);
   for (NSString *product in @[@"iPhone9,2", @"iPhone9,4", @"iPhone12,1", @"iPhone13,2", @"iPhone15,2", @"unknown"]) {
     managerProductType = product.UTF8String;
     assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"native"]);

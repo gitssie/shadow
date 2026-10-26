@@ -1075,9 +1075,15 @@ static BOOL shdw_dlopen_resolution_denied(const char* path, const void* callerAd
     return NO;
 }
 
+static SHDWHookSession *_shdw_dyld_rebind_session;
+
 static void* shdw_dlopen_completed(void* handle, const char* path, int mode) {
     // Completion follows initializers, unlike the add-image notification.
     if(handle && path && !(mode & RTLD_NOLOAD)) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+        }
         [SHDWHookCoordinator shdw_requestPendingTargetDrain];
     }
     return handle;
@@ -1194,7 +1200,6 @@ static void shdw_dyld_deliver_external(dispatch_block_t callback) {
     }
 }
 
-static SHDWHookSession *_shdw_dyld_rebind_session;
 static BOOL _shdw_dyld_bulk_repair_available;
 static BOOL _shdw_dyld_bulk_registration_replay;
 static NSMutableDictionary<NSValue *, NSNumber *> *_shdw_dyld_pending_image_loads;
@@ -1274,6 +1279,12 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
         }
     }
 
+    if(!_shdw_dyld_replay_in_progress) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+        }
+    }
     if(!_shdw_dyld_bulk_repair_available && shdw_detector_present && !_shdw_dyld_replay_in_progress) {
         SHADOW_INTERNAL_SCOPE {
             shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
@@ -2120,6 +2131,12 @@ static void (*shdw_bulk_load_cbs[SHADOW_MAX_BULK_LOAD_CBS])(unsigned imageCount,
 static void shdw_bulk_load_handler(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]) {
     if(_shdw_dyld_bulk_registration_replay) return;
     SHDWRebindRepairSlots();
+    if(!_shdw_dyld_replay_in_progress) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+        }
+    }
     if(shdw_detector_present && !_shdw_dyld_replay_in_progress) {
         SHADOW_INTERNAL_SCOPE {
             shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);

@@ -217,15 +217,6 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
     if(shdw_fingerprint_enabled && shdw_map_app_caller(caller)) return @"iPhone";
     return %orig;
 }
-- (NSUUID *)identifierForVendor {
-    if(shdw_fingerprint_enabled) {
-        SHADOW_INTERNAL_SCOPE {
-            NSUUID *identifier = SHDWFingerprintVendorIdentifier(shdw_fingerprint_bundle_id);
-            if(identifier) return identifier;
-        }
-    }
-    return %orig;
-}
 - (NSString *)systemVersion {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     if(shdw_fingerprint_enabled && shdw_map_app_caller(caller))
@@ -316,10 +307,13 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
 %end
 
 void shdw_universal_fingerprint_prepare(SHDWHookSession *hooks) {
-    if(!shdw_fingerprint_enabled || !hooks) return;
+    if(!hooks) return;
+    shdw_universal_fingerprint_identity_prepare(hooks);
+    if(!shdw_fingerprint_enabled) return;
     shdw_universal_fingerprint_receipts_prepare(hooks);
     shdw_universal_fingerprint_webkit_prepare(hooks);
     shdw_universal_fingerprint_system_version_prepare(hooks);
+    shdw_universal_fingerprint_environment_prepare(hooks);
     SHDWHookSession *previous = SHDWHookSessionSetCurrent(hooks);
     @try {
         unsigned expected = 0;
@@ -393,6 +387,7 @@ void shdw_universal_fingerprint(SHDWHookSession *hooks) {
         realpath(path, shdw_map_canonical_bundle);
     }
     shdw_fingerprint_bundle_id = [NSBundle.mainBundle.bundleIdentifier copy];
+    shdw_universal_fingerprint_identity(hooks, shdw_fingerprint_bundle_id);
     NSDictionary *data;
     SHADOW_INTERNAL_SCOPE {
         data = SHDWFingerprintData(shdw_fingerprint_bundle_id);

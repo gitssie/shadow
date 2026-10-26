@@ -28,13 +28,21 @@ helpers += function(settings, "static BOOL SHDWFingerprintBootOffsetBounds(") + 
 helpers += function(settings, "static BOOL SHDWValidFingerprintData(") + "\n"
 helpers += function(settings, "static NSDictionary *SHDWRepairedFingerprintVendorData(") + "\n"
 helpers += function(settings, "static NSDictionary *SHDWNewFingerprintData(")
+for signature in ["static NSUUID *SHDWStoredVendorIdentifier(",
+                  "static NSDictionary *SHDWStoredFingerprintApplication(",
+                  "static NSDictionary *SHDWFingerprintRuntimeSnapshot("]:
+    helpers += "\n" + function(settings, signature).replace("NSUserDefaults *defaults", "FileDefaults *defaults")
 methods = function(settings, "- (NSDictionary *)fingerprintDataForIdentifier:") + "\n"
 methods += function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:")
 methods += function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                            lockOnSuccess:")
+methods += "\n" + function(settings, "- (NSString *)fingerprintOwnerIdentifierForIdentifier:")
+methods += "\n" + function(settings, "- (NSDictionary *)runtimeFingerprintDataForIdentifier:")
+methods += "\n" + function(settings, "- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                                   vendorIdentifier:")
 customized = function((root / "src/ShadowSettings.bundle/SHDWPrefs.m").read_text(), "BOOL SHDWAppIsCustomized(")
 source = r'''
 #import <Foundation/Foundation.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintOwner.h>
 #include <assert.h>
 #include <math.h>
 #include <sys/time.h>
@@ -93,6 +101,9 @@ static NSString *fallbackPath;
 @property(nonatomic, strong) FileDefaults *userDefaults;
 + (instancetype)sharedInstance;
 - (NSDictionary *)fingerprintDataForIdentifier:(NSString *)identifier;
+- (NSString *)fingerprintOwnerIdentifierForIdentifier:(NSString *)identifier;
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier;
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier vendorIdentifier:(NSUUID *__autoreleasing *)vendor;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier lockOnSuccess:(BOOL)lockOnSuccess;
 @end
@@ -101,6 +112,8 @@ static ShadowSettings *sharedSettings;
 source += helpers + "\n" + customized + "\n@implementation ShadowSettings\n"
 source += "+ (instancetype)sharedInstance { return sharedSettings; }\n" + methods + "\n@end\n"
 storage = (root / "src/ShadowCore.dylib/policy/FingerprintStorage.m").read_text()
+source += function(storage, "NSString *SHDWFingerprintOwnerIdentifier(") + "\n"
+source += function(storage, "static NSDictionary *SHDWFingerprintProcessSnapshot(") + "\n"
 source += function(storage, "NSDictionary *SHDWFingerprintData(")
 source += r'''
 int main(int argc, const char **argv) { @autoreleasepool {

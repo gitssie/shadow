@@ -37,8 +37,7 @@ NSString *SHDWFingerprintOSVersionString(void) {
 }
 
 NSUUID *SHDWFingerprintVendorIdentifier(NSString *bundleID) {
-    NSString *value = SHDWFingerprintData(bundleID)[@"VendorIdentifier"];
-    return [value isKindOfClass:NSString.class] ? [[NSUUID alloc] initWithUUIDString:value] : nil;
+    return SHDWFingerprintStoredVendorIdentifier(bundleID);
 }
 
 NSString *SHDWFingerprintUserAgent(NSString *userAgent) {

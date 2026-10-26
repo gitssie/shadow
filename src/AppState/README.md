@@ -44,8 +44,8 @@ UID/GID, while its default initializer uses the current effective UID/GID for ho
 fixtures. Existing root-owned backup trees are migrated once using descriptor-relative
 traversal and per-app operation locks. Symlinks, hard-linked files, unexpected
 owners/modes, and filesystem boundaries stop migration. Archive contents and
-creation/modification timestamps are preserved. Container archive entries must match
-the configured storage UID/GID and cannot carry set-user-ID or set-group-ID bits.
+creation/modification timestamps are preserved. Container archive entries preserve their original numeric UID/GID independently
+of backup storage ownership, and cannot carry set-user-ID or set-group-ID bits.
 The store checks this before publication and again before accepting a saved
 manifest, including manifests supplied by mobile-context sync tools. Unsupported
 source ownership/permissions fail backup rather than creating an unusable snapshot.
@@ -95,18 +95,40 @@ the store or application state.
 Restore verifies both complete archives and all payloads before clearing target files.
 Before stopping or mutating the target, restore reads its current IDFV from the
 backend. If it equals the selected snapshot's IDFV, restoration is rejected
-regardless of `saveCurrent`, including a pending retry. A matching IDFV denotes
+regardless of `saveCurrent`, including an ordinary pending retry. A matching IDFV denotes
 the active environment, whose subsequently generated data must be retained.
 This comparison uses IDFV, not the displayed fingerprint digest. Optional saving
 of a different current environment runs before restore mutations.
 
-A pending record pins both archive hashes and is persisted before restore mutations. Files, Keychain, iOS preferences, and
-fingerprint state are restored, then a final combined recheck compares live file
-hashes/inventory, Keychain records, scoped preference values, and fingerprint values/lock state, with the
-target still stopped. A failed restore may leave partial live data; it does not
-claim rollback. Pending state blocks backing up that partial environment and
-protects the restore source from editing/deletion, while permitting retry. The
-core never launches an app automatically.
+Restoration matches archived container identities to the currently authorized
+containers, so changed container UUID paths and app version/build values do not
+by themselves block a reinstall or update. Every archived container must have an
+authorized destination; missing destinations fail before mutation. Credential
+records are validated against current authorization rather than requiring the
+archived and current group lists to match. The live installation remains pinned
+throughout the operation. All current containers are cleared, including newly
+added owned containers absent from the snapshot. Only archived roots receive
+archived data; additional containers must pass a final check containing only
+preserved registration metadata, empty standard directory scaffolding, and
+validated empty preference dictionaries materialized by native preference APIs.
+
+A pending record pins both archive hashes and is persisted before restore mutations.
+Files, Keychain and scoped iOS preferences are restored and verified before the
+fingerprint is committed. Identity commit has durable pending/committed stages.
+If an interrupted operation already has the source IDFV active, only verification
+and finalization are allowed: that path never clears or restores application
+files, credentials, preferences, or fingerprint values. Changed live data fails
+verification and is not overwritten. Ordinary same-IDFV restore stays forbidden.
+A failed restore may leave partial live data; it does not claim rollback. Pending
+state blocks backing up that partial environment and protects the source from
+editing/deletion while permitting the appropriate retry. The core never launches
+an app automatically.
+
+Snapshot deletion atomically renames the selected directory outside the published
+catalog before removing its contents. Interrupted physical deletion is retried on
+a later backup/delete operation. A corrupt snapshot is returned as an unavailable
+catalog item without hiding healthy snapshots, and can be deleted without parsing
+its manifest unless it is the protected pending source.
 
 The coordinator stops the target before work and checks its state at phase
 boundaries. Streaming progress only forwards progress events; it does not scan

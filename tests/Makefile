@@ -79,11 +79,14 @@ verify-fingerprint:
 	python3 verify-fingerprint-raw-memory.py
 	python3 verify-fingerprint-system-version.py
 	python3 verify-fingerprint-idfv.py
+	python3 verify-fingerprint-identity-settings.py
+	python3 verify-fingerprint-identity-storage.py
 	python3 verify-fingerprint-storage.py
 	python3 verify-map-defaults.py
 	python3 verify-fingerprint-interfaces.py
 	python3 verify-receipts.py
 	python3 verify-fingerprint-memory.py
+	python3 verify-fingerprint-environment.py
 	python3 verify-fingerprint-version.py
 	python3 verify-fingerprint-webkit.py
 	python3 verify-web-clipboard.py

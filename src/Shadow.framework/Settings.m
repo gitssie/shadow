@@ -1,5 +1,6 @@
 #import <Shadow/Settings.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintOwner.h>
 
 #import "../common.h"
 #import "SettingsMigration.h"
@@ -152,6 +153,52 @@ static NSDictionary *SHDWNewFingerprintData(void) {
     @"BootSessionUUID" : [NSUUID UUID].UUIDString,
     @"VendorIdentifier" : [NSUUID UUID].UUIDString
   };
+}
+
+static NSUUID *SHDWStoredVendorIdentifier(id data) {
+  if (![data isKindOfClass:NSDictionary.class]) return nil;
+  id value = data[@"VendorIdentifier"];
+  if (![value isKindOfClass:NSString.class]) return nil;
+  return [[NSUUID alloc] initWithUUIDString:value];
+}
+
+static NSDictionary *SHDWStoredFingerprintApplication(NSUserDefaults *defaults,
+                                                       NSString *identifier,
+                                                       BOOL requireComplete) {
+  if (!identifier.length) return nil;
+  id app = [defaults objectForKey:identifier];
+  id data = [app isKindOfClass:NSDictionary.class] ? app[@"Fingerprint_Data"] : nil;
+  if (SHDWStoredVendorIdentifier(data) &&
+      (!requireComplete || SHDWValidFingerprintData(data))) return app;
+  for (NSString *path in @[JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST]) {
+    id root = [NSDictionary dictionaryWithContentsOfFile:path];
+    id candidate = [root isKindOfClass:NSDictionary.class] ? root[identifier] : nil;
+    id candidateData = [candidate isKindOfClass:NSDictionary.class]
+                           ? candidate[@"Fingerprint_Data"] : nil;
+    if (SHDWStoredVendorIdentifier(candidateData) &&
+        (!requireComplete || SHDWValidFingerprintData(candidateData))) {
+      return candidate;
+    }
+  }
+  return nil;
+}
+
+static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
+  if (!SHDWValidFingerprintData(data) || !SHDWStoredVendorIdentifier(data)) return nil;
+  NSMutableDictionary *snapshot = [data mutableCopy];
+  double nativeBoot = SHDWNativeBootTimestamp();
+  double now = [[NSDate date] timeIntervalSince1970];
+  NSInteger minimumOffset, maximumOffset;
+  if (!SHDWNativeBootSessionUUID() ||
+      !SHDWFingerprintBootOffsetBounds(nativeBoot, now, &minimumOffset,
+                                       &maximumOffset)) {
+    [snapshot removeObjectForKey:@"BootTimeOffset"];
+  } else {
+    NSInteger offset = [data[@"BootTimeOffset"] integerValue];
+    snapshot[@"BootTimeOffset"] = @(MIN(maximumOffset, MAX(minimumOffset, offset)));
+    snapshot[@"NativeBootTimestamp"] = @(nativeBoot);
+  }
+  return [snapshot copy];
 }
 
 @implementation ShadowSettings
@@ -394,6 +441,33 @@ static NSDictionary *SHDWNewFingerprintData(void) {
   }
 }
 
+- (NSString *)fingerprintOwnerIdentifierForIdentifier:(NSString *)bundleIdentifier {
+  return SHDWFingerprintOwnerForBundle(bundleIdentifier, [NSBundle mainBundle]);
+}
+
+- (NSUUID *)storedFingerprintVendorIdentifierForIdentifier:(NSString *)bundleIdentifier {
+  @synchronized(self) {
+    NSString *owner = [self fingerprintOwnerIdentifierForIdentifier:bundleIdentifier];
+    NSDictionary *app = SHDWStoredFingerprintApplication(self.userDefaults, owner, NO);
+    return SHDWStoredVendorIdentifier(app[@"Fingerprint_Data"]);
+  }
+}
+
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier {
+  return [self runtimeFingerprintDataForIdentifier:bundleIdentifier vendorIdentifier:NULL];
+}
+
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier
+                                   vendorIdentifier:(NSUUID *__autoreleasing *)vendorIdentifier {
+  @synchronized(self) {
+    NSString *owner = [self fingerprintOwnerIdentifierForIdentifier:bundleIdentifier];
+    NSDictionary *app = SHDWStoredFingerprintApplication(self.userDefaults, owner, NO);
+    id data = app[@"Fingerprint_Data"];
+    if (vendorIdentifier) *vendorIdentifier = SHDWStoredVendorIdentifier(data);
+    return SHDWFingerprintRuntimeSnapshot(data);
+  }
+}
+
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier {
   return [self refreshFingerprintDataForIdentifier:bundleIdentifier lockOnSuccess:NO];
 }
@@ -461,6 +535,8 @@ static NSDictionary *SHDWNewFingerprintData(void) {
     return nil;
   }
 
+  bundleIdentifier = [self fingerprintOwnerIdentifierForIdentifier:bundleIdentifier];
+
   NSMutableDictionary *result = [defaultSettings mutableCopy];
   NSDictionary *app_settings =
       bundleIdentifier ? [userDefaults objectForKey:bundleIdentifier] : nil;
@@ -499,11 +575,9 @@ static NSDictionary *SHDWNewFingerprintData(void) {
       [bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] ||
           bundleIdentifier.length == 0);
   result[SHDWAppEnabledID] = @(enabled);
-  id fingerprint = app_settings[@"Fingerprint_Data"];
   result[SHDWUniversalFingerprintID] =
       @(enabled && SHDWFingerprintApplicationEnabled(app_settings) &&
-        [fingerprint isKindOfClass:[NSDictionary class]] &&
-        [fingerprint count] > 0);
+        SHDWFingerprintApplicationIsRegistered(app_settings));
 
   // Aggressive detector neutralization: per-app override, else the global
   // default. Written into the returned profile so the coordinator/adapters
