@@ -1,12 +1,15 @@
 # Shadow public tests
 
-Public tests are pure-C checks plus static contract scripts. They need make, Bash,
+Public tests combine pure-C checks, static contract scripts, and a macOS-only
+Foundation image-registry check. They need make, Bash,
 a host C compiler, Python 3.7+, and standard shell tools; no device, Docker, iOS SDK, or engine
 build is required. The lane/package contract also requires `THEOS` to point to a
 directory containing `bin/lane.sh`; a full Theos installation is not required.
 
 | Check | Command |
 | --- | --- |
+| runtime file identity (pure C) | `make -C tests verify-runtime-image-identity` |
+| loaded-image registry (macOS Foundation; skipped on other hosts) | `make -C tests verify-loaded-image-registry` |
 | svc path-rewrite (pure C) | `make -C tests verify-path-rewrite` |
 | fresh fd/DIR path policy (host doubles) | `make -C tests verify-fd-path-freshness` |
 | mount filtering (pure C + static query contract) | `make -C tests verify-mount-filter` |

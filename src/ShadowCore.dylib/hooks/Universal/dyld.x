@@ -493,14 +493,22 @@ static BOOL shdw_path_is_in_main_bundle(NSString* path) {
         || [path hasPrefix:[bundlePath stringByAppendingString:@"/"]];
 }
 
-// Classify one image path exactly the way -[Shadow isAddrRestricted:] would
-// after resolving an address to it: isCPathRestricted:, the ruleset predicate.
-// NOT isProtectedImagePath: — that one ORs in the Shadow-artifact basename set
-// and would restrict addresses the current predicate allows.
+// Keep loaded-image address classification consistent with Core.
 static BOOL shdw_image_path_is_restricted(const char* path) {
     if(!path) return NO;
-    NSString* imagePath = [NSString stringWithUTF8String:path];
-    return !shdw_path_is_in_main_bundle(imagePath) && [_shadow isCPathRestricted:path];
+    const char* canonical = [_shadow canonicalLoadedImagePath:path];
+    NSString* imagePath = [NSString stringWithUTF8String:canonical];
+    if(shdw_path_is_in_main_bundle(imagePath)) return NO;
+    if(canonical != path && [_shadow isProtectedImagePath:imagePath]) return YES;
+    return [_shadow isCPathRestricted:canonical];
+}
+
+static void shdw_restricted_ranges_invalidate_identity(void) {
+    pthread_mutex_lock(&_shdw_restricted_ranges_lock);
+    shdw_restricted_ranges_t rebuilt = *__atomic_load_n(&_shdw_restricted_ranges_published, __ATOMIC_ACQUIRE);
+    rebuilt.generation = UINT64_MAX;
+    shdw_restricted_ranges_publish_locked(&rebuilt);
+    pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
 }
 
 // Full reclassification of every loaded image. Only run when the table has no
@@ -919,6 +927,8 @@ static const char* replaced_dyld_image_path_containing_address(const void* addr)
         return NULL;
     }
 
+    result = [_shadow canonicalLoadedImagePath:result];
+
     // Restricted address: report "in no image" (NULL) — the executable-path
     // fake was a contradiction a detector could fingerprint (plan Wave 1c).
     if([_shadow isProtectedImagePath:@(result)]) {
@@ -1280,6 +1290,9 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
     NSArray *handlers = nil;
 
     const char* image_path = dyld_image_path_containing_address(mh);
+    if([_shadow registerLoadedImage:mh path:image_path]) {
+        shdw_restricted_ranges_invalidate_identity();
+    }
 
     // The dyld image list changed: refresh the app-bundle spans, if this image
     // is one that can change them.
@@ -1291,7 +1304,7 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
     // protected-name predicate also catches Shadow's own artifacts that the
     // ruleset may not cover.
     if(image_path) {
-        NSString* path = [NSString stringWithUTF8String:image_path];
+        NSString* path = [NSString stringWithUTF8String:[_shadow canonicalLoadedImagePath:image_path]];
 
         // isProtectedImagePath: is isCPathRestricted: OR the Shadow-artifact
         // basename set, so a NO here is a NO for the restricted-span table
@@ -1378,6 +1391,9 @@ void shdw_universal_dyld_updatelibs_r(const struct mach_header* mh, intptr_t vma
     }
 
     [_shdw_dyld_pending_image_loads removeObjectForKey:[NSValue valueWithPointer:mh]];
+    if([_shadow unregisterLoadedImage:mh]) {
+        shdw_restricted_ranges_invalidate_identity();
+    }
 
     // The dyld image list changed: refresh the app-bundle spans, if this image
     // is one that can change them. On the remove path the image is already
@@ -1810,6 +1826,7 @@ static int replaced_dladdr(const void* addr, Dl_info* info) {
            !shdw_is_shadow_runtime_image(originalInfo.dli_fname)) {
             if(info) {
                 *info = originalInfo;
+                info->dli_fname = [_shadow canonicalLoadedImagePath:info->dli_fname];
             }
             return originalResult;
         }
@@ -1830,6 +1847,9 @@ static int replaced_dladdr(const void* addr, Dl_info* info) {
         return 0;
     }
 
+    if(result && info && info->dli_fname) {
+        info->dli_fname = [_shadow canonicalLoadedImagePath:info->dli_fname];
+    }
     return result;
 }
 
@@ -2339,7 +2359,8 @@ static void replaced_dyld_process_info_get_images(shdw_dyld_process_info_t info,
     uint32_t total = *infoCount;
 
     for(uint32_t i = 0; i < total; i++) {
-        if(shdw_dyld_path_restricted(images[i].imagePath) || shdw_addr_is_restricted(images[i].imageLoadAddress)) {
+        const char* canonical = [_shadow canonicalLoadedImagePath:images[i].imagePath];
+        if(shdw_dyld_path_restricted(canonical) || shdw_addr_is_restricted(images[i].imageLoadAddress)) {
             continue;
         }
 
@@ -2347,6 +2368,7 @@ static void replaced_dyld_process_info_get_images(shdw_dyld_process_info_t info,
             images[kept] = images[i];
         }
 
+        images[kept].imagePath = canonical;
         kept++;
     }
 
@@ -2412,6 +2434,12 @@ static void replaced_dyld_process_info_get_image_path(shdw_dyld_process_info_t i
     }
 
     original_dyld_process_info_get_image_path(info, image, buffer, bufferSize);
+    if(buffer && bufferSize && memchr(buffer, '\0', bufferSize)) {
+        const char* canonical = [_shadow canonicalLoadedImagePath:buffer];
+        if(canonical != buffer) {
+            strlcpy(buffer, canonical, bufferSize);
+        }
+    }
 }
 
 static void (*original_dyld_process_info_get_image_uuid)(shdw_dyld_process_info_t info, struct shdw_dyld_process_info_image* image, uuid_t uuid);
@@ -2869,6 +2897,10 @@ void shdw_universal_rebind_image(SHDWHookSession* hooks, const void* imageHeader
         [hooks hookRebindSymbol:@"_dyld_get_image_vmaddr_slide" withReplacement:replaced_dyld_get_image_vmaddr_slide outOldPtr:NULL inCallerImage:imageHeader];
     if(original_dlsym)
         [hooks hookRebindSymbol:@"dlsym" withReplacement:replaced_dlsym outOldPtr:NULL inCallerImage:imageHeader];
+    if(original_NSVersionOfRunTimeLibrary)
+        [hooks hookRebindSymbol:@"NSVersionOfRunTimeLibrary"
+                withReplacement:replaced_NSVersionOfRunTimeLibrary
+                       outOldPtr:NULL inCallerImage:imageHeader];
 }
 
 void shdw_universal_dyld(SHDWHookSession* hooks) {
@@ -3184,7 +3216,10 @@ void shdw_universal_dyld(SHDWHookSession* hooks) {
     void* nsversion_ptr = dlsym(RTLD_DEFAULT, "NSVersionOfRunTimeLibrary");
 
     if(nsversion_ptr) {
-        [hooks hookFunction:nsversion_ptr withReplacement:replaced_NSVersionOfRunTimeLibrary outOldPtr:(void **) &original_NSVersionOfRunTimeLibrary];
+        original_NSVersionOfRunTimeLibrary = (int32_t (*)(const char *))nsversion_ptr;
+        [hooks hookRebindSymbol:@"NSVersionOfRunTimeLibrary"
+                withReplacement:replaced_NSVersionOfRunTimeLibrary
+                       outOldPtr:NULL];
     }
 
     // NSCreateObjectFileImageFromFile: same legacy-loader discipline —

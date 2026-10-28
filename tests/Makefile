@@ -9,6 +9,10 @@ verify-path-rewrite:
 		verify-path-rewrite.c ../src/ShadowCore.dylib/hooks/Universal/path_rewrite.c
 	/tmp/shadow-rewrite-test
 
+verify-runtime-image-identity:
+	$(CC) -std=c11 -Wall -Wextra -Werror RuntimeImageIdentityTests.c -o /tmp/shadow-runtime-image-identity-test
+	/tmp/shadow-runtime-image-identity-test
+
 # Host check for staged realpath output: denied resolutions never reach the
 # caller buffer, while approved strings are copied completely and bounded.
 verify-realpath-buffer:
@@ -152,12 +156,12 @@ verify-rules-generation:
 verify-binary-compat:
 	bash BinaryCompatTests.sh
 
-test: verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-stock-cryptex verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
+test: verify-runtime-image-identity verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-stock-cryptex verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
 
 clean:
 	rm -f harness harness.d
 
-.PHONY: test verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
+.PHONY: test verify-runtime-image-identity verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
 
 # Optional CoreFoundation host check of the shared image-header index.
 image-header-index:
@@ -182,3 +186,15 @@ network-queries:
 verify-ip-switch:
 	python3 verify-ip-switch-config.py
 	python3 verify-ip-switch.py
+
+ifeq ($(shell uname -s),Darwin)
+verify-loaded-image-registry:
+	$(CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -framework Foundation -I../src/Shadow.framework/Headers LoadedImageRegistryTests.m ../src/Shadow.framework/LoadedImageRegistry.m -o /tmp/shadow-loaded-image-registry-test
+	/tmp/shadow-loaded-image-registry-test
+
+test: verify-loaded-image-registry
+else
+verify-loaded-image-registry:
+	@echo "SKIP: loaded image registry host checks require macOS Foundation"
+endif
+.PHONY: verify-loaded-image-registry

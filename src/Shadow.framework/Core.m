@@ -1,6 +1,7 @@
 #import <Shadow/Core+Utilities.h>
 #import <Shadow/Core.h>
 #import <Shadow/JBPath.h>
+#import "LoadedImageRegistry.h"
 
 #import "RestrictionEngine.h"
 #import "RestrictionQuery.h"
@@ -37,6 +38,7 @@ static _Atomic(SHDWReceiptPathPredicate) shdw_receipt_path_predicate;
 
 @interface Shadow () {
   ShadowRestrictionEngine *engine;
+  SHDWLoadedImageRegistry *loadedImages;
 }
 
 - (BOOL)isPathRestrictedQuery:(ShadowRestrictionQuery *)query;
@@ -191,6 +193,7 @@ shdwInstallHarnessSDKFallback(void) {
         .groupContainerPaths = [groupContainers copy],
     };
     engine = [[ShadowRestrictionEngine alloc] initWithContext:context];
+    loadedImages = [[SHDWLoadedImageRegistry alloc] initWithSystemRoot:@"/"];
   }
 
   return self;
@@ -219,10 +222,40 @@ shdwInstallHarnessSDKFallback(void) {
   if (addr) {
     // See if this address belongs to a restricted file.
     const char *image_path = dyld_image_path_containing_address(addr);
-    return [self isCPathRestricted:image_path];
+    const char *canonical = [self canonicalLoadedImagePath:image_path];
+    if (canonical != image_path && canonical &&
+        [self isProtectedImagePath:[NSString stringWithUTF8String:canonical]]) {
+      return YES;
+    }
+    return [self isCPathRestricted:canonical];
   }
 
   return NO;
+}
+
+- (BOOL)registerLoadedImage:(const void *)header path:(const char *)path {
+  int saved=errno;
+  __block BOOL changed=NO;
+  SHADOW_INTERNAL_SCOPE {
+    changed=[loadedImages registerHeader:header path:path allowCandidate:nil];
+  }
+  errno=saved;
+  return changed;
+}
+
+- (BOOL)unregisterLoadedImage:(const void *)header {
+  int saved=errno; __block BOOL changed=NO;
+  SHADOW_INTERNAL_SCOPE { changed=[loadedImages unregisterHeader:header]; }
+  errno=saved;
+  return changed;
+}
+
+- (const char *)canonicalLoadedImagePath:(const char *)path {
+  int saved=errno;
+  __block const char *result=path;
+  SHADOW_INTERNAL_SCOPE { result=[loadedImages canonicalPath:path]; }
+  errno=saved;
+  return result;
 }
 
 - (BOOL)isCPathRestricted:(const char *)path {

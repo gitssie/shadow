@@ -185,7 +185,8 @@ BOOL shdw_objc_image_path_is_hidden(const char* path) {
         return NO;
     }
 
-    return shdw_is_shadow_runtime_image(path) || [_shadow isProtectedImagePath:@(path)];
+    const char* canonical = [_shadow canonicalLoadedImagePath:path];
+    return shdw_is_shadow_runtime_image(path) || [_shadow isProtectedImagePath:@(canonical)];
 }
 
 // Class-object hiding: classify by the class's EXACT image path, never by
@@ -252,7 +253,7 @@ static const char* replaced_class_getImageName(Class cls) {
         return NULL;
     }
 
-    return result;
+    return result ? [_shadow canonicalLoadedImagePath:result] : NULL;
 }
 
 static const char * _Nonnull * (*original_objc_copyImageNames)(unsigned int *outCount);
@@ -301,7 +302,7 @@ static const char * _Nonnull * replaced_objc_copyImageNames(unsigned int *outCou
             continue;
         }
 
-        filtered[n] = name;
+        filtered[n] = [_shadow canonicalLoadedImagePath:name];
         n++;
     }
 
@@ -313,6 +314,39 @@ static const char * _Nonnull * replaced_objc_copyImageNames(unsigned int *outCou
     }
 
     return filtered;
+}
+
+static const char* shdw_objc_runtime_image_name_for_lookup(const char* image) {
+    if(!image || !original_objc_copyImageNames) {
+        return image;
+    }
+
+    unsigned int count = 0;
+    const char** names = original_objc_copyImageNames(&count);
+    if(!names) {
+        return image;
+    }
+
+    const char* match = NULL;
+    unsigned int matches = 0;
+    for(unsigned int i = 0; i < count; i++) {
+        if(names[i] && strcmp(names[i], image) == 0) {
+            const char* exact = names[i];
+            free(names);
+            return exact;
+        }
+        if(names[i]) {
+            const char* canonical = [_shadow canonicalLoadedImagePath:names[i]];
+            if(canonical != names[i] && strcmp(canonical, image) == 0) {
+                if(!match || strcmp(match, names[i]) != 0) {
+                    match = names[i];
+                    matches++;
+                }
+            }
+        }
+    }
+    free(names);
+    return matches == 1 ? match : image;
 }
 
 static const char * _Nonnull * (*original_objc_copyClassNamesForImage)(const char* image, unsigned int *outCount);
@@ -331,7 +365,7 @@ static const char * _Nonnull * replaced_objc_copyClassNamesForImage(const char* 
         return NULL;
     }
 
-    return original_objc_copyClassNamesForImage(image, outCount);
+    return original_objc_copyClassNamesForImage(shdw_objc_runtime_image_name_for_lookup(image), outCount);
 }
 static IMP (*original_class_getMethodImplementation)(Class cls, SEL name);
 static IMP replaced_class_getMethodImplementation(Class cls, SEL name) {
