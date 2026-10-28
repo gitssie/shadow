@@ -32,6 +32,17 @@ static NSDictionary* _shdw_optionsForAbsolute(NSFileManager* fm, BOOL allAbsolut
     return @{kShadowRestrictionWorkingDir : [fm currentDirectoryPath]};
 }
 
+// Link-location checks must not resolve through the link: the queried entry's
+// own spelling decides, exactly like the libc readlink hook.
+static NSDictionary* _shdw_optionsForNoFollow(NSFileManager* fm, BOOL allAbsolute) {
+    if(allAbsolute) {
+        return @{kShadowRestrictionNoFollow : @YES};
+    }
+
+    return @{kShadowRestrictionNoFollow : @YES,
+             kShadowRestrictionWorkingDir : [fm currentDirectoryPath]};
+}
+
 // Write/create/delete intent. Never nil: a nil options dict reads as read
 // intent and is served from the decision cache, while the write key also
 // disables Core.m's existence gate so a restricted-classified path is denied
@@ -75,18 +86,146 @@ static BOOL shdw_enumerated_entry_hidden(NSString* base, NSString* name) {
     }
     return NO;
 }
-static BOOL shdw_enumerated_url_hidden(NSURL* url) {
+static BOOL shdw_enumerated_url_hidden(NSURL* url, NSString* base) {
     if(!url || ![url isFileURL]) {
         return NO;
     }
+    // A reference URL carries no path; a relative one must stay relative so the
+    // base join (not the process cwd) decides what it names.
     if([url isFileReferenceURL]) {
         NSURL* resolved = [url filePathURL];
         if(!resolved) {
             return YES;
         }
-        return shdw_enumerated_entry_hidden(nil, [resolved path]);
+        return shdw_enumerated_entry_hidden(base, [resolved path]);
     }
-    return shdw_enumerated_entry_hidden(nil, [url path]);
+    return shdw_enumerated_entry_hidden(base, [url path]);
+}
+
+// Enumerator state and the per-item decision used by directory listings.
+static NSString* shdw_enumerator_base(id enumerator) {
+    NSString* base = objc_getAssociatedObject(enumerator, _NSDirectoryEnumerator_shdw_key);
+
+    if(!base) {
+        NSLog(@"NSDirectoryEnumerator base not found");
+        base = @"";
+    }
+
+    return base;
+}
+
+// The child options dict is invariant for the life of the enumerator, so cache
+// it (avoids per-item allocation); the base restriction decision itself is
+// rechecked on every item so ruleset reloads / filesystem changes stay
+// effective (Core.m's bounded decision cache keeps that recheck cheap in
+// steady state).
+static NSDictionary* shdw_enumerator_child_options(id enumerator, NSString* base) {
+    NSDictionary* childOptions = objc_getAssociatedObject(enumerator, _NSDirectoryEnumerator_shdw_state_key);
+
+    if(!childOptions) {
+        childOptions = @{kShadowRestrictionWorkingDir : base};
+        objc_setAssociatedObject(enumerator, _NSDirectoryEnumerator_shdw_state_key, childOptions, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    return childOptions;
+}
+
+// One yielded item: ruleset first (path spelling, URL path or entry name),
+// then the hidden-set union the access()/stat() hooks enforce.
+static BOOL shdw_enumerator_item_hidden(id obj, NSString* base, NSDictionary* childOptions) {
+    NSString* path = nil;
+
+    if([obj isKindOfClass:[NSURL class]]) {
+        path = [obj path];
+    } else if([obj isKindOfClass:[NSString class]]) {
+        path = obj;
+    }
+
+    if([_shadow isPathRestricted:path options:childOptions]) {
+        return YES;
+    }
+    if([obj isKindOfClass:[NSURL class]]) {
+        return shdw_enumerated_url_hidden(obj, base);
+    }
+    if([obj isKindOfClass:[NSString class]]) {
+        return shdw_enumerated_entry_hidden(base, path);
+    }
+
+    return NO;
+}
+
+// Copy the kept items from one fast-enumeration batch into the caller's
+// buffer. The producer may hand its batch back through state->itemsPtr
+// instead of stackbuf; read that pointer, never assume the fetch landed in
+// stackbuf. Returns the kept count; the caller loops on %orig (which advanced
+// its cursor) when it is zero.
+static NSUInteger shdw_enumerator_compact(id __unsafe_unretained* source, id __unsafe_unretained* destination, NSUInteger fetched, NSString* base, NSDictionary* childOptions) {
+    NSUInteger kept = 0;
+
+    for(NSUInteger i = 0; i < fetched; i++) {
+        id obj = source[i];
+
+        if(!obj || shdw_enumerator_item_hidden(obj, base, childOptions)) {
+            continue;
+        }
+
+        destination[kept++] = obj;
+    }
+
+    return kept;
+}
+
+// A producer may return a batch larger than the caller's stack buffer when it
+// points itemsPtr at its own storage (NSFastEnumeration allows count > len in
+// that case). Keep the filtered batch in per-state storage; it must stay alive
+// until the next batch or the end of enumeration. An abandoned loop leaves the
+// last buffer associated with the enumerator until dealloc, which is bounded
+// and far safer than exposing the batch unfiltered.
+static char shdw_enumerator_batches_key;
+
+static NSMutableData* shdw_enumerator_batch_alloc(NSUInteger count) {
+    if(count == 0 || count > NSUIntegerMax / sizeof(id)) {
+        return nil;
+    }
+
+    return [NSMutableData dataWithLength:count * sizeof(id)];
+}
+
+static void shdw_enumerator_batch_store(id enumerator, NSFastEnumerationState* state, NSMutableData* data) {
+    NSMutableDictionary* batches = objc_getAssociatedObject(enumerator, &shdw_enumerator_batches_key);
+
+    if(!batches) {
+        batches = [NSMutableDictionary new];
+        objc_setAssociatedObject(enumerator, &shdw_enumerator_batches_key, batches, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    batches[[NSValue valueWithPointer:state]] = data;
+}
+
+static void shdw_enumerator_batch_release(id enumerator, NSFastEnumerationState* state) {
+    NSMutableDictionary* batches = objc_getAssociatedObject(enumerator, &shdw_enumerator_batches_key);
+
+    if(batches) {
+        [batches removeObjectForKey:[NSValue valueWithPointer:state]];
+    }
+}
+
+static NSArray* shdw_enumerator_filter_all(NSArray* array, NSString* base) {
+    if(!array) {
+        return nil;
+    }
+
+    array = [Shadow filterPathArray:array restricted:NO options:@{kShadowRestrictionWorkingDir : base}];
+    // The ruleset filter cannot see loader-visible objects by design.
+    return [array objectsAtIndexes:[array indexesOfObjectsPassingTest:^BOOL(id obj, NSUInteger idx, BOOL* stop) {
+        if([obj isKindOfClass:[NSURL class]]) {
+            return !shdw_enumerated_url_hidden(obj, base);
+        }
+        if([obj isKindOfClass:[NSString class]]) {
+            return !shdw_enumerated_entry_hidden(base, obj);
+        }
+        return YES;
+    }]];
 }
 
 // Subtree preflight: a directory that contains a restricted descendant is
@@ -157,54 +296,20 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
     // callers (Foundation forwarding, for-in mediation) all get the same
     // filtered stream; only Shadow-internal scopes see truth, and Shadow
     // does not enumerate through NSDirectoryEnumerator.
-    NSString* base = objc_getAssociatedObject(self, _NSDirectoryEnumerator_shdw_key);
-
-    if(!base) {
-        NSLog(@"NSDirectoryEnumerator base not found");
-        base = @"";
-    }
+    NSString* base = shdw_enumerator_base(self);
 
     if([_shadow isPathRestricted:base]) {
         return @[];
     }
 
-    NSArray* result = %orig; 
+    NSArray* result = %orig;
 
-    if(result) {
-        result = [Shadow filterPathArray:result restricted:NO options:@{kShadowRestrictionWorkingDir : base}];
-        // The ruleset filter cannot see loader-visible objects by design.
-        result = [result objectsAtIndexes:[result indexesOfObjectsPassingTest:^BOOL(id obj, NSUInteger idx, BOOL* stop) {
-            if([obj isKindOfClass:[NSURL class]]) {
-                return !shdw_enumerated_url_hidden(obj);
-            }
-            if([obj isKindOfClass:[NSString class]]) {
-                return !shdw_enumerated_entry_hidden(base, obj);
-            }
-            return YES;
-        }]];
-    }
-
-    return result;
+    return shdw_enumerator_filter_all(result, base);
 }
 
 - (id)nextObject __attribute__((annotate("hookkit:allow_inherited"))) {
-    NSString* base = objc_getAssociatedObject(self, _NSDirectoryEnumerator_shdw_key);
-
-    if(!base) {
-        NSLog(@"NSDirectoryEnumerator base not found");
-        base = @"";
-    }
-
-    // The child options dict is invariant for the life of the enumerator, so cache it
-    // (avoids per-item allocation); the base restriction decision itself is rechecked
-    // on every item so ruleset reloads / filesystem changes stay effective (Core.m's
-    // bounded decision cache keeps that recheck cheap in steady state).
-    NSDictionary* childOptions = objc_getAssociatedObject(self, _NSDirectoryEnumerator_shdw_state_key);
-
-    if(!childOptions) {
-        childOptions = @{kShadowRestrictionWorkingDir : base};
-        objc_setAssociatedObject(self, _NSDirectoryEnumerator_shdw_state_key, childOptions, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+    NSString* base = shdw_enumerator_base(self);
+    NSDictionary* childOptions = shdw_enumerator_child_options(self, base);
 
     if([_shadow isPathRestricted:base]) {
         return nil;
@@ -213,23 +318,8 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
     id result = %orig;
 
     // keep looping until we get something unrestricted or nil
-    while(result) {
-        NSString* path = nil;
-
-        if([result isKindOfClass:[NSURL class]]) {
-            path = [result path];
-        } else if([result isKindOfClass:[NSString class]]) {
-            path = result;
-        }
-
-        if([_shadow isPathRestricted:path options:childOptions]) {
-            result = %orig;
-        } else if(([result isKindOfClass:[NSURL class]] && shdw_enumerated_url_hidden(result))
-                  || ([result isKindOfClass:[NSString class]] && shdw_enumerated_entry_hidden(base, path))) {
-            result = %orig;
-        } else {
-            break;
-        }
+    while(result && shdw_enumerator_item_hidden(result, base, childOptions)) {
+        result = %orig;
     }
 
     return result;
@@ -238,29 +328,20 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
 // Fast enumeration (for…in) bypasses nextObject, so it needs its own filter.
 // ABI notes: the runtime zeroes the NSFastEnumerationState before the first
 // call and reads itemsPtr/mutationsPtr after each call; %orig advances
-// state->state (an opaque cursor) with every batch. We reuse the caller's
-// buffer in place (fetch into stackbuf via %orig, compact out restricted
-// entries, point itemsPtr at the compacted head). A batch that filters to
-// zero must NOT return 0 (that terminates enumeration), so we loop: fetch
-// again — %orig continues from the cursor it just advanced — until we have
-// at least one item or %orig reports end-of-stream.
+// state->state (an opaque cursor) with every batch. The producer may return
+// its batch through stackbuf or through its own itemsPtr storage, and an
+// external batch may be larger than len. Read itemsPtr, compact from it, and
+// use stackbuf only when the fetched or kept count fits; retain per-state
+// storage for larger batches. A batch that filters to zero must NOT return 0
+// (that terminates enumeration), so we loop: fetch again — %orig continues
+// from the cursor it just advanced — until we have at least one item or
+// %orig reports end-of-stream.
 // The buffer type mirrors the SDK's NSFastEnumeration declaration
 // (id __unsafe_unretained): the enumerator's objects are borrowed, not
 // owned, and __unsafe_unenumerated is not a keyword in this toolchain.
 - (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state objects:(id __unsafe_unretained *)stackbuf count:(NSUInteger)len __attribute__((annotate("hookkit:allow_inherited"))) {
-    NSString* base = objc_getAssociatedObject(self, _NSDirectoryEnumerator_shdw_key);
-
-    if(!base) {
-        NSLog(@"NSDirectoryEnumerator base not found");
-        base = @"";
-    }
-
-    NSDictionary* childOptions = objc_getAssociatedObject(self, _NSDirectoryEnumerator_shdw_state_key);
-
-    if(!childOptions) {
-        childOptions = @{kShadowRestrictionWorkingDir : base};
-        objc_setAssociatedObject(self, _NSDirectoryEnumerator_shdw_state_key, childOptions, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+    NSString* base = shdw_enumerator_base(self);
+    NSDictionary* childOptions = shdw_enumerator_child_options(self, base);
 
     if([_shadow isPathRestricted:base]) {
         return 0;
@@ -269,48 +350,47 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
     NSUInteger filteredCount = 0;
 
     while(filteredCount == 0) {
+        shdw_enumerator_batch_release(self, state);
+        state->itemsPtr = stackbuf;
         NSUInteger fetched = %orig(state, stackbuf, len);
 
         if(fetched == 0) {
             return 0;
         }
 
-        NSUInteger kept = 0;
+        id __unsafe_unretained* batch = state->itemsPtr ? state->itemsPtr : stackbuf;
 
-        for(NSUInteger i = 0; i < fetched; i++) {
-            id obj = stackbuf[i];
+        if(fetched <= len) {
+            filteredCount = shdw_enumerator_compact(batch, stackbuf, fetched, base, childOptions);
+            state->itemsPtr = stackbuf;
+        } else {
+            NSMutableData* storage = shdw_enumerator_batch_alloc(fetched);
 
-            if(!obj) {
+            if(!storage) {
+                return 0;
+            }
+
+            id __unsafe_unretained* filtered = (id __unsafe_unretained*)storage.mutableBytes;
+            filteredCount = shdw_enumerator_compact(batch, filtered, fetched, base, childOptions);
+
+            if(filteredCount == 0) {
                 continue;
             }
 
-            NSString* path = nil;
-
-            if([obj isKindOfClass:[NSURL class]]) {
-                path = [obj path];
-            } else if([obj isKindOfClass:[NSString class]]) {
-                path = obj;
+            if(filteredCount <= len) {
+                memcpy(stackbuf, filtered, filteredCount * sizeof(id));
+                state->itemsPtr = stackbuf;
+            } else {
+                shdw_enumerator_batch_store(self, state, storage);
+                state->itemsPtr = filtered;
             }
-
-            if(path && [_shadow isPathRestricted:path options:childOptions]) {
-                continue;
-            }
-            if(([obj isKindOfClass:[NSURL class]] && shdw_enumerated_url_hidden(obj))
-               || ([obj isKindOfClass:[NSString class]] && path && shdw_enumerated_entry_hidden(base, path))) {
-                continue;
-            }
-
-            stackbuf[kept++] = obj;
         }
-
-        filteredCount = kept;
     }
-
-    state->itemsPtr = stackbuf;
 
     return filteredCount;
 }
 %end
+
 
 %hook NSFileManager
 - (BOOL)fileExistsAtPath:(NSString *)path __attribute__((annotate("hookkit:allow_inherited"))) {
@@ -444,7 +524,7 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
         result = [Shadow filterPathArray:result restricted:NO options:nil];
         // The ruleset filter cannot see loader-visible objects by design.
         result = [result objectsAtIndexes:[result indexesOfObjectsPassingTest:^BOOL(id obj, NSUInteger idx, BOOL* stop) {
-            return ![obj isKindOfClass:[NSURL class]] || !shdw_enumerated_url_hidden(obj);
+            return ![obj isKindOfClass:[NSURL class]] || !shdw_enumerated_url_hidden(obj, [url path]);
         }]];
     }
 
@@ -483,11 +563,18 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
         return nil;
     }
 
+    // The base is the URL's own path spelling (never absoluteURL: that would
+    // resolve a relative URL against the caller's cwd), so a relative yielded
+    // URL joins to the same directory the enumerator was created with.
+    NSString* basePath = [url path];
+    if(!basePath && [url isFileReferenceURL]) {
+        basePath = [[url filePathURL] path];
+    }
     // roothide logos cannot parse block literals inside %orig(...) args.
     BOOL (^filteredHandler)(NSURL *, NSError *) = ^BOOL(NSURL *childURL, NSError *childError) {
         // Suppress errors for restricted entries: the app handler must not
         // learn about (or be able to react to) hidden subtrees.
-        if(shdw_enumerated_url_hidden(childURL) || [_shadow isURLRestricted:childURL options:nil]) {
+        if(shdw_enumerated_url_hidden(childURL, basePath) || [_shadow isURLRestricted:childURL options:nil]) {
             return NO;  // continue enumeration, do not call the app handler
         }
 
@@ -500,7 +587,7 @@ static BOOL shdw_has_restricted_descendant(NSString* path, NSDictionary* options
     NSDirectoryEnumerator* result = %orig(url, keys, mask, filteredHandler);
     
     if(result) {
-        objc_setAssociatedObject(result, _NSDirectoryEnumerator_shdw_key, [url path], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(result, _NSDirectoryEnumerator_shdw_key, basePath, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
         if(shdw_debug_logging_enabled()) {
             NSLog(@"enumeratorAtURL: %@", url);
@@ -1190,10 +1277,103 @@ static NSString* _shdw_resolveLinkDestination(NSString* linkPath, NSString* dest
 %end
 %end
 
+// Directory listings apply the same visibility policy regardless of the
+// enumerator implementation that produces them.
+@interface NSURLDirectoryEnumerator : NSDirectoryEnumerator
+@end
+
+%group shadowhook_NSURLDirectoryEnumerator
+%hook NSURLDirectoryEnumerator
+- (NSArray *)allObjects __attribute__((annotate("hookkit:allow_inherited"))) {
+    NSString* base = shdw_enumerator_base(self);
+
+    if([_shadow isPathRestricted:base]) {
+        return @[];
+    }
+
+    NSArray* result = %orig;
+
+    return shdw_enumerator_filter_all(result, base);
+}
+
+- (id)nextObject __attribute__((annotate("hookkit:allow_inherited"))) {
+    NSString* base = shdw_enumerator_base(self);
+    NSDictionary* childOptions = shdw_enumerator_child_options(self, base);
+
+    if([_shadow isPathRestricted:base]) {
+        return nil;
+    }
+
+    id result = %orig;
+
+    while(result && shdw_enumerator_item_hidden(result, base, childOptions)) {
+        result = %orig;
+    }
+
+    return result;
+}
+
+- (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state objects:(id __unsafe_unretained *)stackbuf count:(NSUInteger)len __attribute__((annotate("hookkit:allow_inherited"))) {
+    NSString* base = shdw_enumerator_base(self);
+    NSDictionary* childOptions = shdw_enumerator_child_options(self, base);
+
+    if([_shadow isPathRestricted:base]) {
+        return 0;
+    }
+
+    NSUInteger filteredCount = 0;
+
+    while(filteredCount == 0) {
+        shdw_enumerator_batch_release(self, state);
+        state->itemsPtr = stackbuf;
+        NSUInteger fetched = %orig(state, stackbuf, len);
+
+        if(fetched == 0) {
+            return 0;
+        }
+
+        id __unsafe_unretained* batch = state->itemsPtr ? state->itemsPtr : stackbuf;
+
+        if(fetched <= len) {
+            filteredCount = shdw_enumerator_compact(batch, stackbuf, fetched, base, childOptions);
+            state->itemsPtr = stackbuf;
+        } else {
+            NSMutableData* storage = shdw_enumerator_batch_alloc(fetched);
+
+            if(!storage) {
+                return 0;
+            }
+
+            id __unsafe_unretained* filtered = (id __unsafe_unretained*)storage.mutableBytes;
+            filteredCount = shdw_enumerator_compact(batch, filtered, fetched, base, childOptions);
+
+            if(filteredCount == 0) {
+                continue;
+            }
+
+            if(filteredCount <= len) {
+                memcpy(stackbuf, filtered, filteredCount * sizeof(id));
+                state->itemsPtr = stackbuf;
+            } else {
+                shdw_enumerator_batch_store(self, state, storage);
+                state->itemsPtr = filtered;
+            }
+        }
+    }
+
+    return filteredCount;
+}
+%end
+%end
+
 %group shadowhook_NSFileManagerSymbolicLinks
 %hook NSFileManager
 - (NSString *)destinationOfSymbolicLinkAtPath:(NSString *)path error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [_shadow isPathRestricted:path options:_shdw_optionsForAbsolute(self, [path isAbsolutePath])]) {
+    BOOL ext = isCallerExternal();
+    const char* inputPath = [path fileSystemRepresentation];
+    if(ext
+       && ((inputPath && shdw_path_is_external_hidden_nofollow(inputPath))
+           || [_shadow isPathRestricted:path options:_shdw_optionsForNoFollow(self, [path isAbsolutePath])])) {
         if(error) {
             *error = [Shadow fileNoSuchFileErrorForPath:path];
         }
@@ -1203,12 +1383,16 @@ static NSString* _shdw_resolveLinkDestination(NSString* linkPath, NSString* dest
 
     NSString* result = %orig;
 
-    // Both-sides validation: the link is allowed but its destination may
-    // point into a restricted tree. Error names the caller-supplied link.
-    if(result && isCallerExternal()) {
+    // The queried entry's visibility is the only external-hidden gate. A visible
+    // symlink's stored target is caller-readable metadata even when that target
+    // is hidden (or absent). For libc readlink parity, a resolved stored target
+    // that is ruleset-restricted is still denied; external-hidden target text is
+    // not.
+    if(result && ext) {
         NSString* resolvedDest = _shdw_resolveLinkDestination(path, result);
 
-        if(resolvedDest && [_shadow isPathRestricted:resolvedDest options:_shdw_optionsForAbsolute(self, [resolvedDest isAbsolutePath])]) {
+        if(resolvedDest
+           && [_shadow isPathRestricted:resolvedDest options:_shdw_optionsForAbsolute(self, [resolvedDest isAbsolutePath])]) {
             if(error) {
                 *error = [Shadow fileNoSuchFileErrorForPath:path];
             }
@@ -1288,6 +1472,11 @@ void shdw_universal_filesystem_objc(SHDWHookSession* hooks) {
     Method rd = class_getInstanceMethod(fmCls, rdSel);
     if (rd) gShadowReadableOrig = (void*)method_getImplementation(rd);
     %init(shadowhook_NSFileManager);
+    // Apply the same directory-visibility policy to the URL enumerator lane
+    // when the platform provides it.
+    if(objc_getClass("NSURLDirectoryEnumerator")) {
+        %init(shadowhook_NSURLDirectoryEnumerator);
+    }
     if (fm) gShadowFileExistsHook = (void*)method_getImplementation(fm);
     if (!gShadowFileExistsOrig) {
         IMP orig = SHDWOriginalImplementationForMethod(fm);

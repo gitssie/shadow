@@ -1921,39 +1921,27 @@ static char* (*original_realpath_extsn)(const char* pathname, char* resolved_pat
 static char* shdw_realpath_policy(char* (*original)(const char* pathname, char* resolved_path),
                                   const char* pathname, char* resolved_path) {
     // Stock realpath leaves errno untouched on success, so the synthetic
-    // successes below must hand back the caller's own errno; a detector can
-    // prime errno=0 and read it back after the call (class (ii) tell).
+    // successes below must hand back the caller's own errno.
     int caller_errno = errno;
     BOOL ext = isCallerExternal();
 
-    // Deny a hidden/ruleset-restricted input BEFORE the resolver runs. The
-    // resolution is written straight into the caller's buffer, and a deny
-    // after the fact cannot un-write it: Shadow's own component hooks can
-    // fail the resolve AFTER the target was stored, so the caller would keep
-    // the hidden spelling behind a NULL/ENOENT return (measured). Clearing a
-    // supplied buffer is the only way such a deny discloses no target.
+    // Deny hidden/restricted inputs before the resolver can observe them.
     if(ext
        && (shdw_path_is_external_hidden(pathname) || [_shadow isCPathRestricted:pathname])
        && !shdw_path_is_main_bundle_exempt(pathname)) {
         if(resolved_path) {
-            resolved_path[0] = '\0';
+            shdw_realpath_buffer_commit(resolved_path, NULL, PATH_MAX, NO);
         }
         errno = ENOENT;
         return NULL;
     }
 
-    char* result = original(pathname, resolved_path);
+    // The original resolver may write incrementally before failing or before
+    // post-resolution policy can reject its target. Never give it caller
+    // memory: only commit a fully approved spelling below.
+    char scratch[PATH_MAX];
+    char* result = original(pathname, resolved_path ? scratch : NULL);
 
-    // Same reason on the failure lane: a NULL result allocated nothing (so
-    // nothing is freed), but the buffer may already hold the resolution the
-    // resolver gave up on, and it must not survive the error return either.
-    // On a rootless rig the failure itself can be Shadow's: the resolver's own
-    // lstat/readlink calls hit the component hooks that deny the jailbreak-root
-    // backing store (/usr/lib/dyld through procursus), so the post-resolve
-    // branch above never runs. A benign stock system input that still exists
-    // is resolved by its own name instead — never by target. `original_access`
-    // keeps the probe out of the access hook (plain access is the fallback for
-    // the un-hooked lane); a genuinely absent path fails it and stays NULL.
     if(!result) {
         int result_errno = errno;
         if(ext && pathname && shdw_path_under_system_bind_root(pathname)) {
@@ -1964,63 +1952,76 @@ static char* shdw_realpath_policy(char* (*original)(const char* pathname, char* 
             if(stock && stockLen < PATH_MAX) {
                 if(resolved_path == NULL) {
                     char* copy = strdup(stock);
-                    if(copy) {
-                        errno = caller_errno;
-                        return copy;
+                    if(!copy) {
+                        errno = ENOMEM;
+                        return NULL;
                     }
-                } else {
-                    memmove(resolved_path, stock, stockLen + 1);
+                    errno = caller_errno;
+                    return copy;
+                }
+                if(shdw_realpath_buffer_commit(resolved_path, stock, PATH_MAX, YES)) {
                     errno = caller_errno;
                     return resolved_path;
                 }
             }
         }
-        if(ext && resolved_path) {
-            resolved_path[0] = '\0';
+        if(resolved_path) {
+            shdw_realpath_buffer_commit(resolved_path, NULL, PATH_MAX, NO);
         }
         errno = result_errno;
         return NULL;
     }
-
-    if(!ext) {
-        return result;
+    const char* resolved = resolved_path ? scratch : result;
+    if(resolved_path && !memchr(scratch, '\0', sizeof(scratch))) {
+        shdw_realpath_buffer_commit(resolved_path, NULL, PATH_MAX, NO);
+        errno = ENAMETOOLONG;
+        return NULL;
     }
 
-    // A denied realpath must not leave the resolved target in the caller's
-    // own buffer: `result` is that same buffer when resolved_path != NULL,
-    // and only the malloc'd copy is freed below.
+    #define SHDW_REALPATH_APPROVE(SOURCE)                                       \
+        do {                                                                   \
+            if(resolved_path) {                                                 \
+                if(!shdw_realpath_buffer_commit(resolved_path, (SOURCE),        \
+                                                 PATH_MAX, YES)) {              \
+                    errno = ENAMETOOLONG;                                      \
+                    return NULL;                                               \
+                }                                                              \
+                errno = caller_errno;                                          \
+                return resolved_path;                                          \
+            }                                                                  \
+            errno = caller_errno;                                              \
+            return (char *)(SOURCE);                                           \
+        } while(0)
+
+    if(!ext) {
+        SHDW_REALPATH_APPROVE(resolved);
+    }
+
+    // A denied NULL-lane result is malloc'd; a buf-lane result is only in
+    // private scratch and needs no free.
     #define SHDW_REALPATH_DENY(ERR)                                            \
         do {                                                                   \
             errno = (ERR);                                                     \
             if(resolved_path == NULL) {                                        \
                 free(result);                                                  \
             } else {                                                           \
-                resolved_path[0] = '\0';                                       \
+                shdw_realpath_buffer_commit(resolved_path, NULL, PATH_MAX, NO);\
             }                                                                  \
             return NULL;                                                       \
         } while(0)
 
-    if(shdw_path_is_main_bundle_exempt(pathname) || shdw_path_is_main_bundle_exempt(result)) {
-        return result;
+    if(shdw_path_is_main_bundle_exempt(pathname) || shdw_path_is_main_bundle_exempt(resolved)) {
+        SHDW_REALPATH_APPROVE(resolved);
     }
 
-    // The returned path is the fully resolved TARGET: a symlink chain can
-    // land on a hidden object even when the input path is not hidden, so
-    // check the resolved spelling too. The union check covers both namings
-    // of that object — mount point (/usr/lib/...) and bind-mount backing
-    // store (.../.fakelib/..., .../procursus/basebin/...) — the same verdict
-    // the fd/F_GETPATH lanes use.
-    if(shdw_resolved_spelling_hidden(result)) {
+    // Check the resolved spelling too: an alias can land on a hidden object.
+    if(shdw_resolved_spelling_hidden(resolved)) {
         SHDW_REALPATH_DENY(EACCES);
     }
 
-    if([_shadow isCPathRestricted:result]) {
-        // The input passed the pre-call gate, so a ruleset verdict on the
-        // resolved target alone is the rootless bind-mount artifact: the
-        // same benign system object named by its jailbreak-root backing
-        // store (e.g. /usr/lib/dyld through procursus). Answer with the
-        // stock spelling — never that path. Any other restricted target
-        // keeps the pre-existing deny.
+    if([_shadow isCPathRestricted:resolved]) {
+        // A benign stock system input can resolve through a rootless bind
+        // mount to a restricted backing path. Return only its stock spelling.
         const char* stock = shdw_standardize_lexical(pathname);
         size_t stockLen = stock ? strlen(stock) : 0;
         if(!stock || stockLen >= PATH_MAX || !shdw_path_under_system_bind_root(pathname)) {
@@ -2037,14 +2038,16 @@ static char* shdw_realpath_policy(char* (*original)(const char* pathname, char* 
             errno = caller_errno;
             return copy;
         }
-        memmove(resolved_path, stock, stockLen + 1);
+        if(!shdw_realpath_buffer_commit(resolved_path, stock, PATH_MAX, YES)) {
+            SHDW_REALPATH_DENY(EACCES);
+        }
         errno = caller_errno;
         return resolved_path;
     }
 
     #undef SHDW_REALPATH_DENY
-
-    return result;
+    SHDW_REALPATH_APPROVE(resolved);
+    #undef SHDW_REALPATH_APPROVE
 }
 
 static char* replaced_realpath(const char* pathname, char* resolved_path) {
