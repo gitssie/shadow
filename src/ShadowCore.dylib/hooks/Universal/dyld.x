@@ -310,6 +310,11 @@ shdw_restricted_ranges_t _shdw_restricted_ranges_b = { .generation = UINT64_MAX 
 shdw_restricted_ranges_t* _shdw_restricted_ranges_published = &_shdw_restricted_ranges_a;
 static pthread_mutex_t _shdw_restricted_ranges_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// Bumped by every publish. The full rebuild walks the image list unlocked (see
+// there for why), so it uses this to notice that an incremental add/remove
+// event landed mid-walk and must not be overwritten by the older table.
+static _Atomic(uint64_t) _shdw_restricted_ranges_seq = 0;
+
 // Contiguous mapping run that starts at the image's lowest real segment.
 //
 // A plain union over every segment is wrong for images in the dyld shared
@@ -346,7 +351,23 @@ static BOOL shdw_image_span_ex(const struct mach_header* mh, intptr_t slide,
         *outOversized = NO;
     }
 
-    if(!mh || mh->magic != MH_MAGIC_64) {
+    if(!mh) {
+        return NO;
+    }
+
+    // Both Mach-O header shapes: the rootful-legacy lane ships armv7/armv7s
+    // slices, whose images carry MH_MAGIC (0xfeedface) + LC_SEGMENT with 32-bit
+    // vmaddr/vmsize. A 64-bit-only gate rejected every 32-bit header, which
+    // left the restricted-image table empty-but-authoritative on that lane AND
+    // killed the rebind journal's unload prune (no span → no forget_range).
+    // dyld only ever hands out native-endian in-memory headers.
+    BOOL is64;
+
+    if(mh->magic == MH_MAGIC_64) {
+        is64 = YES;
+    } else if(mh->magic == MH_MAGIC) {
+        is64 = NO;
+    } else {
         return NO;
     }
 
@@ -355,32 +376,49 @@ static BOOL shdw_image_span_ex(const struct mach_header* mh, intptr_t slide,
     uintptr_t seg_end[SHDW_SPAN_MAX_SEGMENTS];
     uint32_t seg_count = 0;
 
-    const struct load_command* lc = (const void *)((const struct mach_header_64 *)mh + 1);
+    const struct load_command* lc =
+        (const void *)((const char *)mh +
+                       (is64 ? sizeof(struct mach_header_64)
+                             : sizeof(struct mach_header)));
 
     for(uint32_t j = 0; j < mh->ncmds; j++) {
-        if(lc->cmd == LC_SEGMENT_64) {
+        const char* segname = NULL;
+        uintptr_t vmaddr = 0;
+        uintptr_t vmsize = 0;
+
+        if(is64 && lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64* seg = (const void *)lc;
 
-            if(strcmp(seg->segname, "__PAGEZERO") != 0 && seg->vmsize > 0) {
-                if(seg_count >= SHDW_SPAN_MAX_SEGMENTS) {
-                    // More segments than the run buffer holds. Dropping the
-                    // extras would yield a span that is too SHORT, which reads
-                    // as "not restricted" — the unsafe direction. Refuse to
-                    // answer instead, so the caller marks the table
-                    // unanswerable and lookups use the exact predicate.
-                    if(outOversized) {
-                        *outOversized = YES;
-                    }
+            segname = seg->segname;
+            vmaddr = (uintptr_t) seg->vmaddr;
+            vmsize = (uintptr_t) seg->vmsize;
+        } else if(!is64 && lc->cmd == LC_SEGMENT) {
+            const struct segment_command* seg = (const void *)lc;
 
-                    return NO;
+            segname = seg->segname;
+            vmaddr = (uintptr_t) seg->vmaddr;
+            vmsize = (uintptr_t) seg->vmsize;
+        }
+
+        if(segname && strcmp(segname, "__PAGEZERO") != 0 && vmsize > 0) {
+            if(seg_count >= SHDW_SPAN_MAX_SEGMENTS) {
+                // More segments than the run buffer holds. Dropping the
+                // extras would yield a span that is too SHORT, which reads
+                // as "not restricted" — the unsafe direction. Refuse to
+                // answer instead, so the caller marks the table
+                // unanswerable and lookups use the exact predicate.
+                if(outOversized) {
+                    *outOversized = YES;
                 }
 
-                uintptr_t s = (uintptr_t) seg->vmaddr + (uintptr_t) slide;
-
-                seg_start[seg_count] = s;
-                seg_end[seg_count] = s + (uintptr_t) seg->vmsize;
-                seg_count++;
+                return NO;
             }
+
+            uintptr_t s = vmaddr + (uintptr_t) slide;
+
+            seg_start[seg_count] = s;
+            seg_end[seg_count] = s + vmsize;
+            seg_count++;
         }
 
         lc = (const struct load_command *)((const char *)lc + lc->cmdsize);
@@ -431,8 +469,10 @@ static BOOL shdw_image_span_ex(const struct mach_header* mh, intptr_t slide,
     return YES;
 }
 
-static BOOL shdw_image_span(const struct mach_header* mh, intptr_t slide,
-                            uintptr_t* outBase, uintptr_t* outEnd) {
+// Shared with objc.x's main-image span (same contiguous-run rule; the union
+// walk it replaces both stretched over __PAGEZERO and was 64-bit-only).
+BOOL shdw_image_span(const struct mach_header* mh, intptr_t slide,
+                     uintptr_t* outBase, uintptr_t* outEnd) {
     return shdw_image_span_ex(mh, slide, outBase, outEnd, NULL);
 }
 
@@ -443,6 +483,8 @@ static void shdw_restricted_ranges_publish_locked(const shdw_restricted_ranges_t
 
     *other = *rebuilt;
     __atomic_store_n(&_shdw_restricted_ranges_published, other, __ATOMIC_RELEASE);
+    atomic_fetch_add_explicit(&_shdw_restricted_ranges_seq, 1,
+                              memory_order_acq_rel);
 }
 
 static BOOL shdw_path_is_in_main_bundle(NSString* path) {
@@ -451,57 +493,93 @@ static BOOL shdw_path_is_in_main_bundle(NSString* path) {
         || [path hasPrefix:[bundlePath stringByAppendingString:@"/"]];
 }
 
-// Classify one image path exactly the way -[Shadow isAddrRestricted:] would
-// after resolving an address to it: isCPathRestricted:, the ruleset predicate.
-// NOT isProtectedImagePath: — that one ORs in the Shadow-artifact basename set
-// and would restrict addresses the current predicate allows.
+// Keep loaded-image address classification consistent with Core.
 static BOOL shdw_image_path_is_restricted(const char* path) {
     if(!path) return NO;
-    NSString* imagePath = [NSString stringWithUTF8String:path];
-    return !shdw_path_is_in_main_bundle(imagePath) && [_shadow isCPathRestricted:path];
+    const char* canonical = [_shadow canonicalLoadedImagePath:path];
+    NSString* imagePath = [NSString stringWithUTF8String:canonical];
+    if(shdw_path_is_in_main_bundle(imagePath)) return NO;
+    if(canonical != path && [_shadow isProtectedImagePath:imagePath]) return YES;
+    return [_shadow isCPathRestricted:canonical];
+}
+
+static void shdw_restricted_ranges_invalidate_identity(void) {
+    pthread_mutex_lock(&_shdw_restricted_ranges_lock);
+    shdw_restricted_ranges_t rebuilt = *__atomic_load_n(&_shdw_restricted_ranges_published, __ATOMIC_ACQUIRE);
+    rebuilt.generation = UINT64_MAX;
+    shdw_restricted_ranges_publish_locked(&rebuilt);
+    pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
 }
 
 // Full reclassification of every loaded image. Only run when the table has no
 // usable verdicts — first seed, or after a ruleset reload changed what counts
 // as restricted. Steady state is maintained incrementally by the add/remove
 // image handlers below, so this walk is not on the per-image-event path.
+//
+// The walk runs OUTSIDE _shdw_restricted_ranges_lock: it reaches the
+// restriction engine and Foundation through shdw_image_path_is_restricted, and
+// a first [NSBundle mainBundle] touch can map an image and re-enter the
+// add-image handler on this very thread — which takes the same non-recursive
+// lock. _shdw_restricted_ranges_seq closes the resulting lost update instead:
+// a walk that started before a concurrent add/remove must not publish over the
+// newer table (both would carry the same generation, so lookups could not tell
+// them apart and would trust the stale one).
 static void shdw_restricted_ranges_full_rebuild(void) {
-    uint64_t generation = atomic_load_explicit(&shdw_ruleset_generation, memory_order_acquire);
+    for(int attempt = 0;; attempt++) {
+        uint64_t seq =
+            atomic_load_explicit(&_shdw_restricted_ranges_seq, memory_order_acquire);
+        uint64_t generation = atomic_load_explicit(&shdw_ruleset_generation, memory_order_acquire);
 
-    shdw_restricted_ranges_t rebuilt = { .count = 0, .overflowed = 0, .generation = generation };
-    uint32_t count = _dyld_image_count();
+        shdw_restricted_ranges_t rebuilt = { .count = 0, .overflowed = 0, .generation = generation };
+        uint32_t count = _dyld_image_count();
 
-    for(uint32_t i = 0; i < count; i++) {
-        if(!shdw_image_path_is_restricted(_dyld_get_image_name(i))) {
-            continue;
-        }
-
-        uintptr_t base = 0, end = 0;
-        BOOL oversized = NO;
-
-        if(!shdw_image_span_ex(_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i),
-                               &base, &end, &oversized)) {
-            if(oversized) {
-                // A span this large cannot be trusted to describe one image.
-                // Mark the whole table unanswerable so lookups use the exact
-                // predicate rather than a range that may cover unrelated ones.
-                rebuilt.overflowed = 1;
+        for(uint32_t i = 0; i < count; i++) {
+            if(!shdw_image_path_is_restricted(_dyld_get_image_name(i))) {
+                continue;
             }
 
-            continue;
+            uintptr_t base = 0, end = 0;
+
+            if(!shdw_image_span_ex(_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i),
+                                   &base, &end, NULL)) {
+                // A restricted image with no trustworthy span leaves the table
+                // unable to answer. Oversized or unreadable (unknown header
+                // magic, no usable segment) makes no difference: dropping the
+                // image would publish an authoritative table that answers
+                // "not restricted" for its whole address range. Mark the table
+                // unanswerable so lookups use the exact predicate.
+                rebuilt.overflowed = 1;
+                continue;
+            }
+
+            if(rebuilt.count >= SHADOW_RESTRICTED_IMAGE_MAX) {
+                rebuilt.overflowed = 1;
+                break;
+            }
+
+            rebuilt.range[rebuilt.count++] = (shdw_range_t){ .base = base, .end = end };
         }
 
-        if(rebuilt.count >= SHADOW_RESTRICTED_IMAGE_MAX) {
+        pthread_mutex_lock(&_shdw_restricted_ranges_lock);
+
+        if(atomic_load_explicit(&_shdw_restricted_ranges_seq,
+                                memory_order_acquire) != seq) {
+            if(attempt < 2) {
+                // An image event published mid-walk; its table saw an event
+                // ours did not. Retry rather than overwrite it.
+                pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
+                continue;
+            }
+
+            // Still racing after the retries: refuse to answer instead of
+            // publishing a table that is missing an image.
             rebuilt.overflowed = 1;
-            break;
         }
 
-        rebuilt.range[rebuilt.count++] = (shdw_range_t){ .base = base, .end = end };
+        shdw_restricted_ranges_publish_locked(&rebuilt);
+        pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
+        return;
     }
-
-    pthread_mutex_lock(&_shdw_restricted_ranges_lock);
-    shdw_restricted_ranges_publish_locked(&rebuilt);
-    pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
 }
 
 // One image was mapped: classify just it and append if restricted. Idempotent
@@ -509,26 +587,23 @@ static void shdw_restricted_ranges_full_rebuild(void) {
 // span, and the table is small enough that the dedupe scan is free.
 void shdw_restricted_ranges_note_add(const struct mach_header* mh, intptr_t slide, const char* path) {
     uintptr_t base = 0, end = 0;
-    BOOL oversized = NO;
 
     if(!shdw_image_path_is_restricted(path)) {
         return;
     }
 
-    if(!shdw_image_span_ex(mh, slide, &base, &end, &oversized)) {
-        if(oversized) {
-            // Same reasoning as the full rebuild: an untrustworthy span makes
-            // the published table unable to answer, so lookups fall back to
-            // the exact predicate instead of reading a range that may cover
-            // unrelated images.
-            pthread_mutex_lock(&_shdw_restricted_ranges_lock);
+    if(!shdw_image_span_ex(mh, slide, &base, &end, NULL)) {
+        // Same reasoning as the full rebuild: a restricted image that cannot be
+        // spanned makes the published table unable to answer, so lookups fall
+        // back to the exact predicate instead of treating its addresses as
+        // unrestricted.
+        pthread_mutex_lock(&_shdw_restricted_ranges_lock);
 
-            shdw_restricted_ranges_t marked = *__atomic_load_n(&_shdw_restricted_ranges_published, __ATOMIC_ACQUIRE);
-            marked.overflowed = 1;
-            shdw_restricted_ranges_publish_locked(&marked);
+        shdw_restricted_ranges_t marked = *__atomic_load_n(&_shdw_restricted_ranges_published, __ATOMIC_ACQUIRE);
+        marked.overflowed = 1;
+        shdw_restricted_ranges_publish_locked(&marked);
 
-            pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
-        }
+        pthread_mutex_unlock(&_shdw_restricted_ranges_lock);
 
         return;
     }
@@ -852,6 +927,8 @@ static const char* replaced_dyld_image_path_containing_address(const void* addr)
         return NULL;
     }
 
+    result = [_shadow canonicalLoadedImagePath:result];
+
     // Restricted address: report "in no image" (NULL) — the executable-path
     // fake was a contradiction a detector could fingerprint (plan Wave 1c).
     if([_shadow isProtectedImagePath:@(result)]) {
@@ -1075,9 +1152,15 @@ static BOOL shdw_dlopen_resolution_denied(const char* path, const void* callerAd
     return NO;
 }
 
+static SHDWHookSession *_shdw_dyld_rebind_session;
+
 static void* shdw_dlopen_completed(void* handle, const char* path, int mode) {
     // Completion follows initializers, unlike the add-image notification.
     if(handle && path && !(mode & RTLD_NOLOAD)) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+        }
         [SHDWHookCoordinator shdw_requestPendingTargetDrain];
     }
     return handle;
@@ -1194,7 +1277,6 @@ static void shdw_dyld_deliver_external(dispatch_block_t callback) {
     }
 }
 
-static SHDWHookSession *_shdw_dyld_rebind_session;
 static BOOL _shdw_dyld_bulk_repair_available;
 static BOOL _shdw_dyld_bulk_registration_replay;
 static NSMutableDictionary<NSValue *, NSNumber *> *_shdw_dyld_pending_image_loads;
@@ -1208,6 +1290,9 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
     NSArray *handlers = nil;
 
     const char* image_path = dyld_image_path_containing_address(mh);
+    if([_shadow registerLoadedImage:mh path:image_path]) {
+        shdw_restricted_ranges_invalidate_identity();
+    }
 
     // The dyld image list changed: refresh the app-bundle spans, if this image
     // is one that can change them.
@@ -1219,7 +1304,7 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
     // protected-name predicate also catches Shadow's own artifacts that the
     // ruleset may not cover.
     if(image_path) {
-        NSString* path = [NSString stringWithUTF8String:image_path];
+        NSString* path = [NSString stringWithUTF8String:[_shadow canonicalLoadedImagePath:image_path]];
 
         // isProtectedImagePath: is isCPathRestricted: OR the Shadow-artifact
         // basename set, so a NO here is a NO for the restricted-span table
@@ -1274,6 +1359,12 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
         }
     }
 
+    if(!_shdw_dyld_replay_in_progress) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+        }
+    }
     if(!_shdw_dyld_bulk_repair_available && shdw_detector_present && !_shdw_dyld_replay_in_progress) {
         SHADOW_INTERNAL_SCOPE {
             shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
@@ -1300,6 +1391,9 @@ void shdw_universal_dyld_updatelibs_r(const struct mach_header* mh, intptr_t vma
     }
 
     [_shdw_dyld_pending_image_loads removeObjectForKey:[NSValue valueWithPointer:mh]];
+    if([_shadow unregisterLoadedImage:mh]) {
+        shdw_restricted_ranges_invalidate_identity();
+    }
 
     // The dyld image list changed: refresh the app-bundle spans, if this image
     // is one that can change them. On the remove path the image is already
@@ -1740,6 +1834,7 @@ static int replaced_dladdr(const void* addr, Dl_info* info) {
            !shdw_is_shadow_runtime_image(originalInfo.dli_fname)) {
             if(info) {
                 *info = originalInfo;
+                info->dli_fname = [_shadow canonicalLoadedImagePath:info->dli_fname];
             }
             return originalResult;
         }
@@ -1760,6 +1855,9 @@ static int replaced_dladdr(const void* addr, Dl_info* info) {
         return 0;
     }
 
+    if(result && info && info->dli_fname) {
+        info->dli_fname = [_shadow canonicalLoadedImagePath:info->dli_fname];
+    }
     return result;
 }
 
@@ -2134,6 +2232,12 @@ static void (*shdw_bulk_load_cbs[SHADOW_MAX_BULK_LOAD_CBS])(unsigned imageCount,
 static void shdw_bulk_load_handler(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]) {
     if(_shdw_dyld_bulk_registration_replay) return;
     SHDWRebindRepairSlots();
+    if(!_shdw_dyld_replay_in_progress) {
+        SHADOW_INTERNAL_SCOPE {
+            shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+        }
+    }
     if(shdw_detector_present && !_shdw_dyld_replay_in_progress) {
         SHADOW_INTERNAL_SCOPE {
             shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
@@ -2269,7 +2373,8 @@ static void replaced_dyld_process_info_get_images(shdw_dyld_process_info_t info,
     uint32_t total = *infoCount;
 
     for(uint32_t i = 0; i < total; i++) {
-        if(shdw_dyld_path_restricted(images[i].imagePath) || shdw_addr_is_restricted(images[i].imageLoadAddress)) {
+        const char* canonical = [_shadow canonicalLoadedImagePath:images[i].imagePath];
+        if(shdw_dyld_path_restricted(canonical) || shdw_addr_is_restricted(images[i].imageLoadAddress)) {
             continue;
         }
 
@@ -2277,6 +2382,7 @@ static void replaced_dyld_process_info_get_images(shdw_dyld_process_info_t info,
             images[kept] = images[i];
         }
 
+        images[kept].imagePath = canonical;
         kept++;
     }
 
@@ -2342,6 +2448,12 @@ static void replaced_dyld_process_info_get_image_path(shdw_dyld_process_info_t i
     }
 
     original_dyld_process_info_get_image_path(info, image, buffer, bufferSize);
+    if(buffer && bufferSize && memchr(buffer, '\0', bufferSize)) {
+        const char* canonical = [_shadow canonicalLoadedImagePath:buffer];
+        if(canonical != buffer) {
+            strlcpy(buffer, canonical, bufferSize);
+        }
+    }
 }
 
 static void (*original_dyld_process_info_get_image_uuid)(shdw_dyld_process_info_t info, struct shdw_dyld_process_info_image* image, uuid_t uuid);
@@ -2799,6 +2911,10 @@ void shdw_universal_rebind_image(SHDWHookSession* hooks, const void* imageHeader
         [hooks hookRebindSymbol:@"_dyld_get_image_vmaddr_slide" withReplacement:replaced_dyld_get_image_vmaddr_slide outOldPtr:NULL inCallerImage:imageHeader];
     if(original_dlsym)
         [hooks hookRebindSymbol:@"dlsym" withReplacement:replaced_dlsym outOldPtr:NULL inCallerImage:imageHeader];
+    if(original_NSVersionOfRunTimeLibrary)
+        [hooks hookRebindSymbol:@"NSVersionOfRunTimeLibrary"
+                withReplacement:replaced_NSVersionOfRunTimeLibrary
+                       outOldPtr:NULL inCallerImage:imageHeader];
 }
 
 void shdw_universal_dyld(SHDWHookSession* hooks) {
@@ -3114,7 +3230,10 @@ void shdw_universal_dyld(SHDWHookSession* hooks) {
     void* nsversion_ptr = dlsym(RTLD_DEFAULT, "NSVersionOfRunTimeLibrary");
 
     if(nsversion_ptr) {
-        [hooks hookFunction:nsversion_ptr withReplacement:replaced_NSVersionOfRunTimeLibrary outOldPtr:(void **) &original_NSVersionOfRunTimeLibrary];
+        original_NSVersionOfRunTimeLibrary = (int32_t (*)(const char *))nsversion_ptr;
+        [hooks hookRebindSymbol:@"NSVersionOfRunTimeLibrary"
+                withReplacement:replaced_NSVersionOfRunTimeLibrary
+                       outOldPtr:NULL];
     }
 
     // NSCreateObjectFileImageFromFile: same legacy-loader discipline —

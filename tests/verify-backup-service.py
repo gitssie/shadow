@@ -43,7 +43,7 @@ elif scenario == "truncated":
 elif scenario == "missing":
     emit({"event": "progress", "progress": {"phase": "backup", "bytes": 1}})
 elif scenario == "failure":
-    emit({"ok": False, "error": "fixture rejected operation", "partial": True})
+    emit({"ok": False, "error": "fixture rejected operation", "partial": True, "details": {"kind": "containerOwnership", "containerGroups": ["group.shared"], "sharedAppGroups": ["group.shared"], "sharedGroupOwners": {"group.shared": ["other.app"]}, "ownershipIssues": []}})
 elif scenario == "invalid-base64":
     emit({"ok": True, "result": "!not-base64!"})
 elif scenario == "invalid-plist":
@@ -94,6 +94,7 @@ HARNESS = r'''
 #import "Services/BackupService.h"
 #import "Services/CleanupService.h"
 #import "Services/OperationCoordinator.h"
+#import "Services/BackupPolicy.h"
 #include <sys/wait.h>
 #include <errno.h>
 #include <unistd.h>
@@ -170,6 +171,7 @@ static void Transport(NSDictionary *item) {
         Check(![SHDWOperationCoordinator isRunning],@"transport did not release operation gate");
         if(expected){Check([result[@"request"] isEqual:request],@"base64 binary plist request/result roundtrip");if([item[@"fixture"] isEqual:@"split"])Check(progressCount>0&&lastBytes==17,@"split UTF-8 progress missing");if([item[@"fixture"] isEqual:@"stream"])Check(progressCount>0&&lastBytes==4096,@"stream final progress missing");}
         else Check([error.userInfo[@"stateMayBePartial"] boolValue]==[item[@"partial"] boolValue],[NSString stringWithFormat:@"%@ %@ incorrect partial-state flag %@",action,item[@"fixture"],error]);
+        if([item[@"fixture"] isEqual:@"failure"])Check([error.localizedDescription containsString:@"other.app"]&&[error.localizedDescription containsString:@"group.shared"]&&[error.userInfo[@"helperDetails"][@"kind"] isEqual:@"containerOwnership"],@"ownership details lost in backup transport");
         if([item[@"fixture"] isEqual:@"timeout"])Check(NSProcessInfo.processInfo.systemUptime-start<2,@"transport timeout was unbounded");
         Later(^{int status=0;Check(waitpid(-1,&status,WNOHANG)==-1&&errno==ECHILD,@"helper remained alive/unreaped after completion");Check(completions==1,@"delayed duplicate completion");Next();});
     }];
@@ -214,7 +216,15 @@ static void Next(void) {
     default:Check(notifications>0,@"operation notifications missing");printf("backup service: %lu transport cases, NDJSON bounds, main callbacks, timeout/reaping and shared operation gates passed\n",(unsigned long)completedCases);exit(0);
     }
 }
-int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==2,@"fixture directory argument");fixtures=[NSString stringWithUTF8String:argv[1]];[NSNotificationCenter.defaultCenter addObserverForName:SHDWOperationDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note){(void)note;Check(NSThread.isMainThread,@"coordinator notification off main");notifications++;}];dispatch_async(dispatch_get_main_queue(),^{Next();});while(YES)[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];}return 0;}
+int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==2,@"fixture directory argument");fixtures=[NSString stringWithUTF8String:argv[1]];
+Check(!SHDWBackupCanRestore(@{},YES)&&SHDWBackupCanRestore(@{},NO),@"ordinary same-IDFV restore was enabled");
+NSDictionary *pending=@{@"restorePending":@YES,@"recoverySource":@YES};
+Check(!SHDWBackupCanRestore(pending,YES)&&SHDWBackupCanRestore(pending,NO),@"incomplete restore bypassed identity rule");
+NSDictionary *finalizing=@{@"restorePending":@YES,@"recoverySource":@YES,@"finalizationPending":@YES};
+Check(SHDWBackupCanRestore(finalizing,YES)&&SHDWBackupFinalizationOnly(finalizing,YES)&&!SHDWBackupFinalizationOnly(finalizing,NO),@"pending finalization action unavailable");
+Check(!SHDWBackupCanRestore(@{@"restorePending":@YES},NO),@"unrelated snapshot allowed during pending restore");
+Check(!SHDWBackupCanRestore(@{@"unavailable":@YES,@"recoverySource":@YES,@"finalizationPending":@YES},YES),@"corrupt snapshot became restorable");
+[NSNotificationCenter.defaultCenter addObserverForName:SHDWOperationDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note){(void)note;Check(NSThread.isMainThread,@"coordinator notification off main");notifications++;}];dispatch_async(dispatch_get_main_queue(),^{Next();});while(YES)[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];}return 0;}
 '''
 
 
@@ -230,7 +240,7 @@ def main():
             fixture.chmod(0o700)
         harness = temp / "main.m"
         harness.write_text(HARNESS)
-        sources = [ROOT / "src/Shadow.app/Services" / (name + ".m") for name in ("BackupService", "OperationCoordinator", "CleanupService")]
+        sources = [ROOT / "src/Shadow.app/Services" / (name + ".m") for name in ("BackupService", "OperationCoordinator", "CleanupService", "OwnershipDiagnostics")]
         binary = temp / "check"
         command = ["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-incomplete-implementation", "-framework", "Foundation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1", "-I" + str(ROOT / "src/Shadow.framework/Headers"), "-I" + str(ROOT / "src/Shadow.app"), str(harness), *map(str, sources), "-o", str(binary)]
         subprocess.run(command, check=True)

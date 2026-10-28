@@ -9,6 +9,17 @@ verify-path-rewrite:
 		verify-path-rewrite.c ../src/ShadowCore.dylib/hooks/Universal/path_rewrite.c
 	/tmp/shadow-rewrite-test
 
+verify-runtime-image-identity:
+	$(CC) -std=c11 -Wall -Wextra -Werror RuntimeImageIdentityTests.c -o /tmp/shadow-runtime-image-identity-test
+	/tmp/shadow-runtime-image-identity-test
+
+# Host check for staged realpath output: denied resolutions never reach the
+# caller buffer, while approved strings are copied completely and bounded.
+verify-realpath-buffer:
+	$(CC) -std=c99 -Wall -Wextra -o /tmp/shadow-realpath-buffer-test \
+		verify-realpath-buffer.c ../src/ShadowCore.dylib/hooks/Universal/path_rewrite.c
+	/tmp/shadow-realpath-buffer-test
+
 # Host check of the actual fstatat/faccessat hook bodies with policy doubles.
 verify-at-path-rewrite:
 	python3 verify-at-path-rewrite.py
@@ -16,6 +27,14 @@ verify-at-path-rewrite:
 # Host check of the actual lexical path standardizer with pinned spellings.
 verify-path-standardize:
 	python3 verify-path-standardize.py
+
+verify-stock-cryptex:
+	python3 verify-stock-cryptex.py
+
+verify-cryptex-standardize:
+	python3 verify-cryptex-standardize.py
+
+.PHONY: verify-stock-cryptex verify-cryptex-standardize
 
 # Host check of the actual fresh fd/DIR path-policy bodies with mutation doubles.
 verify-fd-path-freshness:
@@ -42,9 +61,15 @@ verify-mount-filter:
 verify-image-span:
 	python3 verify-image-span.py
 
+# Host check of the actual KERN_PROCARGS2 payload filter, driven with payloads
+# in the kernel's documented string layout (and with the pointer-array shape it
+# must never trust again).
+verify-procargs-filter:
+	python3 verify-procargs-filter.py
+
 # Pure-C check for the anti-fishhook journal/repair core (rebind_slots.h).
 verify-rebind-repair:
-	$(CC) -std=c99 -Wall -Wextra -o /tmp/shadow-rebind-test \
+	$(CC) -std=c99 -Wall -Wextra -pthread -o /tmp/shadow-rebind-test \
 		verify-rebind-repair.c
 	/tmp/shadow-rebind-test
 	$(CC) -std=c99 -Wall -Wextra -Werror verify-rebind-import-index.c -o /tmp/shadow-rebind-import-index-test
@@ -85,11 +110,14 @@ verify-fingerprint:
 	python3 verify-fingerprint-raw-memory.py
 	python3 verify-fingerprint-system-version.py
 	python3 verify-fingerprint-idfv.py
+	python3 verify-fingerprint-identity-settings.py
+	python3 verify-fingerprint-identity-storage.py
 	python3 verify-fingerprint-storage.py
 	python3 verify-map-defaults.py
 	python3 verify-fingerprint-interfaces.py
 	python3 verify-receipts.py
 	python3 verify-fingerprint-memory.py
+	python3 verify-fingerprint-environment.py
 	python3 verify-fingerprint-version.py
 	python3 verify-fingerprint-webkit.py
 	python3 verify-web-clipboard.py
@@ -97,7 +125,10 @@ verify-fingerprint:
 .PHONY: verify-fingerprint
 
 verify-cleanup:
+	python3 verify-process-stop.py
 	python3 verify-cleanup-engine.py
+	python3 verify-ownership-diagnostics.py
+	python3 verify-entitlement-der.py
 	python3 verify-cleanup-service.py
 
 .PHONY: verify-cleanup
@@ -105,6 +136,9 @@ verify-cleanup:
 # Optional macOS integration check of the actual AppState archive and store.
 verify-app-state:
 	python3 verify-app-state.py
+	python3 verify-archive-links.py
+	python3 verify-app-state-progress.py
+	python3 verify-state-durability.py
 
 .PHONY: verify-app-state
 
@@ -128,12 +162,12 @@ verify-rules-generation:
 verify-binary-compat:
 	bash BinaryCompatTests.sh
 
-test: verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
+test: verify-runtime-image-identity verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-stock-cryptex verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
 
 clean:
 	rm -f harness harness.d
 
-.PHONY: test verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
+.PHONY: test verify-runtime-image-identity verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
 
 # Optional CoreFoundation host check of the shared image-header index.
 image-header-index:
@@ -153,3 +187,20 @@ network-queries:
 	python3 verify-network-queries.py
 
 .PHONY: network-queries
+
+.PHONY: verify-ip-switch
+verify-ip-switch:
+	python3 verify-ip-switch-config.py
+	python3 verify-ip-switch.py
+
+ifeq ($(shell uname -s),Darwin)
+verify-loaded-image-registry:
+	$(CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -framework Foundation -I../src/Shadow.framework/Headers LoadedImageRegistryTests.m ../src/Shadow.framework/LoadedImageRegistry.m -o /tmp/shadow-loaded-image-registry-test
+	/tmp/shadow-loaded-image-registry-test
+
+test: verify-loaded-image-registry
+else
+verify-loaded-image-registry:
+	@echo "SKIP: loaded image registry host checks require macOS Foundation"
+endif
+.PHONY: verify-loaded-image-registry

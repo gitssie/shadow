@@ -1114,13 +1114,21 @@ BOOL shdw_at_path_denied(int dirfd, const char *pathname) {
       return YES;
     }
 
+    // A spelling that cannot be represented as a string cannot be judged by the
+    // string-keyed engine (and a nil would raise inside a dictionary literal).
+    // Fail closed, like the sibling resolver below does for an unresolvable
+    // parent: never expose an entry unclassified.
     NSString *path = [NSString stringWithUTF8String:pathname];
+    NSString *workingDir = [NSString stringWithUTF8String:parent];
+
+    if (!path || !workingDir) {
+      errno = ENOENT;
+      return YES;
+    }
+
     BOOL restricted =
         [_shadow isPathRestricted:path
-                          options:@{
-                            kShadowRestrictionWorkingDir :
-                                [NSString stringWithUTF8String:parent]
-                          }];
+                          options:@{kShadowRestrictionWorkingDir : workingDir}];
 
     if (restricted) {
       errno = ENOENT;
@@ -1171,12 +1179,20 @@ BOOL shdw_at_path_denied_nofollow(int dirfd, const char *pathname) {
     // Dirfd-joined spelling judged as named (NoFollow): the parent is
     // already kernel-resolved, so resolving again could only re-name
     // the entry the kernel will move.
+    // Same rule as the resolving twin: an unrepresentable spelling cannot be
+    // judged, and a nil would raise inside the dictionary literal.
     NSString *path = [NSString stringWithUTF8String:pathname];
+    NSString *workingDir = [NSString stringWithUTF8String:parent];
+
+    if (!path || !workingDir) {
+      errno = ENOENT;
+      return YES;
+    }
+
     BOOL restricted =
         [_shadow isPathRestricted:path
                           options:@{
-                            kShadowRestrictionWorkingDir :
-                                [NSString stringWithUTF8String:parent],
+                            kShadowRestrictionWorkingDir : workingDir,
                             kShadowRestrictionNoFollow : @YES
                           }];
 
@@ -1224,9 +1240,18 @@ NSDictionary *shdw_readdir_options(DIR *dirp, BOOL *denied) {
       shdw_resolve_dirfd_path(dirfd(dirp), ".", pathname, sizeof(pathname));
 
   if (status == SHADW_DIRFD_OK) {
-    NSDictionary *options = @{
-      kShadowRestrictionWorkingDir : [NSString stringWithUTF8String:pathname]
-    };
+    // A parent path that cannot be represented as a string cannot drive the
+    // string-keyed engine, and a nil would raise inside the dictionary
+    // literal. Same verdict as an unresolvable DIR*: entries are hidden.
+    NSString *workingDir = [NSString stringWithUTF8String:pathname];
+
+    if (!workingDir) {
+      *denied = YES;
+      errno = ENOENT;
+      return nil;
+    }
+
+    NSDictionary *options = @{kShadowRestrictionWorkingDir : workingDir};
     errno = saved_errno;
     return (__bridge NSDictionary *)CFRetain((__bridge CFDictionaryRef)options);
   }
@@ -1267,14 +1292,27 @@ BOOL shdw_readlink_target_restricted(int dirfd, const char *pathname,
       return YES;
     }
 
-    linkPath = [[NSString stringWithUTF8String:parent]
-        stringByAppendingPathComponent:[NSString
-                                           stringWithUTF8String:pathname]];
+    NSString *parentString = [NSString stringWithUTF8String:parent];
+    NSString *leafString = [NSString stringWithUTF8String:pathname];
+
+    if (!parentString || !leafString) {
+      // Unrepresentable spelling: the join below would be nil and the verdict
+      // would silently fall through to "not restricted". Fail closed, same as
+      // an unresolvable parent.
+      return YES;
+    }
+
+    linkPath = [parentString stringByAppendingPathComponent:leafString];
+  }
+
+  NSString *targetString = [NSString stringWithUTF8String:target];
+
+  if (!linkPath || !targetString) {
+    return YES; // unrepresentable join: never exposed unclassified
   }
 
   NSString *joined = [[[linkPath stringByDeletingLastPathComponent]
-      stringByAppendingPathComponent:[NSString stringWithUTF8String:target]]
-      stringByStandardizingPath];
+      stringByAppendingPathComponent:targetString] stringByStandardizingPath];
 
   return [_shadow isCPathRestricted:[joined fileSystemRepresentation]];
 }

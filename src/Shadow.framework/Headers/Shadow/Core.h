@@ -73,6 +73,9 @@ __attribute__((visibility("default")))
 - (NSArray<NSString *> *)shdwAuditWouldDenyPaths;
 
 - (BOOL)isAddrRestricted:(const void *)addr;
+- (BOOL)registerLoadedImage:(const void *)header path:(const char *)path;
+- (BOOL)unregisterLoadedImage:(const void *)header;
+- (const char *)canonicalLoadedImagePath:(const char *)path;
 
 - (BOOL)isCPathRestricted:(const char *)path;
 // Absolute mount names: current snapshot, lexical matching, no refresh/resolve.

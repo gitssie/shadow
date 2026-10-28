@@ -73,7 +73,7 @@
     cell.accessibilityLabel = app.name;
     BOOL locked = [[SHDWFingerprintStore sharedStore] lockedForApplication:app.bundleIdentifier];
     UIImageView *lock = locked ? [[UIImageView alloc] initWithImage:SHDWSymbol(@"lock.fill", 17)] : nil;
-    lock.tintColor = SHDWLockColor(); cell.accessoryView = lock;
+    lock.tintColor = SHDWAccent(); cell.accessoryView = lock;
     cell.selectionStyle = locked ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
     cell.accessibilityHint = locked ? SHDWText(@"Unlock fingerprint before removing application") : nil;
     cell.accessibilityTraits = locked ? UIAccessibilityTraitNotEnabled : UIAccessibilityTraitNone;

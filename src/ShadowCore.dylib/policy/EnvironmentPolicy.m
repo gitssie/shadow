@@ -55,64 +55,37 @@ BOOL shdw_env_entry_hidden(const char *var) {
   return shdw_env_hidden(var, '=');
 }
 
-// Thread-local PATH storage for the getenv view. One thread can't overwrite
-// another's value, and the returned pointer keeps getenv's documented
-// lifetime (valid until the next getenv call on this thread).
-static _Thread_local char *shdw_env_path_storage = NULL;
-static _Thread_local size_t shdw_env_path_capacity = 0;
+// Each thread owns one pthread-key value containing its independent buffers.
+// The destructor receives that value directly: Darwin can tear down C TLS
+// before pthread destructors run, so cleanup must never reread _Thread_local.
+typedef struct {
+  char *path_storage;
+  size_t path_capacity;
+  char *path_cache_input;
+  size_t path_cache_capacity;
+  char **snapshot_filtered;
+  size_t snapshot_filtered_cap;
+  char *snapshot_path;
+  size_t snapshot_path_cap;
+  char *procargs_path;
+  size_t procargs_path_cap;
+} shdw_env_thread_state;
 
-// Cached raw PATH input for shdw_env_sanitized_path: the split/join only
-// reruns when the value differs from this thread's last-seen one. Thread-local
-// like the output storage — a returned pointer keeps its per-thread lifetime,
-// and the setenv/unsetenv hooks below only clear their own thread's entry (a
-// changed PATH on any thread fails the input comparison and recomputes).
-static _Thread_local char *shdw_env_path_cache_input = NULL;
-static _Thread_local size_t shdw_env_path_cache_capacity = 0;
-
-// _NSGetEnviron snapshot storage (shdw_env_filtered_snapshot) and the
-// PROCARGS2 PATH-entry storage (shdw_procargs2_filter). File-scope rather than
-// function-local so the thread-exit destructor below can free them: a
-// per-thread realloc'd buffer left in a bare _Thread_local pointer leaks when
-// the owning thread terminates (destroying the pointer slot does not free what
-// it points at).
-static _Thread_local char **shdw_env_snapshot_filtered = NULL;
-static _Thread_local size_t shdw_env_snapshot_filtered_cap = 0;
-static _Thread_local char *shdw_env_snapshot_path = NULL;
-static _Thread_local size_t shdw_env_snapshot_path_cap = 0;
-static _Thread_local char *shdw_env_procargs_path = NULL;
-static _Thread_local size_t shdw_env_procargs_path_cap = 0;
-
-// Thread-exit cleanup for the per-thread env buffers above. pthread destructors
-// run on the terminating thread, so these file-scope _Thread_local pointers
-// resolve to that thread's copies and can be freed directly. Long-lived threads
-// (GCD workers) keep their peak buffers until exit either way — this reclaims
-// buffers from threads that are actually torn down (thread-pool churn).
 static pthread_key_t shdw_env_tls_key;
 static pthread_once_t shdw_env_tls_once = PTHREAD_ONCE_INIT;
 static int shdw_env_tls_key_error;
 
-static void shdw_env_tls_destructor(void *unused) {
-  (void)unused;
-
-  free(shdw_env_path_storage);
-  shdw_env_path_storage = NULL;
-  shdw_env_path_capacity = 0;
-
-  free(shdw_env_path_cache_input);
-  shdw_env_path_cache_input = NULL;
-  shdw_env_path_cache_capacity = 0;
-
-  free(shdw_env_snapshot_filtered);
-  shdw_env_snapshot_filtered = NULL;
-  shdw_env_snapshot_filtered_cap = 0;
-
-  free(shdw_env_snapshot_path);
-  shdw_env_snapshot_path = NULL;
-  shdw_env_snapshot_path_cap = 0;
-
-  free(shdw_env_procargs_path);
-  shdw_env_procargs_path = NULL;
-  shdw_env_procargs_path_cap = 0;
+static void shdw_env_tls_destructor(void *value) {
+  shdw_env_thread_state *state = value;
+  if (!state) {
+    return;
+  }
+  free(state->path_storage);
+  free(state->path_cache_input);
+  free(state->snapshot_filtered);
+  free(state->snapshot_path);
+  free(state->procargs_path);
+  free(state);
 }
 
 static void shdw_env_tls_key_init(void) {
@@ -120,18 +93,22 @@ static void shdw_env_tls_key_init(void) {
       pthread_key_create(&shdw_env_tls_key, shdw_env_tls_destructor);
 }
 
-// Arm the destructor for this thread. Cheap and idempotent: the key value only
-// needs to be non-NULL for the destructor to fire at thread exit. Register
-// before allocating so failure cannot leave unowned buffers or touch an invalid
-// key.
-static BOOL shdw_env_tls_arm(void) {
+// Read-only callers do not allocate. Publish ownership before any buffer is
+// allocated, and leave failed setup retryable without leaking its state.
+static shdw_env_thread_state *shdw_env_tls_get(BOOL create) {
   pthread_once(&shdw_env_tls_once, shdw_env_tls_key_init);
-
   if (shdw_env_tls_key_error) {
-    return NO;
+    return NULL;
   }
-  return pthread_getspecific(shdw_env_tls_key) ||
-         pthread_setspecific(shdw_env_tls_key, (void *)1) == 0;
+  shdw_env_thread_state *state = pthread_getspecific(shdw_env_tls_key);
+  if (!state && create) {
+    state = calloc(1, sizeof(*state));
+    if (state && pthread_setspecific(shdw_env_tls_key, state) != 0) {
+      free(state);
+      return NULL;
+    }
+  }
+  return state;
 }
 
 // Shared PATH component filter for every environment surface. The callers
@@ -160,12 +137,13 @@ static NSString *shdw_env_filtered_path_string(NSString *value, BOOL *changed) {
 // storage. An unchanged PATH (same raw value as the last call) returns the
 // cached sanitized result without re-splitting/re-joining.
 char *shdw_env_sanitized_path(const char *value) {
-  if (!value || !shdw_env_tls_arm()) {
+  shdw_env_thread_state *state = value ? shdw_env_tls_get(YES) : NULL;
+  if (!state) {
     return (char *)value;
   }
-  if (shdw_env_path_cache_input &&
-      strcmp(value, shdw_env_path_cache_input) == 0) {
-    return shdw_env_path_storage; // PATH unchanged: cached sanitized result
+  if (state->path_cache_input &&
+      strcmp(value, state->path_cache_input) == 0) {
+    return state->path_storage; // PATH unchanged: cached sanitized result
   }
 
   NSString *raw = [NSString stringWithUTF8String:value];
@@ -177,8 +155,8 @@ char *shdw_env_sanitized_path(const char *value) {
   NSString *filtered = shdw_env_filtered_path_string(raw, &changed);
   size_t len = [filtered lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1;
 
-  if (len > shdw_env_path_capacity) {
-    char *grown = realloc(shdw_env_path_storage, len);
+  if (len > state->path_capacity) {
+    char *grown = realloc(state->path_storage, len);
 
     if (!grown) {
       // OOM: fall back to the original value rather than returning a
@@ -186,31 +164,31 @@ char *shdw_env_sanitized_path(const char *value) {
       return (char *)value;
     }
 
-    shdw_env_path_storage = grown;
-    shdw_env_path_capacity = len;
+    state->path_storage = grown;
+    state->path_capacity = len;
   }
 
-  strcpy(shdw_env_path_storage, filtered.UTF8String);
+  strcpy(state->path_storage, filtered.UTF8String);
 
   // Remember the raw input for the next call.
   size_t input_len = strlen(value) + 1;
 
-  if (input_len > shdw_env_path_cache_capacity) {
-    char *grown = realloc(shdw_env_path_cache_input, input_len);
+  if (input_len > state->path_cache_capacity) {
+    char *grown = realloc(state->path_cache_input, input_len);
 
     if (!grown) {
-      free(shdw_env_path_cache_input);
-      shdw_env_path_cache_input = NULL;
-      shdw_env_path_cache_capacity = 0;
-      return shdw_env_path_storage; // OOM: no caching, next call recomputes
+      free(state->path_cache_input);
+      state->path_cache_input = NULL;
+      state->path_cache_capacity = 0;
+      return state->path_storage; // OOM: no caching, next call recomputes
     }
 
-    shdw_env_path_cache_input = grown;
-    shdw_env_path_cache_capacity = input_len;
+    state->path_cache_input = grown;
+    state->path_cache_capacity = input_len;
   }
 
-  strcpy(shdw_env_path_cache_input, value);
-  return shdw_env_path_storage;
+  strcpy(state->path_cache_input, value);
+  return state->path_storage;
 }
 
 #ifndef SHADOW_TEST_HARNESS
@@ -343,9 +321,13 @@ void shdw_env_capture_real_environ(char ***realCell) {
 // calling thread's PATH cache entry is cleared; other threads' entries fail
 // the input comparison on their next call.)
 static void shdw_env_path_cache_invalidate(void) {
-  free(shdw_env_path_cache_input);
-  shdw_env_path_cache_input = NULL;
-  shdw_env_path_cache_capacity = 0;
+  shdw_env_thread_state *state = shdw_env_tls_get(NO);
+  if (!state) {
+    return;
+  }
+  free(state->path_cache_input);
+  state->path_cache_input = NULL;
+  state->path_cache_capacity = 0;
 }
 
 static int (*original_setenv)(const char *name, const char *value,
@@ -435,13 +417,13 @@ NSDictionary *shdw_env_sanitized_dictionary(NSDictionary *result) {
   NSMutableDictionary *filtered_result = [result mutableCopy];
 
   // Stock iOS never has these set; their presence is the jailbreak signal
-  // a detector reads back from the cached environment (same set as the
-  // getenv/*environ views).
+  // a detector reads back from the cached environment. Driven by the same name
+  // predicate every other channel uses (getenv, the *environ views, the
+  // KERN_PROCARGS2 payload) so the sets cannot drift apart again — this list
+  // had already lost BOOTSTRAP_PREFIX, which getenv() hid and this dictionary
+  // still returned.
   for (NSString *key in [filtered_result allKeys]) {
-    if ([key hasPrefix:@"DYLD_"] || [key hasPrefix:@"JAILBREAKD_"] ||
-        [key isEqualToString:@"_MSSafeMode"] ||
-        [key isEqualToString:@"_SafeMode"] ||
-        [key isEqualToString:@"_SubstituteSafeMode"]) {
+    if (shdw_env_name_hidden([key UTF8String])) {
       [filtered_result removeObjectForKey:key];
     }
   }
@@ -500,7 +482,8 @@ NSArray<NSString *> *shdw_env_sanitized_argv(NSArray<NSString *> *result) {
 // environ pointer is never modified (callers may write through the returned
 // pointer; ours is private storage).
 char ***shdw_env_filtered_snapshot(char **raw) {
-  if (!raw || !shdw_env_tls_arm()) {
+  shdw_env_thread_state *state = raw ? shdw_env_tls_get(YES) : NULL;
+  if (!state) {
     return NULL;
   }
 
@@ -514,12 +497,12 @@ char ***shdw_env_filtered_snapshot(char **raw) {
   // threads calling _NSGetEnviron at once) is a use-after-free. The
   // returned pointer follows getenv-style per-thread lifetime semantics —
   // valid until this thread's next call — which is what callers expect.
-  // Buffers are file-scope so the thread-exit destructor frees them.
-  char **filtered = shdw_env_snapshot_filtered;
-  char *path_entry_storage = shdw_env_snapshot_path;
-  size_t path_entry_capacity = shdw_env_snapshot_path_cap;
+  // The pthread-owned state keeps every allocation reachable until exit.
+  char **filtered = state->snapshot_filtered;
+  char *path_entry_storage = state->snapshot_path;
+  size_t path_entry_capacity = state->snapshot_path_cap;
 
-  if (shdw_env_snapshot_filtered_cap < count + 1) {
+  if (state->snapshot_filtered_cap < count + 1) {
     char **grown = realloc(filtered, (count + 1) * sizeof(char *));
 
     if (!grown) {
@@ -527,8 +510,8 @@ char ***shdw_env_filtered_snapshot(char **raw) {
     }
 
     filtered = grown;
-    shdw_env_snapshot_filtered = grown;
-    shdw_env_snapshot_filtered_cap = count + 1;
+    state->snapshot_filtered = grown;
+    state->snapshot_filtered_cap = count + 1;
   }
 
   size_t out = 0;
@@ -545,8 +528,8 @@ char ***shdw_env_filtered_snapshot(char **raw) {
       // The sanitizer may have realloc'd the PATH storage; persist the
       // (possibly moved) pointer/capacity so the destructor frees it and
       // the next call reuses it.
-      shdw_env_snapshot_path = path_entry_storage;
-      shdw_env_snapshot_path_cap = path_entry_capacity;
+      state->snapshot_path = path_entry_storage;
+      state->snapshot_path_cap = path_entry_capacity;
 
       if (sanitized) {
         filtered[out++] = sanitized;
@@ -559,24 +542,34 @@ char ***shdw_env_filtered_snapshot(char **raw) {
 
   filtered[out] = NULL;
 
-  // Return the address of the file-scope thread-local pointer, not a local:
+  // Return the address of the pointer in the thread-owned state, not a local:
   // callers dereference this to get the char** (environ shape), and it must
   // stay valid until this thread's next call.
-  return &shdw_env_snapshot_filtered;
+  return &state->snapshot_filtered;
 }
 
-// KERN_PROCARGS2 payload filter (self pid): the kernel payload encodes
-// [int argc][char* argv[argc+1]][char* envp...][strings blob], argv/envp
-// pointers referencing the strings blob. The kernel view carries the
-// launch-time injection flags and the unfiltered environment while
-// -[NSProcessInfo arguments] / getenv() / _NSGetEnviron() report the
-// filtered view — a detector comparing the two channels sees the
-// contradiction. When the views differ, the payload is rebuilt in place with
+// KERN_PROCARGS2 payload filter (self pid).
+//
+// Payload layout, straight from xnu's sysctl_procargsx (bsd/kern/kern_sysctl.c:
+// the argc word, then the copied stack string area — no pointer array anywhere,
+// which is what this filter used to assume, so it never matched a real payload
+// and the launch environment stayed readable):
+//
+//   [int argc][exec_path\0][NUL alignment padding]
+//   [argc argument strings][environment strings]
+//
+// Every string NUL-terminated and contiguous to the end of the buffer; the
+// kernel pads the bare exec path with extra NULs. A consumer walks argc strings
+// after the padding (argv[0] first) and treats the rest as the environment.
+// The kernel view carries the launch-time injection flags and the unfiltered
+// environment while -[NSProcessInfo arguments] / getenv() / _NSGetEnviron()
+// report the filtered view — a detector comparing the two channels sees the
+// contradiction. When the views differ, the strings are compacted in place with
 // the SAME drop rules as those hooks: injection flags (with their value),
-// restricted paths, DYLD_*/JAILBREAKD_*/safe-mode env entries and jailbreak
-// PATH components. The strings blob is memmoved down, every kept pointer
-// into it is shifted by the compaction amount, and a sanitized PATH= entry
-// is written in place when it changed. Malformed payloads pass through
+// restricted path arguments, DYLD_*/JAILBREAKD_*/safe-mode/BOOTSTRAP_PREFIX env
+// entries and jailbreak PATH components. PATH is written back over its own
+// bytes (the sanitized value is always shorter, so the payload never grows) and
+// *oldlenp shrinks by the bytes removed. Malformed payloads pass through
 // untouched.
 void shdw_procargs2_filter(void *oldp, size_t *oldlenp) {
   @autoreleasepool {
@@ -587,185 +580,175 @@ void shdw_procargs2_filter(void *oldp, size_t *oldlenp) {
     size_t len = *oldlenp;
     char *base = (char *)oldp;
 
-    if (len < sizeof(int) + sizeof(char *)) {
+    if (len < sizeof(int) + 2) {
       return;
     }
 
     int argc = ((int *)base)[0];
-    char **argv = (char **)(base + sizeof(int));
 
-    if (argc <= 0) {
+    if (argc < 0) {
       return;
     }
 
-    size_t argv_slots = (size_t)argc + 1;
+    char *cur = base + sizeof(int);
+    char *end = base + len;
 
-    if (sizeof(int) + argv_slots * sizeof(char *) + sizeof(char *) > len) {
-      return; // no room for the envp terminator: malformed
+    // Exec path, then its alignment padding. Shape-refuse anything the kernel
+    // never emits: an unterminated path, an empty one, or a relative one (the
+    // kernel always writes the absolute path of the executable). Refusing is
+    // the pre-fix behaviour for payloads this filter does not model, which is
+    // the safe direction — the alternative would be compacting bytes whose
+    // layout we only guessed.
+    size_t exec_len = strnlen(cur, (size_t)(end - cur));
+
+    if (cur + exec_len >= end || exec_len == 0 || cur[0] != '/') {
+      return;
     }
 
-    char **envp = argv + argv_slots;
-    size_t envp_count = 0;
-    size_t max_env =
-        (len - (sizeof(int) + argv_slots * sizeof(char *))) / sizeof(char *);
+    cur += exec_len + 1;
 
-    while (envp_count < max_env && envp[envp_count] != NULL) {
-      envp_count++;
+    while (cur < end && *cur == '\0') {
+      cur++;
     }
 
-    if (envp_count == max_env) {
-      return; // envp terminator missing from the payload: malformed
+    if (cur >= end) {
+      return;
     }
-
-    char *blob_start = (char *)envp + (envp_count + 1) * sizeof(char *);
-    char *blob_end = base + len;
 
     // ---- argv drop decisions (mirrors -[NSProcessInfo arguments]) ----
-    BOOL *keep = (BOOL *)calloc((size_t)argc, sizeof(BOOL));
+    // Two passes: dropping an injection flag also drops the value string that
+    // follows it, and the compaction below must not have to reason about that
+    // while it moves bytes.
+    BOOL *keep = NULL;
 
-    if (!keep) {
-      return;
+    if (argc > 0) {
+      keep = (BOOL *)calloc((size_t)argc, sizeof(BOOL));
+
+      if (!keep) {
+        return;
+      }
     }
 
-    int new_argc = 0;
+    char *argv_start = cur;
+    int seen = 0;
 
-    for (int i = 0; i < argc; i++) {
-      char *a = argv[i];
+    while (seen < argc && cur < end) {
+      char *a = cur;
+      size_t a_len = strnlen(a, (size_t)(end - a));
 
-      if (a == NULL || a < blob_start || a >= blob_end) {
-        keep[i] = YES; // NULL or unclassifiable: keep
-        new_argc++;
-        continue;
+      if (a + a_len >= end) {
+        break; // unterminated argument: not a payload we understand
       }
 
+      cur = a + a_len + 1;
+
       if ([_shadow isCPathRestricted:a]) {
+        seen++;
         continue; // restricted path argument: drop
       }
 
       if (strcmp(a, "-dylib") == 0 || strcmp(a, "-insert") == 0 ||
           strcmp(a, "-load") == 0 || strcmp(a, "-bundle") == 0 ||
           strcmp(a, "-init") == 0) {
-        if (i + 1 < argc) {
-          i++; // drop the flag's value slot as well
+        if (seen + 1 < argc) {
+          char *value = cur;
+          size_t value_len = strnlen(value, (size_t)(end - value));
+
+          if (value + value_len >= end) {
+            break;
+          }
+
+          cur = value + value_len + 1;
+          seen++; // drop the flag's value slot as well
         }
 
+        seen++;
         continue;
       }
 
-      keep[i] = YES;
-      new_argc++;
+      keep[seen] = YES;
+      seen++;
     }
 
-    // ---- env entries (mirrors getenv/_NSGetEnviron) ----
-    char **env_keep = (char **)malloc((envp_count + 1) * sizeof(char *));
-
-    if (!env_keep) {
+    if (seen != argc) {
+      // The payload does not hold the argc strings its own header claims.
       free(keep);
       return;
     }
 
-    size_t eout = 0;
-    char *sanitized_path = NULL;
-    char *path_blob_ptr = NULL; // blob pointer of the (single) PATH entry
-    // File-scope thread-locals so the thread-exit destructor frees them.
-    char *path_entry_storage = shdw_env_procargs_path;
-    size_t path_entry_capacity = shdw_env_procargs_path_cap;
+    // ---- compact argv (write cursor trails the read cursor) ----
+    char *w = argv_start;
+    char *r = argv_start;
+    int new_argc = 0;
 
-    for (size_t i = 0; i < envp_count; i++) {
-      char *e = envp[i];
+    for (int i = 0; i < argc; i++) {
+      char *a = r;
+      size_t a_len = strnlen(a, (size_t)(end - a));
 
-      if (e == NULL || e < blob_start || e >= blob_end) {
+      r = a + a_len + 1;
+
+      if (!keep[i]) {
         continue;
       }
+
+      if (w != a) {
+        memmove(w, a, a_len + 1);
+      }
+
+      w += a_len + 1;
+      new_argc++;
+    }
+
+    // ---- environment (mirrors getenv/_NSGetEnviron) ----
+    shdw_env_thread_state *state = shdw_env_tls_get(NO);
+    char *path_entry_storage = state ? state->procargs_path : NULL;
+    size_t path_entry_capacity = state ? state->procargs_path_cap : 0;
+
+    while (r < end) {
+      char *e = r;
+      size_t e_len = strnlen(e, (size_t)(end - e));
+
+      if (e + e_len >= end) {
+        // Unterminated tail: keep it verbatim, there is nothing to classify.
+        memmove(w, e, (size_t)(end - e));
+        w += (size_t)(end - e);
+        break;
+      }
+
+      r = e + e_len + 1;
 
       if (shdw_env_entry_hidden(e)) {
         continue;
       }
 
-      if (strncmp(e, "PATH=", 5) == 0 && e[5] && shdw_env_tls_arm()) {
-        // Rewrite the PATH entry in place (same sanitizer as the
-        // getenv/_NSGetEnviron PATH hooks). The sanitized value is
-        // always SHORTER than the original, so it fits where the
-        // original string lives inside the blob — no payload
-        // growth, pointer stays at its (shifted) blob location.
+      const char *out = e;
+
+      if (strncmp(e, "PATH=", 5) == 0 && e[5] &&
+          (state = shdw_env_tls_get(YES)) != NULL) {
+        // Same sanitizer as the getenv/_NSGetEnviron PATH hooks; the rebuilt
+        // entry lands in the caller's thread-local storage.
         char *sanitized = shdw_env_sanitized_path_entry(e, &path_entry_storage,
                                                         &path_entry_capacity);
 
-        // Persist the (possibly realloc'd) storage so the destructor
-        // frees it and the next call reuses it.
-        shdw_env_procargs_path = path_entry_storage;
-        shdw_env_procargs_path_cap = path_entry_capacity;
+        // Persist the (possibly realloc'd) storage even when nothing changed,
+        // so the thread-exit destructor frees it and the next call reuses it.
+        state->procargs_path = path_entry_storage;
+        state->procargs_path_cap = path_entry_capacity;
 
         if (sanitized) {
-          sanitized_path = sanitized;
-          path_blob_ptr = e;
+          out = sanitized;
         }
-
-        env_keep[eout++] = e;
-        continue;
       }
 
-      env_keep[eout++] = e;
+      size_t out_len = strlen(out);
+
+      memmove(w, out, out_len + 1);
+      w += out_len + 1;
     }
 
-    size_t new_envp_count = eout;
-
-    // ---- rebuild geometry ----
-    size_t new_arrays_end =
-        sizeof(int) +
-        ((size_t)new_argc + 1 + new_envp_count + 1) * sizeof(char *);
-    size_t old_blob_off =
-        sizeof(int) + (argv_slots + envp_count + 1) * sizeof(char *);
-
-    if (new_arrays_end > old_blob_off) {
-      // Arrays only shrink when dropping entries; never grow the payload.
-      free(keep);
-      free(env_keep);
-      return;
-    }
-
-    ptrdiff_t shift = (ptrdiff_t)(old_blob_off - new_arrays_end);
-
-    if (shift == 0 && !sanitized_path) {
-      free(keep);
-      free(env_keep);
-      return; // the payload already agrees with the filtered view
-    }
-
-    // ---- write back (all reads below are from captured state) ----
     ((int *)base)[0] = new_argc;
-
-    char **dst = argv;
-
-    for (int i = 0; i < argc; i++) {
-      if (keep[i]) {
-        *dst++ = argv[i] ? argv[i] - shift : NULL;
-      }
-    }
-
-    *dst = NULL;
-    dst++;
-
-    for (size_t i = 0; i < new_envp_count; i++) {
-      *dst++ = env_keep[i] - shift; // all entries live in the blob
-    }
-
-    *dst = NULL;
-
-    if (shift > 0) {
-      memmove(base + new_arrays_end, base + old_blob_off, len - old_blob_off);
-    }
-
-    if (sanitized_path && path_blob_ptr) {
-      // Rewrite the PATH entry in its (moved) blob location. The value
-      // is shorter than the original that occupied this space, so the
-      // write stays inside the payload.
-      strcpy(path_blob_ptr - shift, sanitized_path);
-    }
-
-    *oldlenp = new_arrays_end + (len - old_blob_off);
+    *oldlenp = (size_t)(w - base);
 
     free(keep);
-    free(env_keep);
   }
 }

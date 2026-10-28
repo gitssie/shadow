@@ -94,6 +94,32 @@ if [ -e "$clean_pkg/var/mobile/Library/Preferences/me.jjolano.shadowd/shadowd.le
     fail 'backend-free postinst retained legacy daemon state'
 fi
 
+# Leftover backend files with launchd reporting the job absent (restored
+# backup, unpack without configure, another package owning the daemon):
+# configure must succeed, must NOT bootstrap the removed backend again — its
+# own plist has RunAtLoad/KeepAlive, so a bootstrap makes it live and the state
+# purge below then aborts configure — and must still purge the durable state.
+legacy_pkg="$tmp/legacy-pkg"
+mkdir -p "$legacy_pkg/Library/LaunchDaemons" "$legacy_pkg/usr/libexec" \
+    "$legacy_pkg/usr/local/bin" "$legacy_pkg/Library/Shadow" \
+    "$legacy_pkg/var/mobile/Library/Preferences/me.jjolano.shadowd" "$legacy_pkg/var/log"
+: >"$legacy_pkg/Library/LaunchDaemons/me.jjolano.shadow.plist"
+: >"$legacy_pkg/usr/libexec/shadowd"
+cp "$tmp/bin/shdw" "$legacy_pkg/usr/local/bin/shdw"
+: >"$legacy_pkg/var/mobile/Library/Preferences/me.jjolano.shadowd/shadowd.ledger"
+: >"$legacy_pkg/var/log/shadowd.log"
+: >"$tmp/log"; printf '%s\n' absent >"$tmp/state"
+env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$legacy_pkg" SHADOW_ROOTFS_ROOT="$tmp/rootfs-legacy" \
+    FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/state" FAKE_PROGRAM=/usr/libexec/shadowd \
+    SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \
+    sh "$root/packaging/layout/DEBIAN/postinst" configure
+if grep -F -q 'bootstrap system' "$tmp/log"; then
+    fail 'postinst re-bootstrapped the removed legacy daemon'
+fi
+if [ -e "$legacy_pkg/var/mobile/Library/Preferences/me.jjolano.shadowd/shadowd.ledger" ]; then
+    fail 'legacy ledger survived a configure that found the job absent'
+fi
+
 if grep -E '\<pgrep\>|\<seq\>|kill[[:space:]]+-[0-9]' "$root/packaging/layout/DEBIAN/prerm" "$root/packaging/layout/DEBIAN/postinst" >/dev/null; then
     fail 'forbidden maintainer command remains'
 fi
@@ -116,4 +142,18 @@ if env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW
     fail 'app registration failure was hidden'
 fi
 
+# Installing the package must not create or chmod either preference store.
+assert test ! -e "$tmp/rootfs-clean/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+mkdir -p "$tmp/rootfs-clean/var/mobile/Library/Preferences"
+prefs="$tmp/rootfs-clean/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+printf '%s\n' 'existing-preference-sentinel' > "$prefs"
+chmod 0600 "$prefs"
+before=$(ls -ln "$prefs")
+: >"$tmp/log"; printf '%s\n' absent >"$tmp/state"
+env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_ROOTFS_ROOT="$tmp/rootfs-clean" \
+    FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/state" FAKE_PROGRAM=/var/jb/usr/libexec/shadowd \
+    SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \
+    SHADOW_UICACHE_BIN="$tmp/bin/uicache" sh "$root/packaging/layout/DEBIAN/postinst" configure
+assert grep -F -q 'existing-preference-sentinel' "$prefs"
+assert test "$before" = "$(ls -ln "$prefs")"
 printf 'PASS maintainer scripts\n'

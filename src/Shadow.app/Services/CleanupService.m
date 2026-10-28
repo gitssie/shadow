@@ -1,5 +1,6 @@
 #import "CleanupService.h"
 #import "Language.h"
+#import "OwnershipDiagnostics.h"
 #import "OperationCoordinator.h"
 #import <Shadow/Fingerprint.h>
 #import <Shadow/JBPath.h>
@@ -118,6 +119,7 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
             NSError *failure = SHDWCleanupError(13, message, step, [reply[@"partial"] boolValue] || [reply[@"stateMayBePartial"] boolValue]);
             if ([reply[@"details"] isKindOfClass:NSDictionary.class]) {
                 NSMutableDictionary *info = [failure.userInfo mutableCopy]; info[@"helperDetails"] = reply[@"details"];
+                info[NSLocalizedDescriptionKey] = SHDWOwnershipErrorDescription(message, reply[@"details"]);
                 failure = [NSError errorWithDomain:failure.domain code:failure.code userInfo:info];
             }
             *error = failure;
@@ -207,7 +209,8 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
                 activeStep = @"recheck";
                 update(activeStep, @"running", nil);
                 NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
-                NSDictionary *verified = [self invokeHelper:@[@"recheck", identifier, token, [ordered componentsJoinedByString:@","]] error:&error];
+                [self invokeHelper:@[@"finalize", identifier, token, [ordered componentsJoinedByString:@","]] error:&error];
+                NSDictionary *verified = error ? nil : [self invokeHelper:@[@"recheck", identifier, token, [ordered componentsJoinedByString:@","]] error:&error];
                 if (!error && ![verified[@"recheckVerified"] boolValue]) error = SHDWCleanupError(8, @"Cleanup verification did not pass.", activeStep, mutated);
                 NSDictionary *current = [store profileForBundleIdentifier:identifier];
                 BOOL same = originalProfile == current || [originalProfile isEqual:current];

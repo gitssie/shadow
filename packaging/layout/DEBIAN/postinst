@@ -112,17 +112,6 @@ shadowd_remove_legacy_state() {
 
 case "$1" in
     configure)
-        mkdir -p "$ROOTFS_ROOT/var/mobile/Library/Preferences"
-        touch "$ROOTFS_ROOT/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
-        # Perms oracle note (Finding 5): this stays root:wheel 0644 on purpose.
-        # 0600 would break sandboxed reads — the in-process file fallback
-        # (Settings.m:99-102, dylib.x:63-69) runs as mobile and needs o+r, and
-        # libSandy's file grant is a sandbox extension, not a DAC override, so
-        # group/other-read is required. In-process reads stay indistinguishable
-        # from stock ENOENT via the JailbreakMisc blacklist; only out-of-band
-        # readers can observe the mode bits.
-        chown root:wheel "$ROOTFS_ROOT/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
-        chmod 0644 "$ROOTFS_ROOT/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
 
         rm -f "$DPKG_ROOT/Library/MobileSubstrate/DynamicLibraries/ShadowCore.dylib" \
               "$DPKG_ROOT/usr/lib/TweakInject/ShadowCore.dylib"
@@ -135,13 +124,16 @@ case "$1" in
             chmod 644 "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist"
             chmod 755 "$DAEMON_PATH"
             mkdir -p "$DPKG_ROOT/var/log"
+            # Files can only be here as leftovers (this package ships no
+            # backend): stop the old job and leave it stopped. Never bootstrap
+            # it — the old plist carries RunAtLoad/KeepAlive, so a bootstrap
+            # makes it live again, which both contradicts the state purge below
+            # (which ABORTS configure for a live exact job) and restarts a
+            # backend this package deliberately removed.
             if ! shadowd_stop || ! shadowd_bootout; then
                 echo "shadowd: exact daemon did not cleanly exit; ABORTING configure." >&2
                 exit 1
             fi
-            "$LAUNCHCTL_BIN" bootstrap system "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist" 2>/dev/null \
-                || "$LAUNCHCTL_BIN" load -w "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist" 2>/dev/null \
-                || true
         fi
 
         if ! shadowd_remove_legacy_state; then

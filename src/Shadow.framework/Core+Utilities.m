@@ -1,9 +1,18 @@
 #import <Shadow/Core+Utilities.h>
+#import <Shadow/JBPath.h>
 #import <string.h>
 
 #import "../../vendor/apple/dyld_priv.h"
 
 extern char ***_NSGetArgv();
+
+static NSString *shdwCanonicalStockCryptexPath(NSString *path) {
+  const char *bytes = path.UTF8String;
+  if (!shdw_is_stock_cryptex_path(bytes) || shdw_is_restricted_root(bytes))
+    return path;
+  NSUInteger prefixLength = [path hasPrefix:@"/private/preboot/"] ? 16 : 8;
+  return [@"/System" stringByAppendingString:[path substringFromIndex:prefixLength]];
+}
 
 @implementation Shadow (Utilities)
 
@@ -23,7 +32,7 @@ extern char ***_NSGetArgv();
                        [path hasPrefix:@"/private/etc"] ||
                        [path hasPrefix:@"/var/tmp"];
     if (!aliasPrefix)
-      return path;
+      return shdwCanonicalStockCryptexPath(path);
 
     // Only bypass NSURL for URL-safe ASCII. Keep spaces, controls,
     // Unicode and embedded NULs on the existing alias slow path.
@@ -119,7 +128,7 @@ extern char ***_NSGetArgv();
     path = [NSString pathWithComponents:pathComponents];
   }
 
-  return path;
+  return shdwCanonicalStockCryptexPath(path);
 }
 
 // code from Choicy

@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "src/ShadowCleaner/Cleaner.m"
 HARNESS = r'''
 #import <Security/Security.h>
+#include <mach/mach.h>
 static OSStatus FakeDelete(CFDictionaryRef query);
 static OSStatus FakeCopy(CFDictionaryRef query, CFTypeRef *result);
 #define SecItemDelete FakeDelete
@@ -24,10 +25,13 @@ static OSStatus fakeCopyError;
 static BOOL fakeEmptyIdentityArray;
 static BOOL fakeInvalidResult;
 static BOOL fakeSuccessNull;
+static NSArray *fakeAllowedGroups;
+static NSMutableArray *fakeDeletedGroups, *fakeQueriedGroups;
 static OSStatus FakeDelete(CFDictionaryRef raw) {
     NSDictionary *query = (__bridge NSDictionary *)raw;
     NSString *group = query[(__bridge id)kSecAttrAccessGroup], *itemClass = query[(__bridge id)kSecClass];
-    Require([group isEqual:@"TEAM.example.app"], @"keychain operation escaped target group");
+    Require([(fakeAllowedGroups ?: @[@"TEAM.example.app"]) containsObject:group], @"keychain operation escaped target group");
+    [fakeDeletedGroups addObject:group];
     Require(query[(__bridge id)kSecAttrSynchronizable] == (__bridge id)kSecAttrSynchronizableAny, @"keychain sync coverage missing");
     fakeDeletes++;
     if (![itemClass isEqual:(__bridge id)kSecClassIdentity]) [fakeItems[group] removeObjectForKey:itemClass];
@@ -37,6 +41,7 @@ static OSStatus FakeCopy(CFDictionaryRef raw, CFTypeRef *result) {
     fakeCopies++;
     NSDictionary *query = (__bridge NSDictionary *)raw;
     NSString *group = query[(__bridge id)kSecAttrAccessGroup], *itemClass = query[(__bridge id)kSecClass];
+    [fakeQueriedGroups addObject:group];
     if (fakeDeletes && fakeDeletes < 5) fakeEarlyQuery = YES;
     if (fakeCopyError) return fakeCopyError;
     if (fakeSuccessNull) return errSecSuccess;
@@ -56,7 +61,7 @@ static BOOL Exists(NSString *root, NSString *relative) { return [NSFileManager.d
 static NSUInteger Step(NSString *root, NSString *step, BOOL remove) {
     int fd = open(root.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     Require(fd >= 0, @"open fixture"); NSUInteger count = 0;
-    @try { Walk(fd, @"", step, remove, &count); } @finally { close(fd); }
+    @try { if ([step isEqual:@"files"]) Walk(fd, @"", remove, &count); } @finally { close(fd); }
     return count;
 }
 static void SignatureFixture(NSString *bundle, BOOL derOnly) {
@@ -69,9 +74,95 @@ static void SignatureFixture(NSString *bundle, BOOL derOnly) {
     [bytes appendBytes:&link length:sizeof(link)]; [bytes appendBytes:signature length:link.datasize];
     Require([bytes writeToFile:[bundle stringByAppendingPathComponent:@"Example App"] atomically:YES], @"signature fixture executable");
 }
+static mach_vm_size_t VirtualSize(void) {
+    struct mach_task_basic_info info;mach_msg_type_number_t count=MACH_TASK_BASIC_INFO_COUNT;
+    Require(task_info(mach_task_self(),MACH_TASK_BASIC_INFO,(task_info_t)&info,&count)==KERN_SUCCESS,@"read task virtual size");return info.virtual_size;
+}
+static void EntitlementReadLifetime(NSString *source, NSString *path) {
+    Require([NSFileManager.defaultManager copyItemAtPath:source toPath:path error:NULL],@"copy entitlement lifetime fixture");
+    const off_t extent=80LL*1024*1024;int fd=open(path.fileSystemRepresentation,O_WRONLY|O_NOFOLLOW);
+    Require(fd>=0&&!ftruncate(fd,extent),@"pad sparse entitlement lifetime fixture");close(fd);
+    NSDictionary *expected;
+    @autoreleasepool { expected=ExecutableEntitlements(path);Require(expected!=nil,@"read padded signature"); }
+    // Warm caches outside the measured outer operation pool. The loop below must
+    // bound executable data lifetime without relying on its caller draining it.
+    for(NSUInteger i=0;i<2;i++) { @autoreleasepool { Require([ExecutableEntitlements(path) isEqual:expected],@"warm entitlement read"); } }
+    mach_vm_size_t before=VirtualSize();
+    for(NSUInteger i=0;i<8;i++)Require([ExecutableEntitlements(path) isEqual:expected],@"repeated entitlement content changed");
+    mach_vm_size_t after=VirtualSize(),growth=after>before?after-before:0;
+    Require(growth<(mach_vm_size_t)extent*2,[NSString stringWithFormat:@"repeated entitlement reads retained executable mappings: %.1f MiB",growth/1048576.0]);
+    printf("cleanup entitlement lifetime: 8 x 80 MiB executable reads, virtual growth %.1f MiB passed\n",growth/1048576.0);
+}
+static void ExtensionContainers(NSString *root) {
+    NSString *base = [root stringByAppendingPathComponent:@"plugin-containers"];
+    NSString *selected = [base stringByAppendingPathComponent:@"11111111-1111-4111-8111-111111111111"];
+    NSString *other = [base stringByAppendingPathComponent:@"22222222-2222-4222-8222-222222222222"];
+    Put(selected, @"StoreKit/receipt"); Put(other, @"StoreKit/receipt");
+    Require([@{@"MCMMetadataIdentifier":@"fixture.app.extension"} writeToFile:[selected stringByAppendingPathComponent:Metadata] atomically:YES], @"extension metadata");
+    Require([@{@"MCMMetadataIdentifier":@"other.app.extension"} writeToFile:[other stringByAppendingPathComponent:Metadata] atomically:YES], @"unrelated extension metadata");
+    NSArray *containers = @[RegisteredContainer([NSURL fileURLWithPath:selected], Canonical(base), @"fixture.app.extension")];
+    Require(containers.count == 1, @"extension container not discovered");
+    NSUInteger count = 0;
+    ContainerStep(@{@"bundleID":@"fixture.app", @"containers":containers}, @"files", YES, &count);
+    Require(count == 1 && !Exists(selected, @"StoreKit/receipt") && Exists(selected, Metadata) && Exists(other, @"StoreKit/receipt"), @"extension cleanup escaped scope or left receipt");
+    Put(selected, @"StoreKit/receipt");
+    Require([NSFileManager.defaultManager removeItemAtPath:[selected stringByAppendingPathComponent:Metadata] error:NULL], @"remove optional metadata fixture");
+    Put([base stringByAppendingPathComponent:@"33333333-3333-4333-8333-333333333333"], @"Library/Preferences/orphan");
+    containers = @[RegisteredContainer([NSURL fileURLWithPath:selected], Canonical(base), @"fixture.app.extension")];
+    count = 0; ContainerStep(@{@"bundleID":@"fixture.app", @"containers":containers}, @"files", YES, &count);
+    Require(count == 1 && !Exists(selected, @"StoreKit/receipt") && Exists(other, @"StoreKit/receipt"), @"registered container still depends on disk metadata");
+    Require([NSFileManager.defaultManager removeItemAtPath:base error:NULL], @"remove extension fixture");
+    puts("cleanup extension containers: exact metadata ownership, receipt removal and unrelated container preservation passed");
+}
+static void FullContainerFixture(NSString *base) {
+    NSString *root = [base stringByAppendingPathComponent:@"full-container"];
+    for (NSString *name in @[@"Documents/nested/data", @"Library/Preferences/custom.plist",
+             @"Library/WebKit/website", @"Library/Caches/StoreKit/receipt", @"StoreKit/receipt", @"tmp/session"])
+        Put(root, name);
+    Put(root, Metadata); Put(root, @".com.apple.mobile_container_manager.acl.plist");
+    NSString *outside = [base stringByAppendingPathComponent:@"full-outside"];
+    Put(outside, @"keep");
+    Require(!symlink(outside.fileSystemRepresentation, [root stringByAppendingPathComponent:@"Library/escape"].fileSystemRepresentation), @"full-container symlink fixture");
+    NSDictionary *queryTarget = @{@"identifiers":@[@"fixture.full"], @"containers":@[@{@"identifier":@"fixture.full", @"path":root}]};
+    NSArray *localQueries = CleanupPreferenceQueries(queryTarget, @[@"files"]);
+    Require(localQueries.count >= 2 && PreferenceQueriesForStep(localQueries, @"files").count == localQueries.count && !PreferenceQueriesForStep(localQueries, @"preferences").count, @"container cleanup preference scopes leaked globally");
+    NSArray *externalQueries = CleanupPreferenceQueries(@{@"identifiers":@[@"fixture.full"], @"containers":@[@{@"path":@"/nonexistent-container"}]}, @[@"preferences"]);
+    Require(externalQueries.count == 1 && ![externalQueries[0][@"container"] length] && !PreferenceQueriesForStep(externalQueries, @"files").count, @"external cleanup scanned container preferences");
+    struct stat st; Require(!stat(root.fileSystemRepresentation, &st), @"full-container identity");
+    NSDictionary *container = @{@"identifier":@"fixture.full", @"path":root, @"inode":@(st.st_ino), @"device":@((uint64_t)st.st_dev)};
+    NSDictionary *target = @{@"bundleID":@"fixture.full", @"containers":@[container]};
+    NSUInteger count = 0;
+    ContainerStep(target, @"files", NO, &count);
+    Require(count > 0 && Exists(root, @"Library/WebKit/website"), @"full-container preflight mutated data");
+    count = 0; ContainerStep(target, @"files", YES, &count);
+    Require(count > 0 && Exists(outside, @"keep"), @"full-container cleanup missed data or followed symlink");
+    Require(Exists(root, Metadata) && Exists(root, @".com.apple.mobile_container_manager.acl.plist"), @"full-container metadata removed");
+    for (NSString *name in @[@"Documents", @"Library", @"tmp"])
+        Require(Exists(root, name), @"full-container required directory missing");
+    count = 0; ContainerStep(target, @"files", NO, &count);
+    Require(!count, @"full-container cleanup left application data");
+    // A late file must survive later category stages and be reported by the
+    // final full-container check, rather than silently triggering another pass.
+    Put(root, @"Library/WebKit/late");
+    for (NSString *step in @[@"preferences", @"web", @"receipts"])
+        ContainerStep(target, step, YES, &count);
+    Require(!count && Exists(root, @"Library/WebKit/late"), @"later category repeated container deletion");
+    ContainerStep(target, @"files", NO, &count);
+    Require(count > 0 && Exists(root, @"Library/WebKit/late"), @"full-container recheck missed or deleted late data");
+    NSMutableDictionary *changed = [container mutableCopy]; changed[@"inode"] = @0;
+    BOOL rejected = NO;
+    @try { ContainerStep(@{@"bundleID":@"fixture.full", @"containers":@[changed]}, @"files", YES, &count); }
+    @catch (NSException *exception) { (void)exception; rejected = YES; }
+    Require(rejected && Exists(root, @"Library/WebKit/late"), @"full-container identity check bypassed");
+    Require([NSFileManager.defaultManager removeItemAtPath:root error:NULL], @"remove full-container fixture");
+    Require([NSFileManager.defaultManager removeItemAtPath:outside error:NULL], @"remove outside fixture");
+    puts("cleanup full-container: single deletion stage, metadata, directories, symlinks, late writes and identity checks passed");
+}
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         (void)argc; NSString *root = [NSString stringWithUTF8String:argv[1]];
+        ExtensionContainers(root);
+        FullContainerFixture(root);
         Put(root, @"Documents/data"); Put(root, @"Library/Application Support/data");
         Put(root, @"Library/Preferences/example.plist"); Put(root, @"Library/Caches/cache");
         Put(root, @"Library/Caches/WebKit/web"); Put(root, @"Library/WebKit/web");
@@ -84,18 +175,70 @@ int main(int argc, const char *argv[]) {
         Require(Step(root, @"files", NO) > 0 && Exists(root, @"Documents/data"), @"preflight mutated data");
         Require(Step(root, @"files", YES) > 0 && Step(root, @"files", NO) == 0, @"files verification");
         Require(!Exists(root, @"Documents/data") && !Exists(root, @"Library/Application Support/data"), @"files not removed");
-        Require(Exists(root, @"Library/Preferences/example.plist") && Exists(root, @"Library/WebKit/web") && Exists(root, @"StoreKit/receipt"), @"later step removed early");
+        Require(!Exists(root, @"Library/Preferences/example.plist") && !Exists(root, @"Library/WebKit/web") && !Exists(root, @"StoreKit/receipt"), @"container data split across unrelated steps");
         Require([NSFileManager.defaultManager fileExistsAtPath:outside], @"symlink escaped container");
-        Require(Step(root, @"preferences", YES) > 0 && Step(root, @"preferences", NO) == 0, @"preferences verification");
-        Require(Exists(root, @"Library/Caches/WebKit/web") && Exists(root, @"Library/Caches/StoreKit/receipt"), @"cache children crossed step boundary");
-        Require(Step(root, @"web", YES) > 0 && Step(root, @"web", NO) == 0, @"web verification");
-        Require(Exists(root, @"StoreKit/receipt") && Exists(root, @"Library/Caches/StoreKit/receipt"), @"receipt preservation");
-        Require(Step(root, @"files", NO) == 0 && Step(root, @"preferences", NO) == 0 && Step(root, @"web", NO) == 0, @"unselected receipt blocked final scope verification");
-        Put(root, @"Library/WebKit/reappeared");
-        Require(Step(root, @"web", NO) > 0 && Exists(root, @"Library/WebKit/reappeared"), @"final verification missed a reappeared selected item or deleted it");
-        Step(root, @"web", YES);
-        Require(Step(root, @"receipts", YES) == 2 && Step(root, @"receipts", NO) == 0, @"receipts verification");
+        Put(root, @"Library/Preferences/new.plist"); Put(root, @"Library/WebKit/reappeared"); Put(root, @"StoreKit/new-receipt");
+        for (NSString *step in @[@"preferences", @"web", @"receipts"]) {
+            NSUInteger untouched = 0;
+            // Invalid container identity proves external steps do not even open it.
+            ContainerStep(@{@"containers":@[@{@"path":@"/nonexistent-container"}]}, step, YES, &untouched);
+            Require(!untouched && Step(root, step, YES) == 0, @"external step accessed container data");
+        }
+        Require(Exists(root, @"Library/Preferences/new.plist") && Exists(root, @"Library/WebKit/reappeared") && Exists(root, @"StoreKit/new-receipt"), @"external step changed container data");
+        Require(Step(root, @"files", NO) > 0, @"final container verification missed late data");
+        Step(root, @"files", YES);
         Require(Exists(root, Metadata) && Exists(root, @".com.apple.mobile_container_manager.acl.plist"), @"registration metadata deleted");
+        NSDictionary *registration = @{@"MCMMetadataIdentifier":@"example.app"};
+        Require([registration writeToFile:[root stringByAppendingPathComponent:Metadata] atomically:YES], @"snapshot registration fixture");
+        struct stat containerStat; Require(!stat(root.fileSystemRepresentation, &containerStat), @"snapshot container identity");
+        NSDictionary *snapshotContainer = @{@"identifier":@"example.app", @"path":root, @"inode":@(containerStat.st_ino), @"device":@((uint64_t)containerStat.st_dev)};
+        NSDictionary *snapshotTarget = @{@"bundleID":@"example.app", @"identifiers":@[@"example.app"], @"containers":@[snapshotContainer]};
+        NSString *snapshot = @"Library/SplashBoard/Snapshots/example.app - {DEFAULT GROUP}/late.ktx";
+        Put(root, snapshot);
+        Require(Step(root, @"files", NO) > 0 && Exists(root, snapshot), @"pure recheck missed or removed a late UI snapshot");
+        FinalizeSnapshots(snapshotTarget, @[@"web"]);
+        Require(Exists(root, snapshot), @"unselected files snapshots were removed");
+        FinalizeSnapshots(snapshotTarget, @[@"files"]);
+        Require(!Exists(root, snapshot) && Step(root, @"files", NO) == 0, @"late UI snapshots were not finalized before pure recheck");
+        Put(root, snapshot);
+        NSMutableDictionary *changedContainer = [snapshotContainer mutableCopy]; changedContainer[@"inode"] = @0;
+        NSMutableDictionary *changedTarget = [snapshotTarget mutableCopy]; changedTarget[@"containers"] = @[changedContainer];
+        BOOL changedRejected = NO;
+        @try { FinalizeSnapshots(changedTarget, @[@"files"]); } @catch (NSException *exception) { (void)exception; changedRejected = YES; }
+        Require(changedRejected && Exists(root, snapshot), @"changed container identity allowed snapshot deletion");
+        FinalizeSnapshots(snapshotTarget, @[@"files"]);
+        NSString *snapshotParent = [root stringByAppendingPathComponent:@"Library/SplashBoard"];
+        Require(!symlink(root.fileSystemRepresentation, snapshotParent.fileSystemRepresentation), @"snapshot parent symlink fixture");
+        BOOL snapshotRejected = NO;
+        @try { FinalizeSnapshots(snapshotTarget, @[@"files"]); } @catch (NSException *exception) { (void)exception; snapshotRejected = YES; }
+        Require(snapshotRejected && [NSFileManager.defaultManager fileExistsAtPath:outside], @"snapshot finalization followed a symlink ancestor");
+        Require(!unlink(snapshotParent.fileSystemRepresentation), @"remove snapshot symlink fixture");
+        Put(root, @"Library/SplashBoard/Snapshots/keep.app/keep.ktx");
+        NSString *snapshotLeaf = [root stringByAppendingPathComponent:@"Library/SplashBoard/Snapshots/example.app"];
+        Require(!symlink(outside.fileSystemRepresentation, snapshotLeaf.fileSystemRepresentation), @"snapshot leaf symlink fixture");
+        snapshotRejected = NO;
+        @try { FinalizeSnapshots(snapshotTarget, @[@"files"]); } @catch (NSException *exception) { (void)exception; snapshotRejected = YES; }
+        Require(snapshotRejected && Exists(root, @"Library/SplashBoard/Snapshots/keep.app/keep.ktx"), @"unsafe snapshot leaf accepted or unrelated snapshot removed");
+        Require(!unlink(snapshotLeaf.fileSystemRepresentation), @"remove snapshot leaf fixture");
+        FinalizeSnapshots(snapshotTarget, @[@"files"]);
+        Require(Exists(root, @"Library/SplashBoard/Snapshots/keep.app/keep.ktx"), @"finalization removed another application's snapshots");
+        NSArray *cleanupOrder = @[@"files", @"preferences", @"web", @"keychain", @"receipts", @"fingerprint"];
+        NSDictionary *completed = @{@"token":@"authorized", @"created":@(NSDate.date.timeIntervalSince1970), @"steps":@[@"files", @"fingerprint"], @"next":@1};
+        ValidateCompletedSession(completed, @"authorized", @[@"files", @"fingerprint"], cleanupOrder);
+        for (NSDictionary *invalid in @[
+            @{@"token":@"changed", @"created":completed[@"created"], @"steps":completed[@"steps"], @"next":@1},
+            @{@"token":@"authorized", @"created":completed[@"created"], @"steps":completed[@"steps"], @"next":@0},
+            @{@"token":@"authorized", @"created":@0, @"steps":completed[@"steps"], @"next":@1}]) {
+            BOOL sessionRejected = NO;
+            @try { ValidateCompletedSession(invalid, @"authorized", @[@"files", @"fingerprint"], cleanupOrder); }
+            @catch (NSException *exception) { (void)exception; sessionRejected = YES; }
+            Require(sessionRejected, @"unauthorized, unfinished or expired finalization accepted");
+        }
+        BOOL scopeRejected = NO;
+        @try { ValidateCompletedSession(completed, @"authorized", @[@"files"], cleanupOrder); }
+        @catch (NSException *exception) { (void)exception; scopeRejected = YES; }
+        Require(scopeRejected, @"changed finalization selection accepted");
+        puts("cleanup snapshot finalization: late writes, pure recheck, selected scope, symlinks and authorization passed");
         NSString *library = [root stringByAppendingPathComponent:@"Library"];
         Require([NSFileManager.defaultManager removeItemAtPath:library error:NULL], @"reset library");
         Require(!symlink(root.fileSystemRepresentation, library.fileSystemRepresentation), @"ancestor symlink fixture");
@@ -121,10 +264,56 @@ int main(int argc, const char *argv[]) {
         NSString *signatureBundle = [Canonical(root) stringByAppendingPathComponent:@"Signature.app"];
         SignatureFixture(signatureBundle, NO);
         Require(Entitlements(signatureBundle).count == 0, @"valid signature without entitlement slots rejected");
+        EntitlementReadLifetime(argc>2 ? Canonical([NSString stringWithUTF8String:argv[2]]) : [signatureBundle stringByAppendingPathComponent:@"Example App"], [Canonical(root) stringByAppendingPathComponent:@"large-signed-copy"]);
         SignatureFixture(signatureBundle, YES);
         BOOL unsupportedDER = NO;
-        @try { Entitlements(signatureBundle); } @catch (NSException *exception) { unsupportedDER = [exception.reason containsString:@"DER-only"]; }
-        Require(unsupportedDER, @"DER-only ownership silently treated as empty");
+        @try { Entitlements(signatureBundle); } @catch (NSException *exception) { unsupportedDER = exception.reason.length > 0; }
+        Require(unsupportedDER, @"malformed DER ownership silently treated as empty");
+        NSData *derFixture = [[NSData alloc] initWithBase64EncodedString:@"MVIwLAwWa2V5Y2hhaW4tYWNjZXNzLWdyb3VwczASDBBURUFNLmV4YW1wbGUuYXBwMAkMBGZsYWcBAQEwFwwGbmVzdGVkMQ0wCwwFdmFsdWUMAm9r" options:0];
+        NSDictionary *der = DEREntitlements(derFixture.bytes, derFixture.length);
+        Require([der[@"keychain-access-groups"] isEqual:@[@"TEAM.example.app"]] && [der[@"flag"] boolValue] && [der[@"nested"][@"value"] isEqual:@"ok"], @"DER entitlement dictionary/array decoding failed");
+        // Exercise the same DER payload through a DER-only Mach-O signature slot.
+        struct mach_header_64 derHeader = {0}; derHeader.magic = MH_MAGIC_64; derHeader.ncmds = 1; derHeader.sizeofcmds = sizeof(struct linkedit_data_command);
+        struct linkedit_data_command derLink = {0}; derLink.cmd = LC_CODE_SIGNATURE; derLink.cmdsize = sizeof(derLink); derLink.dataoff = sizeof(derHeader) + sizeof(derLink); derLink.datasize = (uint32_t)(28 + derFixture.length);
+        uint32_t derSlots[] = {OSSwapHostToBigInt32(0xfade0cc0), OSSwapHostToBigInt32(derLink.datasize), OSSwapHostToBigInt32(1), OSSwapHostToBigInt32(7), OSSwapHostToBigInt32(20), OSSwapHostToBigInt32(0xfade7172), OSSwapHostToBigInt32((uint32_t)(8 + derFixture.length))};
+        NSMutableData *derExecutable = [NSMutableData dataWithBytes:&derHeader length:sizeof(derHeader)];
+        [derExecutable appendBytes:&derLink length:sizeof(derLink)]; [derExecutable appendBytes:derSlots length:sizeof(derSlots)]; [derExecutable appendData:derFixture];
+        Require([derExecutable writeToFile:[signatureBundle stringByAppendingPathComponent:@"Example App"] atomically:YES] && [Entitlements(signatureBundle) isEqual:der], @"DER-only Mach-O signature was not decoded");
+        for (NSData *bad in @[[derFixture subdataWithRange:NSMakeRange(0, derFixture.length - 1)], [derFixture subdataWithRange:NSMakeRange(0, 1)], [NSData dataWithBytes:"\x31\x80" length:2]]) {
+            BOOL rejected = NO; @try { DEREntitlements(bad.bytes, bad.length); } @catch (NSException *exception) { (void)exception; rejected = YES; }
+            Require(rejected, @"malformed DER accepted as ownership evidence");
+        }
+        NSDictionary *mixedAccess = ObservedAccess(@{@"keychain-access-groups":@[@"*", @"TEAM.*", @"TEAM.example.app"], @"com.apple.security.application-groups":@[@"invalid*group"]});
+        Require(!mixedAccess[@"keychainIssue"] && [mixedAccess[@"keychain"] isEqual:@[@"TEAM.example.app"]] && [mixedAccess[@"broad"] count] == 2 && mixedAccess[@"groupIssue"], @"wildcard capability or container error contaminated keychain ownership");
+        NSDictionary *broadContainers = ObservedAccess(@{@"com.apple.security.application-groups":@[@"*", @"group.*", @"group.target"]});
+        Require(!broadContainers[@"groupIssue"] && [broadContainers[@"groups"] isEqual:@[@"group.target"]] && [broadContainers[@"broadGroups"] count] == 2, @"broad container access incorrectly blocked ownership inspection");
+        NSDictionary *sharedContainer = @{@"bundleID":@"example.app", @"preservedSharedGroups":@[@"group.target"], @"sharedAppGroups":@[@"group.target"], @"sharedGroupOwners":@{@"group.target":@[@"other.app"]}, @"groupOwnershipIssues":@[]};
+        BOOL containerBlocked = NO; @try { RequireContainerOwnership(sharedContainer); } @catch (NSException *exception) { containerBlocked = [exception.reason isEqual:@"Application group containers are shared with other apps."]; }
+        Require(containerBlocked && [failureDetails[@"kind"] isEqual:@"containerOwnership"] && [failureDetails[@"sharedGroupOwners"][@"group.target"] containsObject:@"other.app"], @"shared container lost group/app diagnostics");
+        NSMutableDictionary *unknownContainer = [sharedContainer mutableCopy]; unknownContainer[@"sharedAppGroups"] = @[]; unknownContainer[@"sharedGroupOwners"] = @{}; unknownContainer[@"groupOwnershipIssues"] = @[@{@"bundleID":@"unreadable.app", @"reason":@"Unreadable target signature"}];
+        containerBlocked = NO; @try { RequireContainerOwnership(unknownContainer); } @catch (NSException *exception) { containerBlocked = [exception.reason isEqual:@"Cannot check app group permissions for some apps."]; }
+        Require(containerBlocked && [failureDetails[@"containerGroups"] containsObject:@"group.target"] && [failureDetails[@"ownershipIssues"][0][@"bundleID"] isEqual:@"unreadable.app"], @"unknown container lost group/failure diagnostics");
+        RequireContainerOwnership(@{@"preservedSharedGroups":@[]}); failureDetails = nil;
+        NSDictionary *invalidKeychain = ObservedAccess(@{@"keychain-access-groups":@[@1], @"com.apple.security.application-groups":@[@"group.good"]});
+        Require(invalidKeychain[@"keychainIssue"] && !invalidKeychain[@"groupIssue"] && [invalidKeychain[@"groups"] isEqual:@[@"group.good"]], @"keychain parse failure contaminated container ownership");
+        BOOL wildcardTargetRejected = NO; @try { StringList(@[@"*"]); } @catch (NSException *exception) { (void)exception; wildcardTargetRejected = YES; }
+        Require(wildcardTargetRejected, @"target deletion scope accepted wildcard capability");
+        NSDictionary *ownership = @{@"bundleID":@"example.app", @"keychainGroups":@[@"TEAM.example.app"],
+            @"ownershipComplete":@YES, @"sharedKeychainGroups":@[@"TEAM.example.app"],
+            @"sharedKeychainOwners":@{@"TEAM.example.app":@[@"other.app"]}, @"ownershipIssues":@[]};
+        BOOL rejectedShared = NO;
+        @try { RequireKeychainOwnership(ownership); } @catch (NSException *exception) { rejectedShared = [exception.reason isEqual:@"Keychain groups are shared with other apps."]; }
+        Require(rejectedShared && [failureDetails[@"sharedKeychainOwners"][@"TEAM.example.app"] containsObject:@"other.app"], @"shared group lost conflicting app diagnostics");
+        NSMutableDictionary *unreadable = [ownership mutableCopy]; unreadable[@"ownershipComplete"] = @NO; unreadable[@"sharedKeychainGroups"] = @[]; unreadable[@"sharedKeychainOwners"] = @{};
+        unreadable[@"ownershipIssues"] = @[@{@"bundleID":@"unreadable.app", @"reason":@"DER-only signed entitlements unavailable"}];
+        BOOL rejectedUnreadable = NO;
+        @try { RequireKeychainOwnership(unreadable); } @catch (NSException *exception) { rejectedUnreadable = [exception.reason isEqual:@"Cannot check keychain permissions for some apps."]; }
+        Require(rejectedUnreadable && [failureDetails[@"ownershipIssues"][0][@"bundleID"] isEqual:@"unreadable.app"] && !fakeDeletes && !fakeCopies, @"unreadable ownership lost app diagnostics or touched keychain");
+        NSMutableDictionary *exclusive = [ownership mutableCopy]; exclusive[@"sharedKeychainGroups"] = @[];
+        exclusive[@"ownershipComplete"] = @NO; exclusive[@"keychainOwnershipComplete"] = @YES;
+        RequireKeychainOwnership(exclusive);
+        exclusive[@"keychainGroups"] = @[]; exclusive[@"keychainOwnershipComplete"] = @NO;
+        RequireKeychainOwnership(exclusive); failureDetails = nil;
         fakeItems = [@{@"TEAM.example.app":[@{(__bridge id)kSecClassCertificate:@YES, (__bridge id)kSecClassKey:@YES, (__bridge id)kSecClassGenericPassword:@YES, (__bridge id)kSecClassInternetPassword:@YES} mutableCopy], @"TEAM.control.app":[@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy]} mutableCopy];
         Require(KeychainWork(@[@"TEAM.example.app"], NO, NO) == 0 && fakeDeletes == 0, @"keychain preflight mutated items");
         Require([keychainClassCounts[(__bridge id)kSecClassIdentity] unsignedIntegerValue] == 1 && [keychainClassCounts[(__bridge id)kSecClassGenericPassword] unsignedIntegerValue] == 1, @"keychain preflight aggregate counts incorrect");
@@ -156,6 +345,31 @@ int main(int argc, const char *argv[]) {
             Require(scopeRejected, @"cross-team or system keychain group accepted before signing");
         }
         Require([KeychainGroups(@{@"application-identifier":@"TEAM.example.app"}) isEqual:@[@"TEAM.example.app"]] && KeychainGroups(@{@"keychain-access-groups":@[]}).count == 0, @"implicit default access group incorrect");
+        NSDictionary *fullEntitlements = @{@"keychain-access-groups":@[@"TEAM.shared", @"TEAM.example.app", @"TEAM.shared"], @"application-identifier":@"TEAM.example.app", @"com.apple.security.application-groups":@[@"group.target", @"group.target"]};
+        NSArray *fullGroups = KeychainGroups(fullEntitlements);
+        Require([fullGroups isEqual:@[@"TEAM.shared", @"TEAM.example.app", @"group.target"]], @"complete iOS keychain union or deduplication incorrect");
+        Require([KeychainGroups(@{@"keychain-access-groups":@[], @"application-identifier":@"TEAM.example.app"}) isEqual:@[@"TEAM.example.app"]], @"explicit empty list incorrectly removed app-ID access");
+        NSDictionary *observed = ObservedAccess(fullEntitlements);
+        Require([observed[@"keychain"] isEqual:fullGroups], @"sharing scan differs from target keychain scope");
+        NSDictionary *implicitOwner = ObservedAccess(@{@"application-identifier":@"TEAM.other", @"com.apple.security.application-groups":@[@"group.target"]});
+        Require([implicitOwner[@"keychain"] containsObject:@"group.target"] && [implicitOwner[@"keychain"] containsObject:@"TEAM.other"], @"implicit shared App Group or app-ID access was not detected");
+        Require([ValidatedKeychainScope(@{@"team":@"TEAM", @"appGroups":@[@"group.target"], @"keychainGroups":fullGroups}) isEqual:fullGroups], @"signed App Group scope was rejected");
+        for (NSString *untrusted in @[@"group.other", @"group.com.apple.private", @"systemgroup.private", @"*"]) {
+            BOOL rejected = NO; @try { ValidatedKeychainScope(@{@"team":@"TEAM", @"appGroups":@[@"group.target"], @"keychainGroups":@[untrusted]}); } @catch (NSException *e) { (void)e;rejected=YES; }
+            Require(rejected,@"unrelated/system/wildcard group was added to deletion scope");
+        }
+        fakeSuccessNull = NO; fakeEmptyIdentityArray = NO; fakeAllowedGroups = fullGroups;
+        fakeDeletedGroups = [NSMutableArray new]; fakeQueriedGroups = [NSMutableArray new];
+        fakeItems = [@{@"TEAM.control.app":[@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy]} mutableCopy];
+        for (NSString *group in fullGroups) fakeItems[group] = [@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy];
+        NSUInteger deletesBefore = fakeDeletes;
+        Require(KeychainWork(fullGroups, YES, NO) == 0 && fakeDeletes - deletesBefore == 15 && [[NSSet setWithArray:fakeDeletedGroups] isEqual:[NSSet setWithArray:fullGroups]], @"not every explicit/app-ID/App-Group class received SecItemDelete");
+        Require(KeychainWork(fullGroups, NO, YES) == 0 && fakeQueriedGroups.count == 15 && [[NSSet setWithArray:fakeQueriedGroups] isEqual:[NSSet setWithArray:fullGroups]], @"post-delete verification omitted app-ID or App Group");
+        Require([fakeItems[@"TEAM.control.app"] count] == 1, @"full keychain cleanup changed an unrelated group");
+        deletesBefore = fakeDeletes;
+        Require(KeychainWork(fullGroups, YES, NO) == 0 && fakeDeletes - deletesBefore == 15, @"empty groups skipped deletion instead of receiving an explicit delete");
+        fakeItems[@"group.target"] = [@{(__bridge id)kSecClassGenericPassword:@YES} mutableCopy];
+        Require(KeychainWork(fullGroups, NO, YES) == 4, @"App Group residual was incorrectly reported as empty");
         NSDictionary *process = RunBounded(@"/usr/bin/printf", @[@"{}"], 1.0);
         Require([process[@"status"] intValue] == 0 && [process[@"output"] length] == 2, @"bounded child response incorrect");
         double started = MonotonicSeconds(); BOOL timedOut = NO;
@@ -169,8 +383,54 @@ int main(int argc, const char *argv[]) {
 }
 '''
 
+LOCK_HARNESS = r'''#import <Foundation/Foundation.h>
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+static NSString *SessionRoot;
+static void Fail(NSString *reason) { @throw [NSException exceptionWithName:@"LockFixture" reason:reason userInfo:nil]; }
+static void Require(BOOL value, NSString *reason) { if(!value) Fail(reason); }
+static NSString *Hash(NSArray *values) { return values.firstObject; }
+__LOCK_SOURCE__
+static void Blocked(BOOL exclusive) {
+    BOOL blocked=NO;
+    @try { int fd=SessionLockForAccess(@"fixture.app",exclusive);close(fd); }
+    @catch(NSException *exception) { blocked=[exception.reason isEqual:@"An operation is already running."]; }
+    Require(blocked,exclusive ? @"writer escaped an active session lock" : @"reader escaped an active writer");
+}
+int main(int argc,const char **argv) { @autoreleasepool {
+    Require(argc==2,@"lock fixture arguments");SessionRoot=@(argv[1]);
+    int first=SessionLockForAccess(@"fixture.app",NO),second=SessionLockForAccess(@"fixture.app",NO);
+    Require(first>=0&&second>=0,@"independent readers cannot share the session lock");close(second);
+    Blocked(YES);close(first);
+    int writer=SessionLockForAccess(@"fixture.app",YES);Blocked(NO);Blocked(YES);close(writer);
+    int cleanup=SessionLock(@"fixture.app");Blocked(NO);Blocked(YES);close(cleanup);
+    int released=SessionLockForAccess(@"fixture.app",NO);close(released);
+    puts("cleanup session locking: shared readers, exclusive writers, cleanup exclusion and close release passed");
+}return 0;}
+'''
+
+
+def verify_session_locks(temp):
+    source = SOURCE.read_text()
+    begin = source.index("static int SessionLock")
+    end = source.index("static NSString *SessionPath", begin)
+    lock = source[begin:end]
+    # Only adapt the root-only storage owner to the host user's private fixture.
+    # mkdir/open/flock/close remain the production implementation and real syscalls.
+    lock = lock.replace("st.st_uid == 0", "st.st_uid == geteuid()").replace("st.st_uid != 0", "st.st_uid != geteuid()")
+    source_path = temp / "locks.m"
+    source_path.write_text(LOCK_HARNESS.replace("__LOCK_SOURCE__", lock))
+    binary = temp / "locks"
+    subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-Wall", "-Wextra", "-Werror", "-framework", "Foundation", str(source_path), "-o", str(binary)], check=True)
+    subprocess.run([str(binary), str(temp / "sessions")], check=True)
+
+
 with tempfile.TemporaryDirectory(prefix="shadow-cleanup-test-") as temp:
     temp = Path(temp)
+    verify_session_locks(temp)
     harness = temp / "main.m"
     harness.write_text(HARNESS.replace("__SOURCE__", str(SOURCE)))
     binary = temp / "check"

@@ -45,6 +45,15 @@ static NSMutableDictionary *_shdw_dyld_pending_image_loads;
 static struct mach_header images[202];
 static BOOL nested, nestedClient, throwClient;
 static unsigned repairCount, slotsCount;
+static void shdw_universal_fingerprint_identity_prepare(void *session) {
+    (void)session; assert(internalDepth);
+}
+static void shdw_universal_fingerprint_environment_prepare(void *session) {
+    (void)session; assert(internalDepth);
+}
+static void shdw_universal_fingerprint_prepare(void *session) {
+    (void)session; assert(internalDepth);
+}
 static BOOL shdw_dyld_image_is_hidden(const void *h) { return h == &images[129]; }
 static void (*shdw_image_load_cbs[SHADOW_MAX_IMAGE_LOAD_CBS])(const struct mach_header *, const char *, bool);
 static void (*shdw_bulk_load_cbs[SHADOW_MAX_BULK_LOAD_CBS])(unsigned, const struct mach_header *[], const char *[]);

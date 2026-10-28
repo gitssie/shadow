@@ -1,6 +1,7 @@
 """Exercise production config policy and startup snapshot bodies with explicit fixtures."""
 from pathlib import Path
 import subprocess
+import re
 import sys
 import tempfile
 
@@ -40,17 +41,23 @@ NSDictionary *SHDWFingerprintSystem(NSString *bundleID) { (void)bundleID; return
 @end
 @interface SettingsDouble : NSObject
 + (instancetype)sharedInstance;
-- (NSDictionary *)fingerprintDataForIdentifier:(NSString *)identifier;
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier;
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier vendorIdentifier:(NSUUID *__autoreleasing *)vendor;
+- (NSString *)fingerprintOwnerIdentifierForIdentifier:(NSString *)identifier;
+- (NSUUID *)storedFingerprintVendorIdentifierForIdentifier:(NSString *)identifier;
 @end
 @implementation SettingsDouble
 + (instancetype)sharedInstance { static id settings; if (!settings) settings = [self new]; return settings; }
-- (NSDictionary *)fingerprintDataForIdentifier:(NSString *)identifier { (void)identifier; return fixtureData; }
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier { (void)identifier; return fixtureData; }
+- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier vendorIdentifier:(NSUUID *__autoreleasing *)vendor { *vendor=nil; return [self runtimeFingerprintDataForIdentifier:identifier]; }
+- (NSString *)fingerprintOwnerIdentifierForIdentifier:(NSString *)identifier { return identifier; }
+- (NSUUID *)storedFingerprintVendorIdentifierForIdentifier:(NSString *)identifier { (void)identifier; return nil; }
 @end
 '''
 storage = "\n".join(line for line in (policy / "FingerprintStorage.m").read_text().splitlines()
                     if not line.startswith("#import"))
 storage = storage.replace("SHDWFingerprintConfig(", "PinnedConfiguration(").replace("SHDWFingerprintData(", "PinnedData(").replace("SHDWFingerprintSystem(", "PinnedSystem(")
-storage = storage.replace("SHDWFingerprintStore", "ConfigurationStoreDouble").replace("ShadowSettings", "SettingsDouble")
+storage = re.sub(r"\bSHDWFingerprintStore\b", "ConfigurationStoreDouble", storage).replace("ShadowSettings", "SettingsDouble")
 source += "\n" + storage
 hostname_source = (root / "src/ShadowCore.dylib/hooks/Universal/libc_antidebugging.x").read_text()
 source += "\n" + hostname_source[hostname_source.index("int (*original_gethostname)"):hostname_source.index("int replaced_uname(")]
@@ -98,6 +105,13 @@ int main(void) { @autoreleasepool {
   assert(SHDWFingerprintUnameValue(&value));
   assert(!strcmp(value.release, "24.6.0") && strstr(value.version, "T8110"));
   assert(!strcmp(value.nodename, "iPhone"));
+  chosen[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.8_22H352"};
+  fixture = [chosen copy];
+  assert([SHDWFingerprintOSVersionString() isEqual:@"18.7.8"]);
+  assert(!strcmp(SHDWFingerprintVersionValue("kern.osversion"), "22H352"));
+  assert([SHDWFingerprintUserAgent(ua) containsString:@"OS 18_7_8 like Mac OS X"]);
+  assert(SHDWFingerprintUnameValue(&value));
+  assert(strstr(value.version, "xnu-11417.140.69.706.9~1/RELEASE_ARM64_T8110"));
   for (NSArray *radios in @[@[], @[@"4g"], @[@"5g"], @[@"4g",@"5g"]]) {
     chosen[@"Network"] = @{@"RadioTechnologies":radios}; fixture = [chosen copy];
     NSDictionary *result = SHDWFingerprintRadioTechnologies(@{@"real-service":@"CTRadioAccessTechnologyGPRS"});

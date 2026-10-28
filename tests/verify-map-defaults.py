@@ -65,6 +65,8 @@ NSDictionary *SHDWFingerprintSystem(NSString *bundleID) {
     return [SHDWFingerprintConfiguration resolvedSystemForConfiguration:SHDWFingerprintConfig(bundleID)];
 }
 
+NSUUID *SHDWFingerprintStoredVendorIdentifier(NSString *bundleID) { (void)bundleID; return nil; }
+
 NSDictionary *SHDWFingerprintData(NSString *bundleID) {
     (void)bundleID;
     return @{@"MemoryDelta": @16384};

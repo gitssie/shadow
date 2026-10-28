@@ -123,8 +123,6 @@
 "Backup verified" = "备份复查通过";
 "Backup deleted" = "备份已删除";
 "Backup saved" = "备份已保存";
-"Update backup before cleaning?" = "清理前更新备份？";
-"The current fingerprint already has a backup." = "当前指纹已有对应备份。";
 "Backup and clean" = "备份并清理";
 "Clean directly" = "直接清理";
 "Please wait" = "请稍候";
@@ -165,3 +163,134 @@
 "Application state operation failed" = "无法完成应用数据操作。";
 
 "Search" = "搜索";
+
+"This backup belongs to the current IDFV and cannot be restored." = "此备份与当前环境的 IDFV 相同，不能恢复。";
+"Back up before cleaning?" = "清理前备份？";
+"Cleaning removes current app data. Back up first to keep it." = "清理将删除当前应用数据，建议先备份。";
+
+"Finish verification" = "完成验证";
+"Verify the restored data and finish the interrupted operation." = "验证已恢复的数据并完成中断操作，不会再次覆盖数据。";
+"Backup unavailable" = "备份不可用";
+
+"Container data" = "容器数据";
+
+"External preferences and caches" = "容器外偏好与缓存";
+
+"External web data" = "容器外网页数据";
+
+"Application receipts" = "应用安装包收据";
+
+"IP switching" = "IP 切换";
+
+"Switch IP" = "切换 IP";
+
+"Label" = "标识";
+
+"Add URL" = "添加链接";
+
+"Not configured" = "未配置";
+
+"Choose a switch URL" = "选择切换链接";
+
+"Checking IP…" = "检测 IP…";
+
+"Switching IP…" = "切换中…";
+
+"Waiting for network…" = "等待网络恢复…";
+
+"Waiting for IP change…" = "等待 IP 变化…";
+
+"IP switched" = "IP 切换成功";
+
+"Enter a label on the left and the full switch URL on the right. Swipe a row to delete it." = "左侧填写标识，右侧填写完整的切换 URL。左滑可删除。";
+
+"Enter a name for this IP switch." = "请填写此链接的标识。";
+
+"Use a different name for each IP switch." = "每条链接请使用不同的标识。";
+
+"Enter a valid HTTP or HTTPS URL without credentials or spaces." = "请输入有效的 HTTP 或 HTTPS 链接，不要包含账号密码或空格。";
+
+"Could not check the current public IP. No switch request was sent." = "无法获取当前公网 IP，尚未发送切换请求。";
+
+"IP lookup is rate limited. Try again later." = "IP 检测服务请求过于频繁，请稍后重试。";
+
+"The IP switch server rejected the request." = "IP 切换服务拒绝了请求。";
+
+"An IP switch is already running." = "正在切换 IP，请等待完成。";
+
+"Timed out waiting for a different public IP. Try again." = "等待超时，未检测到公网 IP 变化，请重试。";
+
+"The network request could not be completed. Check the URL and connection security." = "无法完成网络请求，请检查链接及连接安全设置。";
+
+"Application data" = "应用数据";
+
+
+"Verify cleanup" = "复核";
+
+"Before switching" = "切换前";
+
+"Latest query" = "最新查询";
+
+"Not obtained" = "未获取";
+
+"Last queried" = "查询时间";
+
+"Query again" = "重新查询";
+
+"Querying IP and region…" = "正在查询 IP 和地区…";
+
+"Sending switch request…" = "正在发送切换请求…";
+
+"Result not yet confirmed" = "尚未确认切换结果";
+
+"IP change detected" = "已检测到 IP 变化";
+
+"Query complete. IP unchanged." = "查询完成，IP 未变化。";
+
+"Query complete." = "查询完成。";
+
+"Query again only refreshes IP and region. It does not send another switch request." = "重新查询只刷新 IP 和地区，不会再次发送切换请求。";
+
+"Could not query the current public IP." = "未能获取当前公网 IP，请重新查询。";
+
+"IP change has not been confirmed yet. Query again later." = "尚未确认 IP 变化，请稍后重新查询。";
+
+"IP lookup is rate limited. IP change has not been confirmed yet. Query again later." = "IP 检测服务请求过于频繁，尚未确认 IP 变化，请稍后重新查询。";
+
+"Waiting up to 120 seconds." = "最多等待 120 秒。";
+
+"Not confirmed yet." = "暂未确认";
+
+"Loading" = "加载中";
+
+"Keychain groups are shared with other apps." = "钥匙串分组与其他应用共用，已停止操作。";
+
+"Cannot check keychain permissions for some apps." = "部分应用的钥匙串权限无法检查，已停止操作。";
+
+"Shared keychain group" = "共用分组";
+
+"Cannot check app" = "无法检查的应用";
+
+"DER-only signed entitlements unavailable" = "暂不支持读取此应用的 DER 格式权限。";
+
+"Ambiguous signed access group" = "此应用声明了无法识别的权限分组。";
+
+"Unreadable target signature" = "无法读取此应用的签名。";
+
+"Unreadable ownership" = "无法读取此应用的权限。";
+
+"Invalid DER signed entitlements" = "无法读取此应用的签名权限数据。";
+
+"Unsupported DER signed entitlement type" = "暂不支持此应用的签名权限格式。";
+
+"Duplicate signed entitlements" = "此应用包含重复的签名权限数据。";
+
+"Application group containers are shared with other apps." = "应用共享容器被其他应用共用，已停止备份。";
+
+"Cannot check app group permissions for some apps." = "部分应用的共享容器权限无法检查，已停止备份。";
+
+"Shared app group" = "共用的应用分组";
+
+"App group being checked" = "待核实的应用分组";
+
+"Keychain group being checked" = "待核实的钥匙串分组";

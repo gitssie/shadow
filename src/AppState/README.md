@@ -16,26 +16,45 @@ module itself has no UIKit or device-service dependency.
   snapshots/<canonical-IDFV>/
     manifest.plist
     data.tar.zst
+    state.tar.zst
 ```
 
-The manifest format is `ShadowAppState1`. It records Bundle ID, IDFV, title, note,
-app version/build, backup date, container identities, and archive verification
-metadata. Archive members include container trees, `keychain/records.plist`, and
-`identity/state.plist`. The identity payload contains complete fingerprint data
-and configuration dictionaries. Restore locks the fingerprint through the backend.
+The manifest format is `ShadowAppState2`. Previous single-archive snapshots are
+not accepted. It records Bundle ID, IDFV, title, note,
+app version/build, backup date, container identities, and separate verification metadata for each archive. `data.tar.zst` contains
+only application/group container trees. `state.tar.zst` contains bounded logical
+exports: `keychain/records.plist`, `identity/state.plist`, and
+`preferences/records.plist`. The identity payload contains complete fingerprint
+data and configuration dictionaries without applying the current runtime configuration
+schema; unknown fields and preference values are preserved. Container preference files remain in their
+original paths in the data archive; the preferences payload also records scoped
+iOS preference values for cache-coherent import and external preference domains. Restore locks the fingerprint through the backend.
 
 A backup with the same IDFV updates that snapshot and retains title/note unless
-explicitly supplied. A staged snapshot must pass full verification before
-publication. Existing directories are exchanged atomically with Darwin
+explicitly supplied. Both staged archives must pass full verification before
+publication together with their manifest. Existing directories are exchanged atomically with Darwin
 `renameatx_np(RENAME_SWAP)`; the old snapshot is not deleted before publication.
 Per-app file locks reject overlapping operations. Storage directories are private
-and links are not accepted as storage nodes.
+and links are not accepted as storage nodes. On iOS the complete backup
+storage tree belongs to `mobile:mobile` (UID/GID 501), with directories `0700`
+and files `0600`, allowing mobile-context sync tools to access it. The privileged
+helper retains authority over live app containers and Keychain operations; that
+authority does not determine backup ownership. The store accepts explicit storage
+UID/GID, while its default initializer uses the current effective UID/GID for host
+fixtures. Existing root-owned backup trees are migrated once using descriptor-relative
+traversal and per-app operation locks. Symlinks, hard-linked files, unexpected
+owners/modes, and filesystem boundaries stop migration. Archive contents and
+creation/modification timestamps are preserved. Container archive entries preserve their original numeric UID/GID independently
+of backup storage ownership, and cannot carry set-user-ID or set-group-ID bits.
+The store checks this before publication and again before accepting a saved
+manifest, including manifests supplied by mobile-context sync tools. Unsupported
+source ownership/permissions fail backup rather than creating an unusable snapshot.
 
 ## Archive and checks
 
-`Archive` writes PAX tar with Zstandard level 1. Regular file contents are read in
+`Archive` writes PAX tar with Zstandard level 3. Regular file contents are read in
 128 KiB chunks. Every regular file has SHA-256 verification, including binary
-files; the complete compressed archive also has SHA-256 and size verification.
+files; each complete compressed archive also has SHA-256 and size verification.
 Recheck streams the archive without extracting a temporary copy. Metadata is
 proportional to the entry count; small serialized identity/Keychain payloads are
 bounded at 16 MiB each. This is not constant total memory for arbitrary inventories.
@@ -50,8 +69,11 @@ libarchive's standard creation-time field omits (including equal/later creation
 times); it is archive metadata and is never installed as an app extended attribute.
 The module does **not** preserve extended
 attributes, filesystem ACLs, or iOS file protection classes. It is not a complete
-filesystem image. Hard links are captured as independent regular files. Special
-nodes are rejected. Container-manager metadata is excluded from capture and
+filesystem image. Regular-file hard links within captured roots share one archived
+content entry and are restored with their original inode relationship. Aliases
+outside the captured roots are not enumerated or recreated; an in-scope file
+remains a self-contained copy when its other aliases are outside the backup.
+Special nodes are rejected. Container-manager metadata is excluded from capture and
 preserved at the destination; the main app's `Library/SplashBoard` is excluded.
 Internal absolute symbolic links are relocated to the current container roots.
 External link text is retained without following it. Traversal, duplicate paths,
@@ -63,23 +85,55 @@ The trusted backend must resolve only the selected installed app and authorized
 containers/Keychain groups, reject unsafe shared scopes, stop the app and its
 extensions, confirm they remain stopped, and flush their preference writers.
 It must validate Keychain payloads before mutation and restore the exact authorized
-scope. It must validate fingerprint data and restore data/configuration plus the
-locked flag atomically. It must not alter system IDFV storage. Backend methods
+scope. It must preserve fingerprint data/configuration dictionaries, including unknown
+fields, and restore them plus the locked flag atomically. Backup/import checks
+serialization and identity association rather than applying runtime configuration
+field whitelists. It must not alter system IDFV storage. Backend methods
 must report failures through `NSError`; progress callbacks should not mutate
 the store or application state.
 
-Restore verifies the complete archive and payloads before clearing target files.
-Optional saving of the current environment runs first. If its IDFV equals the
-selected snapshot's IDFV, `saveCurrent=YES` is rejected to avoid overwriting the
-restore source; callers must explicitly choose `saveCurrent=NO`.
+Restore verifies both complete archives and all payloads before clearing target files.
+Before stopping or mutating the target, restore reads its current IDFV from the
+backend. If it equals the selected snapshot's IDFV, restoration is rejected
+regardless of `saveCurrent`, including an ordinary pending retry. A matching IDFV denotes
+the active environment, whose subsequently generated data must be retained.
+This comparison uses IDFV, not the displayed fingerprint digest. Optional saving
+of a different current environment runs before restore mutations.
 
-A pending record is persisted before restore mutations. Files, Keychain, and
-fingerprint state are restored, then a final combined recheck compares live file
-hashes/inventory, Keychain records, and fingerprint values/lock state, with the
-target still stopped. A failed restore may leave partial live data; it does not
-claim rollback. Pending state blocks backing up that partial environment and
-protects the restore source from editing/deletion, while permitting retry. The
-core never launches an app automatically.
+Restoration matches archived container identities to the currently authorized
+containers, so changed container UUID paths and app version/build values do not
+by themselves block a reinstall or update. Every archived container must have an
+authorized destination; missing destinations fail before mutation. Credential
+records are validated against current authorization rather than requiring the
+archived and current group lists to match. The live installation remains pinned
+throughout the operation. All current containers are cleared, including newly
+added owned containers absent from the snapshot. Only archived roots receive
+archived data; additional containers must pass a final check containing only
+preserved registration metadata, empty standard directory scaffolding, and
+validated empty preference dictionaries materialized by native preference APIs.
+
+A pending record pins both archive hashes and is persisted before restore mutations.
+Files, Keychain and scoped iOS preferences are restored and verified before the
+fingerprint is committed. Identity commit has durable pending/committed stages.
+If an interrupted operation already has the source IDFV active, only verification
+and finalization are allowed: that path never clears or restores application
+files, credentials, preferences, or fingerprint values. Changed live data fails
+verification and is not overwritten. Ordinary same-IDFV restore stays forbidden.
+A failed restore may leave partial live data; it does not claim rollback. Pending
+state blocks backing up that partial environment and protects the source from
+editing/deletion while permitting the appropriate retry. The core never launches
+an app automatically.
+
+Snapshot deletion atomically renames the selected directory outside the published
+catalog before removing its contents. Interrupted physical deletion is retried on
+a later backup/delete operation. A corrupt snapshot is returned as an unavailable
+catalog item without hiding healthy snapshots, and can be deleted without parsing
+its manifest unless it is the protected pending source.
+
+The coordinator stops the target before work and checks its state at phase
+boundaries. Streaming progress only forwards progress events; it does not scan
+processes for every file or data block. Final combined verification remains
+mandatory.
 
 The device adapter currently exports generic/internet password records; nonempty
 certificate, private-key, or identity classes are rejected before restore writes.
@@ -92,8 +146,9 @@ retains its caller's real UID so the manager can stop its process group on timeo
 The app uses a single operation gate for backups, restoration, cleanup, and manual
 fingerprint refresh. Existing same-IDFV backups are updated rather than duplicated.
 Cleanup of an already backed-up environment offers backup-first/direct/cancel;
-backup failure prevents cleanup. Restore defaults to saving the live environment,
-except same-IDFV and pending-recovery cases, which cannot overwrite their source.
+backup failure prevents cleanup. Restore is unavailable when the selected backup
+has the active IDFV. For a different IDFV, restore defaults to saving the live
+environment; an interrupted restore retry never backs up its partial state.
 
 ## Build and verification
 

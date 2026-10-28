@@ -1,3 +1,5 @@
+#import "StateLimits.h"
+
 static NSArray *StateWritableKeys(void) {
     return @[(__bridge id)kSecClass, (__bridge id)kSecAttrAccessGroup, (__bridge id)kSecAttrAccount, (__bridge id)kSecAttrService,
         (__bridge id)kSecAttrServer, (__bridge id)kSecAttrPort, (__bridge id)kSecAttrProtocol, (__bridge id)kSecAttrAuthenticationType,
@@ -55,7 +57,7 @@ static void StateValidateRecords(NSArray *records, NSArray *groups) {
         if (record[@"ArchivedACL"]) Require([record[@"ArchivedACL"] isKindOfClass:NSData.class] && [record[@"ArchivedACL"] length] <= 1024 * 1024, @"Invalid archived credential protection");
         StateDecodeRecord(record); NSDictionary *identity = StateRecordIdentity(record); Require(![identities containsObject:identity], @"Duplicate credential archive identity"); [identities addObject:identity];
     }
-    NSData *encoded = [NSPropertyListSerialization dataWithPropertyList:records format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL]; Require(encoded && encoded.length <= 16 * 1024 * 1024, @"Credential archive exceeds its size limit");
+    Require(StateRequestData(@{@"records":records}) != nil, @"Credential archive exceeds its size limit");
 }
 static NSArray *StateExportRecords(NSArray *groups) {
     NSMutableArray *records = [NSMutableArray new];

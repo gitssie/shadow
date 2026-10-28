@@ -5,17 +5,17 @@
 #import <Shadow/FingerprintConfiguration.h>
 #include <math.h>
 #import "StateKeychain.inc"
+#import "StatePreferences.inc"
 
-static NSUInteger const StatePayloadLimit = 16 * 1024 * 1024;
 static NSString *const StateStorage = @"/private/var/mobile/Library/ShadowBackups";
 static pid_t stateInitiatingParent;
 static void StateParent(void) { Require(stateInitiatingParent > 1 && getppid() == stateInitiatingParent, @"The application state caller exited; the operation was stopped"); }
 static NSData *StateEncode(id value) {
-    NSData *data = [NSPropertyListSerialization dataWithPropertyList:value format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
-    Require(data && data.length <= StatePayloadLimit, @"Application state response exceeds its size limit"); return data;
+    NSData *data = StatePayloadData(value);
+    Require(data != nil, @"Application state response exceeds its size limit"); return data;
 }
 static id StateDecode(NSData *data) {
-    Require(data && data.length <= StatePayloadLimit, @"Application state request exceeds its size limit");
+    Require(data && data.length <= StateFrameLimit, @"Application state request exceeds its size limit");
     id result = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:NULL];
     Require(result != nil, @"Invalid application state request"); return result;
 }
@@ -30,37 +30,45 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
     Require([defaults synchronize], @"Cannot read current fingerprint preferences"); NSDictionary *app = [defaults dictionaryForKey:identifier];
     Require(SHDWFingerprintApplicationIsRegistered(app), @"The selected application is not registered in Shadow");
     if ([mode isEqual:@"state-registration"]) return @{@"registered":@YES};
+    if ([mode isEqual:@"state-fingerprint-identity"]) {
+        id data = app[@"Fingerprint_Data"]; id value = [data isKindOfClass:NSDictionary.class] ? data[@"VendorIdentifier"] : nil;
+        return @{@"idfv":[value isKindOfClass:NSString.class] ? value : @""};
+    }
     if ([mode isEqual:@"state-fingerprint-capture"]) {
         NSDictionary *data = app[@"Fingerprint_Data"], *configuration = app[@"Fingerprint_Config"];
-        Require([settings isValidFingerprintData:data], @"The application has no complete valid fingerprint");
-        if (!configuration) configuration = [SHDWFingerprintStore.sharedStore configurationForApplication:identifier];
-        NSError *error = nil; NSDictionary *validated = [SHDWFingerprintConfiguration configurationByValidating:configuration error:&error];
-        Require(validated != nil && [validated isEqual:configuration], @"The current fingerprint configuration is invalid");
+        Require([data isKindOfClass:NSDictionary.class] && [configuration isKindOfClass:NSDictionary.class] &&
+            [NSPropertyListSerialization propertyList:@[data, configuration] isValidForFormat:NSPropertyListBinaryFormat_v1_0], @"Fingerprint preferences cannot be archived");
         NSMutableDictionary *result = [@{@"data":data, @"configuration":configuration, @"locked":@(SHDWFingerprintApplicationLocked(app))} mutableCopy];
         NSString *digest = [SHDWFingerprintStore deviceFingerprintForData:data]; if (digest) result[@"digest"] = digest;
         return result;
     }
-    NSDictionary *fingerprint = request[@"fingerprint"]; Require([fingerprint isKindOfClass:NSDictionary.class] && [settings isValidFingerprintData:fingerprint[@"data"]], @"The archived fingerprint is invalid");
-    NSError *error = nil; NSDictionary *validated = [SHDWFingerprintConfiguration configurationByValidating:fingerprint[@"configuration"] error:&error];
-    Require(validated != nil && [validated isEqual:fingerprint[@"configuration"]], @"The archived fingerprint configuration is incompatible");
+    NSDictionary *fingerprint = request[@"fingerprint"];
+    Require([fingerprint isKindOfClass:NSDictionary.class] && [fingerprint[@"data"] isKindOfClass:NSDictionary.class] &&
+        [fingerprint[@"configuration"] isKindOfClass:NSDictionary.class] &&
+        [NSPropertyListSerialization propertyList:@[fingerprint[@"data"], fingerprint[@"configuration"]] isValidForFormat:NSPropertyListBinaryFormat_v1_0], @"Archived fingerprint preferences cannot be imported");
     if ([mode isEqual:@"state-fingerprint-validate"]) return @{@"validated":@YES};
-    Require([mode isEqual:@"state-fingerprint-restore"] && getppid() == keychainParent && !Running(target[@"bundlePath"]).count, @"The application must remain stopped before restoring its fingerprint");
+    Require([mode isEqual:@"state-fingerprint-restore"] && getppid() == keychainParent && TargetStopped(target), @"The application must remain stopped before restoring its fingerprint");
     NSMutableDictionary *updated = [app mutableCopy]; updated[@"Fingerprint_Data"] = fingerprint[@"data"]; updated[@"Fingerprint_Config"] = fingerprint[@"configuration"]; updated[@"Fingerprint_Locked"] = @YES;
     [defaults setObject:updated forKey:identifier]; Require([defaults synchronize], @"Cannot persist the restored fingerprint");
     Require([[defaults dictionaryForKey:identifier] isEqual:updated], @"Restored fingerprint preferences failed readback"); return @{@"restored":@YES, @"locked":@YES};
 }
 static NSDictionary *StateWorker(NSString *mode, NSDictionary *target, NSString *directory) {
-    Require([@[@"state-export", @"state-validate", @"state-restore", @"state-registration", @"state-fingerprint-capture", @"state-fingerprint-validate", @"state-fingerprint-restore"] containsObject:mode], @"Unknown scoped application state worker");
+    Require([@[@"state-export", @"state-validate", @"state-restore", @"state-registration", @"state-fingerprint-capture", @"state-fingerprint-identity", @"state-fingerprint-validate", @"state-fingerprint-restore", @"state-preferences-capture", @"state-preferences-validate", @"state-preferences-restore"] containsObject:mode], @"Unknown scoped application state worker");
     NSDictionary *request = @{}; NSString *path = [directory stringByAppendingPathComponent:@"request.plist"]; struct stat st;
     if (!lstat(path.fileSystemRepresentation, &st)) {
-        Require(S_ISREG(st.st_mode) && st.st_uid == 0 && st.st_nlink == 1 && (st.st_mode & 0777) == 0600 && st.st_size > 0 && st.st_size <= (off_t)StatePayloadLimit, @"Unsafe scoped application state request");
+        Require(S_ISREG(st.st_mode) && st.st_uid == 0 && st.st_nlink == 1 && (st.st_mode & 0777) == 0600 && st.st_size > 0 && st.st_size <= (off_t)StateFrameLimit, @"Unsafe scoped application state request");
         id value = StateDecode([NSData dataWithContentsOfFile:path]); Require([value isKindOfClass:NSDictionary.class], @"Invalid scoped worker request"); request = value;
     } else Require(errno == ENOENT, @"Cannot inspect scoped worker request");
+    Require(StateRequestData(request) != nil, @"Application state payload exceeds its size limit");
     Require(!setgroups(0, NULL) && !setgid(501) && !setuid(501) && getuid() == 501 && geteuid() == 501, @"Cannot enter the mobile application state context");
     id value;
     if ([mode hasPrefix:@"state-fingerprint-"] || [mode isEqual:@"state-registration"]) value = StateMobileFingerprint(mode, target, request);
-    else {
-        Require(getppid() == keychainParent && !Running(target[@"bundlePath"]).count, @"The application restarted before its credentials could be accessed");
+    else if ([mode hasPrefix:@"state-preferences-"]) {
+        Require(getppid() == keychainParent && TargetStopped(target), @"The application must remain stopped while preferences are accessed");
+        if ([mode isEqual:@"state-preferences-capture"]) value = StateCapturePreferences(target);
+        else { StateValidatePreferences(request[@"preferences"], target); if ([mode isEqual:@"state-preferences-restore"]) StateRestorePreferences(request[@"preferences"], target); value = @{@"validated":@YES}; }
+    } else {
+        Require(getppid() == keychainParent && TargetStopped(target), @"The application restarted before its credentials could be accessed");
         NSArray *groups = ValidatedKeychainScope(target), *records = request[@"records"];
         if ([mode isEqual:@"state-export"]) value = StateExportRecords(groups);
         else {
@@ -69,12 +77,16 @@ static NSDictionary *StateWorker(NSString *mode, NSDictionary *target, NSString 
             value = @{@"validated":@YES, @"restored":@([mode isEqual:@"state-restore"])};
         }
     }
+    NSString *payloadKey = [mode isEqual:@"state-export"] ? @"records" : [mode isEqual:@"state-preferences-capture"] ? @"preferences" : [mode isEqual:@"state-fingerprint-capture"] ? @"fingerprint" : nil;
+    if (payloadKey) Require(StateRequestData(@{payloadKey:value}) != nil, @"Captured application state exceeds its restore size limit");
     return @{@"ok":@YES, @"result":[StateEncode(value) base64EncodedStringWithOptions:0]};
 }
 static id StateWorkerValue(NSDictionary *target, NSString *mode, NSDictionary *request) {
     NSDictionary *response = ScopedWorker(target, mode, request); NSString *encoded = response[@"result"];
-    Require([encoded isKindOfClass:NSString.class] && encoded.length <= 24 * 1024 * 1024, @"Scoped application state response is invalid");
-    return StateDecode([[NSData alloc] initWithBase64EncodedString:encoded options:0]);
+    Require([encoded isKindOfClass:NSString.class] && encoded.length <= StateEncodedOutputLimit, @"Scoped application state response is invalid");
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
+    Require(data && data.length <= StatePayloadLimit, @"Scoped application state payload exceeds its size limit");
+    return StateDecode(data);
 }
 static BOOL StateFailure(NSError **error, NSException *exception) {
     if (error) *error = [NSError errorWithDomain:SHDWAppStateErrorDomain code:40 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Application state operation failed"}]; return NO;
@@ -87,7 +99,8 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
 - (NSDictionary *)resolveBundle:(NSString *)bundleID error:(NSError **)error {
     @try {
         NSDictionary *scope = Resolve(bundleID), *authority = scope[@"target"];
-        Require([authority[@"ownershipComplete"] boolValue] && ![authority[@"preservedSharedGroups"] count] && ![authority[@"sharedKeychainGroups"] count], @"Shared or unverifiable application resources cannot be backed up safely"); ValidatedKeychainScope(authority);
+        RequireKeychainOwnership(authority);
+        RequireContainerOwnership(authority); ValidatedKeychainScope(authority);
         NSDictionary *info = ReadPlist([authority[@"bundlePath"] stringByAppendingPathComponent:@"Info.plist"]); NSString *version = info[@"CFBundleShortVersionString"], *build = info[@"CFBundleVersion"];
         Require([version isKindOfClass:NSString.class] && version.length && [build isKindOfClass:NSString.class] && build.length, @"The installed application's version is unavailable");
         NSMutableDictionary *containers = [NSMutableDictionary new];
@@ -98,7 +111,7 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
 }
 - (BOOL)assertStopped:(NSDictionary *)target error:(NSError **)error {
     @try {
-        NSDictionary *authority = target[@"authority"]; Require(!Running(authority[@"bundlePath"]).count, @"The application or an extension restarted during the operation");
+        NSDictionary *authority = target[@"authority"]; Require(TargetStopped(authority), @"The application or an extension restarted during the operation");
         for (NSDictionary *container in authority[@"containers"]) {
             struct stat st; NSString *path = container[@"path"];
             Require(!lstat(path.fileSystemRepresentation, &st) && S_ISDIR(st.st_mode) && (uint64_t)st.st_dev == [container[@"device"] unsignedLongLongValue] && st.st_ino == [container[@"inode"] unsignedLongLongValue] && [Canonical(path) isEqual:path], @"An application container changed during the operation");
@@ -110,7 +123,7 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
     } @catch (NSException *exception) { return StateFailure(error, exception); }
 }
 - (BOOL)stopTarget:(NSDictionary *)target error:(NSError **)error {
-    @try { StateParent(); Stop(target[@"authority"][@"bundlePath"]); return [self assertStopped:target error:error]; } @catch (NSException *exception) { return StateFailure(error, exception); }
+    @try { StateParent(); Stop(target[@"authority"]); return [self assertStopped:target error:error]; } @catch (NSException *exception) { return StateFailure(error, exception); }
 }
 - (BOOL)flushPreferencesForTarget:(NSDictionary *)target error:(NSError **)error {
     @try {
@@ -119,6 +132,19 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
         NSArray *before = self.queries[target[@"bundleID"]] ?: @[]; NSMutableOrderedSet *queries = [NSMutableOrderedSet orderedSetWithArray:before]; [queries addObjectsFromArray:PreferenceQueries(target[@"authority"])];
         self.queries[target[@"bundleID"]] = queries.array; PreferenceCache(queries.array, NO, YES); return [self assertStopped:target error:error];
     } @catch (NSException *exception) { return StateFailure(error, exception); }
+}
+- (NSString *)currentVendorIdentifierForTarget:(NSDictionary *)target error:(NSError **)error {
+    @try { id value = StateWorkerValue(target[@"authority"], @"state-fingerprint-identity", nil)[@"idfv"]; Require([value isKindOfClass:NSString.class], @"Cannot read the current application IDFV."); return value; }
+    @catch (NSException *exception) { StateFailure(error, exception); return nil; }
+}
+- (NSDictionary *)capturePreferencesForTarget:(NSDictionary *)target error:(NSError **)error {
+    @try { id result = StateWorkerValue(target[@"authority"], @"state-preferences-capture", nil); Require([result isKindOfClass:NSDictionary.class], @"Invalid captured application preferences"); return result; } @catch (NSException *exception) { StateFailure(error, exception); return nil; }
+}
+- (BOOL)validatePreferences:(NSDictionary *)preferences target:(NSDictionary *)target error:(NSError **)error {
+    @try { StateWorkerValue(target[@"authority"], @"state-preferences-validate", @{@"preferences":preferences}); return YES; } @catch (NSException *exception) { return StateFailure(error, exception); }
+}
+- (BOOL)restorePreferences:(NSDictionary *)preferences target:(NSDictionary *)target error:(NSError **)error {
+    @try { StateParent(); Require([self assertStopped:target error:error], @"The application must remain stopped before preferences are restored"); mutated = YES; StateWorkerValue(target[@"authority"], @"state-preferences-restore", @{@"preferences":preferences}); return YES; } @catch (NSException *exception) { return StateFailure(error, exception); }
 }
 - (NSArray *)captureKeychainForTarget:(NSDictionary *)target error:(NSError **)error {
     @try { Require([self assertStopped:target error:error], @"The application must remain stopped while credentials are captured"); id records = StateWorkerValue(target[@"authority"], @"state-export", nil); Require([records isKindOfClass:NSArray.class], @"Invalid captured credentials"); return records; } @catch (NSException *exception) { StateFailure(error, exception); return nil; }
@@ -143,15 +169,13 @@ static NSArray *StateConciseCatalog(NSArray *catalog) {
     NSMutableArray *result = [NSMutableArray new];
     for (NSDictionary *manifest in catalog) {
         NSMutableDictionary *entry = [NSMutableDictionary new];
-        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"restorePending", @"recoverySource"]) if (manifest[key]) entry[key] = manifest[key];
-        entry[@"size"] = manifest[@"archiveInfo"][@"archiveSize"] ?: @0; [result addObject:entry];
+        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"restorePending", @"recoverySource", @"finalizationPending", @"unavailable", @"error"]) if (manifest[key]) entry[key] = manifest[key];
+        if ([manifest[@"unavailable"] boolValue]) { entry[@"size"] = @0; [result addObject:entry]; continue; }
+        NSNumber *dataSize = manifest[@"archiveInfo"][@"archiveSize"], *stateSize = manifest[@"stateArchiveInfo"][@"archiveSize"] ?: @0;
+        Require([dataSize isKindOfClass:NSNumber.class] && [stateSize isKindOfClass:NSNumber.class] && [dataSize isEqual:@(dataSize.unsignedLongLongValue)] && [stateSize isEqual:@(stateSize.unsignedLongLongValue)] && dataSize.unsignedLongLongValue <= UINT64_MAX - stateSize.unsignedLongLongValue, @"Invalid backup archive size");
+        entry[@"size"] = @(dataSize.unsignedLongLongValue + stateSize.unsignedLongLongValue); [result addObject:entry];
     }
     return result;
-}
-static void StateStorageDirectory(void) {
-    NSString *parentPath = StateStorage.stringByDeletingLastPathComponent; Require([Canonical(parentPath) isEqual:parentPath], @"Backup storage parent is not canonical");
-    int parent = open(parentPath.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); Require(parent >= 0, @"Cannot open backup storage parent");
-    @try { if (mkdirat(parent, StateStorage.lastPathComponent.fileSystemRepresentation, 0700)) Require(errno == EEXIST, @"Cannot create private backup storage"); struct stat st; Require(!fstatat(parent, StateStorage.lastPathComponent.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW) && S_ISDIR(st.st_mode) && st.st_uid == 0 && (st.st_mode & 0777) == 0700, @"Backup storage is not a private root-owned directory"); } @finally { close(parent); }
 }
 static NSDictionary *StateCommand(int argc, const char *argv[]) {
     stateInitiatingParent = getppid(); StateParent();
@@ -166,12 +190,13 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     if (request[@"saveCurrent"]) Require([request[@"saveCurrent"] isKindOfClass:NSNumber.class] && [@[@NO, @YES] containsObject:request[@"saveCurrent"]], @"Invalid save-current option");
     if (request[@"metadata"]) { Require([request[@"metadata"] isKindOfClass:NSDictionary.class], @"Invalid backup metadata"); for (id key in request[@"metadata"]) Require([@[@"title", @"note"] containsObject:key] && [request[@"metadata"][key] isKindOfClass:NSString.class], @"Invalid backup metadata field"); }
     Require(geteuid() == 0, @"Cannot enter the private backup storage context");
-    int lock = SessionLock(identifier);
+    BOOL readOnly = [@[@"catalog", @"recheck"] containsObject:action];
+    int lock = SessionLockForAccess(identifier, !readOnly);
     @try {
-        StateStorageDirectory(); NativeStateBackend *backend = [NativeStateBackend new]; NSError *error = nil;
+        Require([Canonical(StateStorage.stringByDeletingLastPathComponent) isEqual:StateStorage.stringByDeletingLastPathComponent], @"Backup storage parent is not canonical"); NativeStateBackend *backend = [NativeStateBackend new]; NSError *error = nil;
         NSDictionary *target = [backend resolveBundle:identifier error:&error]; Require(target != nil, error.localizedDescription ?: @"Cannot resolve backup target");
         StateWorkerValue(target[@"authority"], @"state-registration", nil);
-        SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage backend:backend error:&error]; Require(store != nil, error.localizedDescription ?: @"Cannot open backup storage");
+        SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend error:&error]; Require(store != nil, error.localizedDescription ?: @"Cannot open backup storage");
         __block double last = 0; __block NSString *lastPhase = nil, *lastStage = nil;
         store.progressHandler = ^(NSDictionary *event) {
             StateParent();
@@ -188,7 +213,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
         else if ([action isEqual:@"edit"]) { if ([store editBundle:identifier idfv:request[@"idfv"] metadata:request[@"metadata"] error:&error]) result = @{@"edited":@YES}; }
         else if ([action isEqual:@"delete"]) { if ([store deleteBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"deleted":@YES}; }
         else if ([store recheckBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"verified":@YES};
-        if (!result) return @{@"ok":@NO, @"error":error.localizedDescription ?: @"Application state operation failed", @"partial":@([error.userInfo[@"stateMayBePartial"] boolValue]), @"stateMayBePartial":@([error.userInfo[@"stateMayBePartial"] boolValue])};
+        if (!result) return @{@"ok":@NO, @"details":failureDetails ?: @{}, @"error":error.localizedDescription ?: @"Application state operation failed", @"partial":@([error.userInfo[@"stateMayBePartial"] boolValue]), @"stateMayBePartial":@([error.userInfo[@"stateMayBePartial"] boolValue])};
         return @{@"ok":@YES, @"result":[StateEncode(result) base64EncodedStringWithOptions:0]};
     } @finally { close(lock); }
 }

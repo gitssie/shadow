@@ -1,6 +1,7 @@
 #import "BackupService.h"
 #import "OperationCoordinator.h"
 #import "Language.h"
+#import "OwnershipDiagnostics.h"
 #import <Shadow/JBPath.h>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -121,7 +122,14 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
     if (![terminal[@"ok"] boolValue] || !WIFEXITED(status) || WEXITSTATUS(status)) {
         NSString *message = [terminal[@"error"] isKindOfClass:NSString.class] ? terminal[@"error"] : @"Unable to complete backup operation.";
         BOOL uncertainRestore = partial && ([terminal[@"ok"] boolValue] || !WIFEXITED(status));
-        if (error) *error = BackupError(5, message, uncertainRestore || [terminal[@"partial"] boolValue] || [terminal[@"stateMayBePartial"] boolValue]);
+        if (error) {
+            NSError *failure = BackupError(5, message, uncertainRestore || [terminal[@"partial"] boolValue] || [terminal[@"stateMayBePartial"] boolValue]);
+            NSMutableDictionary *info = [failure.userInfo mutableCopy];
+            NSDictionary *details = [terminal[@"details"] isKindOfClass:NSDictionary.class] ? terminal[@"details"] : @{};
+            info[@"helperDetails"] = details;
+            info[NSLocalizedDescriptionKey] = SHDWOwnershipErrorDescription(message, details);
+            *error = [NSError errorWithDomain:failure.domain code:failure.code userInfo:info];
+        }
         return nil;
     }
     NSString *payload = terminal[@"result"];

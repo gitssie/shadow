@@ -3,6 +3,7 @@
 #include <archive_entry.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <sys/stat.h>
+#include <sys/param.h>
 #include <sys/attr.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -10,6 +11,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
+#include <xlocale.h>
 
 NSString *const SHDWStateArchiveErrorDomain = @"Shadow.AppState.Archive";
 static const size_t Chunk = 128 * 1024;
@@ -17,6 +19,18 @@ static const NSUInteger PayloadLimit = 16 * 1024 * 1024;
 
 static void Check(BOOL value, NSString *message) {
     if (!value) @throw [NSException exceptionWithName:SHDWStateArchiveErrorDomain reason:message userInfo:nil];
+}
+// Libarchive converts UTF-8 entry fields through the calling thread's C locale.
+// Keep that conversion UTF-8 without changing the application's global locale.
+static locale_t ArchiveUTF8Locale(locale_t *previous) {
+    locale_t locale = newlocale(LC_CTYPE_MASK, "UTF-8", NULL);
+    Check(locale != NULL, @"Cannot create UTF-8 archive locale");
+    *previous = uselocale(locale);
+    if (!*previous) { freelocale(locale); Check(NO, @"Cannot select UTF-8 archive locale"); }
+    return locale;
+}
+static void RestoreArchiveLocale(locale_t locale, locale_t previous) {
+    if (locale) { uselocale(previous); freelocale(locale); }
 }
 static void PublishError(NSError **error, NSException *exception) {
     if (error) *error = [NSError errorWithDomain:SHDWStateArchiveErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Archive operation failed"}];
@@ -51,6 +65,7 @@ static NSDictionary *StatEntry(NSString *path, struct stat st) {
         @"mtime":@(st.st_mtimespec.tv_sec), @"mtimeNsec":@(st.st_mtimespec.tv_nsec),
         @"birthtime":@(st.st_birthtimespec.tv_sec), @"birthtimeNsec":@(st.st_birthtimespec.tv_nsec)};
 }
+static NSString *InodeKey(struct stat st) { return [NSString stringWithFormat:@"%llu:%llu", (unsigned long long)st.st_dev, (unsigned long long)st.st_ino]; }
 static BOOL SameStat(struct stat before, struct stat after) {
     return before.st_dev == after.st_dev && before.st_ino == after.st_ino && before.st_mode == after.st_mode &&
         before.st_uid == after.st_uid && before.st_gid == after.st_gid && before.st_size == after.st_size &&
@@ -80,7 +95,7 @@ static BOOL SameStat(struct stat before, struct stat after) {
 }
 @end
 static NSArray<ArchiveRoot *> *OpenRoots(NSDictionary *roots) {
-    Check([roots isKindOfClass:NSDictionary.class] && roots.count, @"Archive roots are missing");
+    Check([roots isKindOfClass:NSDictionary.class], @"Archive roots are missing");
     NSMutableArray *result = [NSMutableArray new];
     for (NSString *prefix in [[roots allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
         Check(SafePath(prefix), @"Invalid archive root prefix"); NSString *path = roots[prefix];
@@ -144,6 +159,7 @@ static void WriteHeader(struct archive *writer, NSDictionary *entry, unsigned lo
         NSString *creation = [NSString stringWithFormat:@"%lld:%09ld", [entry[@"birthtime"] longLongValue], [entry[@"birthtimeNsec"] longValue]];
         archive_entry_xattr_add_entry(header, "org.shadow.birthtime", creation.UTF8String, strlen(creation.UTF8String));
         if ([type isEqual:@"symlink"]) archive_entry_set_symlink_utf8(header, [entry[@"target"] UTF8String]);
+        if (entry[@"hardlink"]) archive_entry_set_hardlink_utf8(header, [entry[@"hardlink"] UTF8String]);
         Check(archive_write_header(writer, header) == ARCHIVE_OK, @"Cannot write archive entry header");
     } @finally { archive_entry_free(header); }
 }
@@ -152,7 +168,7 @@ static void WriteBytes(struct archive *writer, const void *bytes, size_t length)
     while (length) { la_ssize_t written = archive_write_data(writer, cursor, length); Check(written > 0, @"Cannot write compressed archive data"); cursor += written; length -= (size_t)written; }
 }
 static void CaptureNode(struct archive *writer, ArchiveRoot *root, int parent, NSString *name, NSString *relative,
-                        NSMutableArray *entries, SHDWStateProgress progress, unsigned long long *bytes) {
+                        NSMutableArray *entries, NSMutableDictionary *inodes, SHDWStateProgress progress, unsigned long long *bytes) {
     [root pin]; Progress(progress, @"capture", *bytes, entries.count); struct stat before, after;
     Check(!fstatat(parent, name.fileSystemRepresentation, &before, AT_SYMLINK_NOFOLLOW), @"Cannot inspect archive source");
     Check(before.st_dev == root.device, @"Archive source crosses a filesystem boundary");
@@ -164,7 +180,7 @@ static void CaptureNode(struct archive *writer, ArchiveRoot *root, int parent, N
             Check(!fstat(fd, &after) && SameStat(before, after), @"Source directory changed before capture"); WriteHeader(writer, entry, 0); [entries addObject:entry];
             for (NSString *child in Names(fd)) {
                 NSString *next = relative.length ? [relative stringByAppendingPathComponent:child] : child;
-                if (!Excluded(root.prefix, next)) CaptureNode(writer, root, fd, child, next, entries, progress, bytes);
+                if (!Excluded(root.prefix, next)) CaptureNode(writer, root, fd, child, next, entries, inodes, progress, bytes);
             }
             Check(!fstat(fd, &after) && SameStat(before, after), @"Source directory changed during capture");
         } @finally { close(fd); }
@@ -172,7 +188,16 @@ static void CaptureNode(struct archive *writer, ArchiveRoot *root, int parent, N
         entry[@"target"] = ReadLink(parent, name); WriteHeader(writer, entry, 0); [entries addObject:entry];
         Check(!fstatat(parent, name.fileSystemRepresentation, &after, AT_SYMLINK_NOFOLLOW) && SameStat(before, after), @"Source link changed during capture");
     } else {
-        Check(before.st_nlink == 1 && before.st_size >= 0, @"Source hard links are unsupported");
+        Check(before.st_size >= 0, @"Invalid source file size");
+        NSDictionary *first = inodes[InodeKey(before)];
+        if (first) {
+            entry[@"hardlink"] = first[@"path"]; entry[@"size"] = first[@"size"]; entry[@"sha256"] = first[@"sha256"];
+            for (NSString *key in @[@"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"]) Check([entry[key] isEqual:first[key]], @"Source hardlink metadata changed");
+            Check((unsigned long long)before.st_size == [first[@"size"] unsignedLongLongValue], @"Source hardlink size changed");
+            WriteHeader(writer, entry, 0); [entries addObject:entry];
+            Check(!fstatat(parent, name.fileSystemRepresentation, &after, AT_SYMLINK_NOFOLLOW) && SameStat(before, after), @"Source hardlink changed during capture");
+            Check(archive_write_finish_entry(writer) == ARCHIVE_OK, @"Cannot finish hardlink entry"); Progress(progress, @"capture", *bytes, entries.count); return;
+        }
         int fd = openat(parent, name.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); Check(fd >= 0, @"Cannot open source file"); unsigned char *buffer = NULL;
         @try {
             Check(!fstat(fd, &after) && SameStat(before, after), @"Source file changed before capture"); WriteHeader(writer, entry, (unsigned long long)before.st_size);
@@ -185,7 +210,7 @@ static void CaptureNode(struct archive *writer, ArchiveRoot *root, int parent, N
                 Progress(progress, @"capture", *bytes, entries.count);
             }
             Check(total == (unsigned long long)before.st_size && !fstat(fd, &after) && SameStat(before, after), @"Source file changed during capture");
-            CC_SHA256_Final(digest, &context); entry[@"size"] = @(total); entry[@"sha256"] = Hex(digest, sizeof(digest)); [entries addObject:entry];
+            CC_SHA256_Final(digest, &context); entry[@"size"] = @(total); entry[@"sha256"] = Hex(digest, sizeof(digest)); [entries addObject:entry]; inodes[InodeKey(before)] = entry;
         } @finally { free(buffer); close(fd); }
     }
     Check(archive_write_finish_entry(writer) == ARCHIVE_OK, @"Cannot finish archive entry"); Progress(progress, @"capture", *bytes, entries.count);
@@ -211,14 +236,24 @@ static NSDictionary *InfoEntries(NSDictionary *info) {
         Check([entry[@"uid"] longLongValue] >= 0 && [entry[@"uid"] unsignedLongLongValue] <= UINT_MAX && [entry[@"gid"] longLongValue] >= 0 && [entry[@"gid"] unsignedLongLongValue] <= UINT_MAX, @"Invalid archived ownership");
         if ([entry[@"type"] isEqual:@"file"]) Check(IntegralNumber(entry[@"size"]) && [entry[@"size"] longLongValue] >= 0 && [entry[@"sha256"] isKindOfClass:NSString.class] && [entry[@"sha256"] length] == 64, @"Invalid file archive information");
         if ([entry[@"type"] isEqual:@"symlink"]) Check([entry[@"target"] isKindOfClass:NSString.class] && [entry[@"target"] length], @"Invalid archive link target");
+        if (entry[@"hardlink"]) {
+            NSDictionary *target = SafePath(entry[@"hardlink"]) ? result[entry[@"hardlink"]] : nil;
+            Check([entry[@"type"] isEqual:@"file"] && [target[@"type"] isEqual:@"file"] && !target[@"hardlink"], @"Invalid or forward archive hardlink target");
+            for (NSString *key in @[@"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec", @"size", @"sha256"]) Check([entry[key] isEqual:target[key]], @"Archive hardlink metadata differs");
+        }
         result[entry[@"path"]] = entry;
     }
-    NSDictionary *sources = info[@"sourceRoots"]; Check([sources isKindOfClass:NSDictionary.class] && sources.count, @"Archive source roots are missing");
+    NSDictionary *sources = info[@"sourceRoots"]; Check([sources isKindOfClass:NSDictionary.class], @"Archive source roots are missing");
     for (NSString *prefix in sources) {
         NSString *source = sources[prefix]; Check(SafePath(prefix) && [source isKindOfClass:NSString.class] && source.isAbsolutePath && SafePath([source substringFromIndex:1]) && [result[prefix][@"type"] isEqual:@"directory"], @"Invalid archive source root mapping");
         for (NSString *other in sources) if (![other isEqual:prefix]) Check(!Below(prefix, other) && ![source isEqual:sources[other]] && !Below(source, sources[other]), @"Archive source roots overlap");
     }
     for (NSString *path in result) {
+        if (result[path][@"hardlink"]) {
+            BOOL scoped = NO, targetScoped = NO;
+            for (NSString *prefix in sources) { if (Below(path, prefix)) scoped = YES; if (Below(result[path][@"hardlink"], prefix)) targetScoped = YES; }
+            Check(scoped && targetScoped, @"Archive hardlink escapes container scope");
+        }
         NSString *parent = path.stringByDeletingLastPathComponent;
         while (parent.length) { if (result[parent]) Check([result[parent][@"type"] isEqual:@"directory"], @"Archive parent is not a directory"); parent = parent.stringByDeletingLastPathComponent; }
         for (NSString *prefix in sources) if (Below(path, prefix)) Check(!Excluded(prefix, [path substringFromIndex:prefix.length + 1]), @"Archive includes protected container metadata");
@@ -229,8 +264,9 @@ typedef void (^ReadEvent)(NSDictionary *, const void *, size_t, BOOL);
 static void ReadArchive(NSString *path, NSDictionary *info, SHDWStateProgress progress, ReadEvent event) {
     NSDictionary *expected = InfoEntries(info);
     int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); Check(fd >= 0, @"Cannot open compressed archive");
-    struct archive *reader = NULL;
+    struct archive *reader = NULL; locale_t locale = NULL, previous = NULL;
     @try {
+        locale = ArchiveUTF8Locale(&previous);
         struct stat before, after, named; Check(!fstat(fd, &before) && S_ISREG(before.st_mode) && before.st_nlink == 1, @"Archive is not a private regular file");
         unsigned long long size = 0; __block unsigned long long consumed = 0;
         NSString *digest = HashFDProgress(fd, &size, ^(size_t count) { consumed += count; Progress(progress, @"verify_archive", consumed, 0); });
@@ -241,8 +277,11 @@ static void ReadArchive(NSString *path, NSDictionary *info, SHDWStateProgress pr
         while ((status = archive_read_next_header(reader, &header)) == ARCHIVE_OK) {
             Check(archive_filter_code(reader, 0) == ARCHIVE_FILTER_ZSTD && (archive_format(reader) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_TAR, @"Unexpected archive format or compression");
             NSString *name = EntryPath(header); NSDictionary *entry = expected[name];
-            Check(entry && ![seen containsObject:name] && archive_entry_hardlink(header) == NULL && !archive_entry_sparse_count(header), @"Archive contains an extra, duplicate, or linked entry");
-            [seen addObject:name]; mode_t type = archive_entry_filetype(header);
+            Check(entry && ![seen containsObject:name] && !archive_entry_sparse_count(header), @"Archive contains an extra, duplicate, or linked entry");
+            const char *rawHardlink = archive_entry_hardlink_utf8(header); if (!rawHardlink) rawHardlink = archive_entry_hardlink(header);
+            NSString *hardlink = rawHardlink ? [NSString stringWithUTF8String:rawHardlink] : nil;
+            Check((!rawHardlink && !entry[@"hardlink"]) || (hardlink && [hardlink isEqual:entry[@"hardlink"]] && [seen containsObject:hardlink]), @"Archive hardlink target differs or precedes its content");
+            [seen addObject:name]; mode_t type = archive_entry_filetype(header); if (hardlink) { Check(type == 0 || type == AE_IFREG, @"Archive hardlink is not regular"); type = AE_IFREG; }
             NSString *kind = type == AE_IFREG ? @"file" : type == AE_IFDIR ? @"directory" : type == AE_IFLNK ? @"symlink" : @"unsupported";
             Check([entry[@"type"] isEqual:kind] && (archive_entry_perm(header) & 07777) == [entry[@"mode"] unsignedIntValue] &&
                 archive_entry_uid(header) == [entry[@"uid"] longLongValue] && archive_entry_gid(header) == [entry[@"gid"] longLongValue] &&
@@ -259,7 +298,7 @@ static void ReadArchive(NSString *path, NSDictionary *info, SHDWStateProgress pr
                 const char *raw = archive_entry_symlink_utf8(header); if (!raw) raw = archive_entry_symlink(header);
                 NSString *target = raw ? [NSString stringWithUTF8String:raw] : nil; Check([target isEqual:entry[@"target"]], @"Archive symbolic link target differs");
             }
-            la_int64_t size = archive_entry_size(header); Check(size >= 0 && (type == AE_IFREG ? (unsigned long long)size == [entry[@"size"] unsignedLongLongValue] : size == 0), @"Archive entry size differs");
+            la_int64_t size = archive_entry_size(header); Check(size >= 0 && (type == AE_IFREG && !hardlink ? (unsigned long long)size == [entry[@"size"] unsignedLongLongValue] : size == 0), @"Archive entry size differs");
             if (event) event(entry, NULL, 0, NO);
             unsigned char buffer[128 * 1024], hash[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX context; CC_SHA256_Init(&context);
             unsigned long long total = 0; la_ssize_t count;
@@ -269,13 +308,13 @@ static void ReadArchive(NSString *path, NSDictionary *info, SHDWStateProgress pr
                 if (event) event(entry, buffer, (size_t)count, NO); Progress(progress, @"verify", bytes, seen.count);
             }
             Check(total == (unsigned long long)size, @"Archive file is truncated"); CC_SHA256_Final(hash, &context);
-            if (type == AE_IFREG) Check([Hex(hash, sizeof(hash)) isEqual:entry[@"sha256"]], @"Archived file checksum differs");
+            if (type == AE_IFREG && !hardlink) Check([Hex(hash, sizeof(hash)) isEqual:entry[@"sha256"]], @"Archived file checksum differs");
             if (event) event(entry, NULL, 0, YES);
         }
         Check(status == ARCHIVE_EOF && seen.count == expected.count, @"Archive is truncated or has missing entries");
         Check(archive_read_close(reader) == ARCHIVE_OK, @"Cannot finish compressed archive validation"); Progress(progress, @"verify", bytes, seen.count);
         Check(!fstat(fd, &after) && SameStat(before, after) && !lstat(path.fileSystemRepresentation, &named) && SameStat(before, named), @"Archive file changed during validation");
-    } @finally { if (reader) archive_read_free(reader); close(fd); }
+    } @finally { if (reader) archive_read_free(reader); close(fd); RestoreArchiveLocale(locale, previous); }
 }
 static ArchiveRoot *RootForPath(NSString *path, NSArray<ArchiveRoot *> *roots, NSString **relative) {
     for (ArchiveRoot *root in roots) if ([path isEqual:root.prefix] || Below(path, root.prefix)) { if (relative) *relative = [path isEqual:root.prefix] ? @"" : [path substringFromIndex:root.prefix.length + 1]; return root; }
@@ -294,15 +333,64 @@ static int ParentFD(ArchiveRoot *root, NSString *relative, BOOL create, NSString
         if (leaf) *leaf = pieces.lastObject; return fd;
     } @catch (NSException *exception) { close(fd); @throw exception; }
 }
-static NSString *RelocatedLink(NSString *target, NSDictionary *sources, NSDictionary *destinations) {
-    if (!target.isAbsolutePath) return target;
-    for (NSString *piece in target.pathComponents) if ([piece isEqual:@".."] || [piece isEqual:@"."]) return target;
+static NSString *LinkSource(NSString *target, NSDictionary *sources, NSString **relative) {
     NSString *candidate = [target hasPrefix:@"/var/"] ? [@"/private" stringByAppendingString:target] : target;
     for (NSString *prefix in sources) {
-        NSString *old = sources[prefix];
-        if ([candidate isEqual:old] || Below(candidate, old)) return [destinations[prefix] stringByAppendingString:[candidate substringFromIndex:old.length]];
+        NSString *source = sources[prefix];
+        if ([candidate isEqual:source] || Below(candidate, source)) {
+            if (relative) *relative = [candidate substringFromIndex:source.length];
+            return prefix;
+        }
     }
-    return target;
+    return nil;
+}
+// Resolve only captured metadata. A live realpath() here could follow an
+// external link or depend on an old container that no longer exists.
+static BOOL LinkTraversalIsScoped(NSString *prefix, NSString *suffix, NSDictionary *sources, NSDictionary *entries) {
+    NSMutableArray<NSString *> *pieces = [NSMutableArray new];
+    NSMutableArray<NSString *> *pending = [[suffix componentsSeparatedByString:@"/"] mutableCopy];
+    NSUInteger links = 0;
+    while (pending.count) {
+        NSString *piece = pending.firstObject; [pending removeObjectAtIndex:0];
+        if (!piece.length || [piece isEqual:@"."]) continue;
+        if ([piece isEqual:@".."]) {
+            if (!pieces.count) return NO;
+            [pieces removeLastObject]; continue;
+        }
+        NSString *relative = [[pieces arrayByAddingObject:piece] componentsJoinedByString:@"/"];
+        NSDictionary *entry = entries[[prefix stringByAppendingPathComponent:relative]];
+        if ([entry[@"type"] isEqual:@"symlink"] && pending.count) {
+            // Darwin refuses paths with more than 32 symbolic-link traversals.
+            if (++links > MAXSYMLINKS) return NO;
+            NSString *target = entry[@"target"], *next = target;
+            if (target.isAbsolutePath) {
+                NSString *newPrefix = LinkSource(target, sources, &next);
+                if (!newPrefix) return NO;
+                prefix = newPrefix; [pieces removeAllObjects];
+            }
+            NSArray *components = [next componentsSeparatedByString:@"/"];
+            NSIndexSet *indexes = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, components.count)];
+            [pending insertObjects:components atIndexes:indexes];
+            continue;
+        }
+        // An absent final component is a supported dangling link. Missing or
+        // non-directory parents cannot establish a container-local traversal.
+        if (pending.count && ![entry[@"type"] isEqual:@"directory"]) return NO;
+        [pieces addObject:piece];
+    }
+    return YES;
+}
+static NSString *RelocatedLink(NSString *target, NSDictionary *sources, NSDictionary *destinations, NSDictionary *entries) {
+    if (!target.isAbsolutePath) return target;
+    NSString *suffix = nil, *prefix = LinkSource(target, sources, &suffix);
+    if (!prefix || [destinations[prefix] isEqual:sources[prefix]]) return target;
+    BOOL hasTraversal = NO;
+    for (NSString *piece in [suffix componentsSeparatedByString:@"/"])
+        if ([piece isEqual:@".."] || [piece isEqual:@"."]) { hasTraversal = YES; break; }
+    if (hasTraversal && !LinkTraversalIsScoped(prefix, suffix, sources, entries)) return target;
+    // Keep the suffix verbatim: collapsing alias/.. lexically changes meaning
+    // when alias itself is a captured symbolic link.
+    return [destinations[prefix] stringByAppendingString:suffix];
 }
 static void CreationTimeFD(int fd, NSDictionary *entry) {
     struct attrlist attributes = {0}; attributes.bitmapcount = ATTR_BIT_MAP_COUNT; attributes.commonattr = ATTR_CMN_CRTIME;
@@ -327,11 +415,38 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
     return fd;
 }
 
+// A directory sync persists its entries only after its children have been
+// synchronized. Links are never followed; their names belong to the parent.
+static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSString *relative, SHDWStateProgress progress, NSUInteger *completed) {
+    struct stat directory; Check(!fstat(fd, &directory) && S_ISDIR(directory.st_mode) && directory.st_dev == device, @"Synchronization directory changed");
+    for (NSString *name in Names(fd)) {
+        NSString *next = relative.length ? [relative stringByAppendingPathComponent:name] : name;
+        if (Excluded(prefix, next)) continue;
+        struct stat before, opened, named;
+        Check(!fstatat(fd, name.fileSystemRepresentation, &before, AT_SYMLINK_NOFOLLOW) && before.st_dev == device, @"Synchronization entry changed");
+        if (S_ISLNK(before.st_mode)) continue;
+        Check(S_ISDIR(before.st_mode) || S_ISREG(before.st_mode), @"Unsupported synchronization entry type");
+        int child = openat(fd, name.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC | (S_ISDIR(before.st_mode) ? O_DIRECTORY : 0));
+        Check(child >= 0, @"Cannot open restoration synchronization entry");
+        @try {
+            Check(!fstat(child, &opened) && opened.st_dev == before.st_dev && opened.st_ino == before.st_ino &&
+                (opened.st_mode & S_IFMT) == (before.st_mode & S_IFMT), @"Synchronization entry was replaced");
+            if (S_ISDIR(opened.st_mode)) SynchronizeDirectory(child, device, prefix, next, progress, completed);
+            else Check(!fsync(child), @"Cannot synchronize restored file data");
+            Check(!fstatat(fd, name.fileSystemRepresentation, &named, AT_SYMLINK_NOFOLLOW) && named.st_dev == opened.st_dev && named.st_ino == opened.st_ino &&
+                (named.st_mode & S_IFMT) == (opened.st_mode & S_IFMT), @"Synchronization entry changed after flush");
+        } @finally { close(child); }
+    }
+    Check(!fsync(fd), @"Cannot synchronize restored directory");
+    (*completed)++; Progress(progress, @"synchronize", 0, *completed);
+}
+
 @implementation SHDWStateArchive
 + (NSDictionary *)captureRoots:(NSDictionary<NSString *,NSString *> *)roots payloads:(NSDictionary<NSString *,NSData *> *)payloads toPath:(NSString *)path progress:(SHDWStateProgress)progress error:(NSError **)error {
-    struct archive *writer = NULL; int fd = -1; BOOL created = NO, complete = NO;
+    struct archive *writer = NULL; int fd = -1; BOOL created = NO, complete = NO; locale_t locale = NULL, previous = NULL;
     @try {
-        NSArray *opened = OpenRoots(roots); Check([payloads isKindOfClass:NSDictionary.class], @"Invalid archive payloads");
+        locale = ArchiveUTF8Locale(&previous);
+        NSArray *opened = OpenRoots(roots); Check([payloads isKindOfClass:NSDictionary.class] && (roots.count || payloads.count), @"Invalid or empty archive sources");
         Check([Physical(path.stringByDeletingLastPathComponent) isEqual:path.stringByDeletingLastPathComponent] && SafePath(path.lastPathComponent), @"Archive destination parent must be canonical");
         for (ArchiveRoot *root in opened) Check(![path isEqual:root.path] && !Below(path, root.path), @"Archive destination overlaps its source");
         for (NSString *name in payloads) {
@@ -342,9 +457,9 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
         fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600); Check(fd >= 0, @"Cannot create private archive file"); created = YES;
         writer = archive_write_new(); Check(writer != NULL, @"Cannot allocate archive writer");
         Check(archive_write_set_format_pax(writer) == ARCHIVE_OK && archive_write_add_filter_zstd(writer) == ARCHIVE_OK &&
-            archive_write_set_filter_option(writer, "zstd", "compression-level", "1") == ARCHIVE_OK && archive_write_open_fd(writer, fd) == ARCHIVE_OK, @"Cannot initialize PAX and Zstd archive");
-        NSMutableArray *entries = [NSMutableArray new]; unsigned long long bytes = 0;
-        for (ArchiveRoot *root in opened) CaptureNode(writer, root, root.fd, @".", @"", entries, progress, &bytes);
+            archive_write_set_filter_option(writer, "zstd", "compression-level", "3") == ARCHIVE_OK && archive_write_open_fd(writer, fd) == ARCHIVE_OK, @"Cannot initialize PAX and Zstd archive");
+        NSMutableArray *entries = [NSMutableArray new]; NSMutableDictionary *inodes = [NSMutableDictionary new]; unsigned long long bytes = 0;
+        for (ArchiveRoot *root in opened) CaptureNode(writer, root, root.fd, @".", @"", entries, inodes, progress, &bytes);
         for (NSString *name in [[payloads allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
             NSData *data = payloads[name]; unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
             NSMutableDictionary *entry = [@{@"path":name, @"type":@"file", @"mode":@0600, @"uid":@(getuid()), @"gid":@(getgid()), @"mtime":@0, @"mtimeNsec":@0, @"birthtime":@0, @"birthtimeNsec":@0, @"size":@(data.length), @"sha256":Hex(digest, sizeof(digest))} mutableCopy];
@@ -354,12 +469,12 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
         }
         Check(archive_write_close(writer) == ARCHIVE_OK && !fsync(fd), @"Cannot flush completed archive"); archive_write_free(writer); writer = NULL; close(fd); fd = -1;
         for (ArchiveRoot *root in opened) [root pin];
-        NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@1, @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
+        NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@3, @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
         NSError *verification = nil;
         Check([self verifyRoots:roots info:info progress:progress error:&verification], verification.localizedDescription ?: @"Capture sources changed before completion");
         ReadArchive(path, info, progress, nil); complete = YES; return info;
     } @catch (NSException *exception) { PublishError(error, exception); return nil; }
-    @finally { if (writer) archive_write_free(writer); if (fd >= 0) close(fd); if (created && !complete) unlink(path.fileSystemRepresentation); }
+    @finally { if (writer) archive_write_free(writer); if (fd >= 0) close(fd); if (created && !complete) unlink(path.fileSystemRepresentation); RestoreArchiveLocale(locale, previous); }
 }
 + (BOOL)verifyPath:(NSString *)path info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error {
     @try { ReadArchive(path, info, progress, nil); return YES; } @catch (NSException *exception) { PublishError(error, exception); return NO; }
@@ -368,7 +483,7 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
     @try {
         NSDictionary *entries = InfoEntries(info); Check([names isKindOfClass:NSArray.class] && names.count <= 64 && [NSSet setWithArray:names].count == names.count, @"Invalid payload request");
         NSMutableDictionary *payloads = [NSMutableDictionary new];
-        for (NSString *name in names) { NSDictionary *entry = entries[name]; Check(SafePath(name) && [entry[@"type"] isEqual:@"file"] && [entry[@"size"] unsignedLongLongValue] <= PayloadLimit, @"Missing or oversized bounded payload"); payloads[name] = [NSMutableData new]; }
+        for (NSString *name in names) { NSDictionary *entry = entries[name]; Check(SafePath(name) && [entry[@"type"] isEqual:@"file"] && !entry[@"hardlink"] && [entry[@"size"] unsignedLongLongValue] <= PayloadLimit, @"Missing or oversized bounded payload"); payloads[name] = [NSMutableData new]; }
         ReadArchive(path, info, nil, ^(NSDictionary *entry, const void *bytes, size_t length, BOOL finished) { (void)finished; NSMutableData *data = payloads[entry[@"path"]]; if (data && length) { Check(data.length + length <= PayloadLimit, @"Payload exceeded its bound"); [data appendBytes:bytes length:length]; } });
         return payloads;
     } @catch (NSException *exception) { PublishError(error, exception); return nil; }
@@ -376,6 +491,7 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
 + (BOOL)restorePath:(NSString *)path info:(NSDictionary *)info roots:(NSDictionary<NSString *,NSString *> *)roots progress:(SHDWStateProgress)progress error:(NSError **)error {
     __block int current = -1;
     @try {
+        NSDictionary *expected = InfoEntries(info);
         NSArray<ArchiveRoot *> *opened = OpenRoots(roots); Check([[NSSet setWithArray:roots.allKeys] isEqual:[NSSet setWithArray:[info[@"sourceRoots"] allKeys]]], @"Restore root scope differs");
         ReadArchive(path, info, progress, nil);
         NSMutableArray *directories = [NSMutableArray new], *links = [NSMutableArray new]; __block unsigned long long written = 0; __block NSUInteger completed = 0;
@@ -391,6 +507,19 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
                 NSString *leaf = nil; int parent = ParentFD(root, relative, YES, &leaf);
                 @try { if (mkdirat(parent, leaf.fileSystemRepresentation, 0700)) Check(errno == EEXIST, @"Cannot create restored directory"); int child = OpenDirectoryAt(parent, leaf, root.device); close(child); } @finally { close(parent); } return;
             }
+            if (entry[@"hardlink"]) {
+                NSString *targetRelative = nil; ArchiveRoot *targetRoot = RootForPath(entry[@"hardlink"], opened, &targetRelative);
+                Check(targetRoot && targetRelative.length && relative.length, @"Invalid restored hardlink location"); [targetRoot pin];
+                NSString *targetLeaf = nil, *leaf = nil; int sourceParent = ParentFD(targetRoot, targetRelative, NO, &targetLeaf), parent = -1, targetFD = -1;
+                @try {
+                    parent = ParentFD(root, relative, NO, &leaf);
+                    targetFD = openat(sourceParent, targetLeaf.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); Check(targetFD >= 0, @"Cannot open restored hardlink target");
+                    struct stat pinned, named, linked;
+                    Check(!fstat(targetFD, &pinned) && S_ISREG(pinned.st_mode) && pinned.st_dev == root.device, @"Invalid restored hardlink target");
+                    Check(!linkat(sourceParent, targetLeaf.fileSystemRepresentation, parent, leaf.fileSystemRepresentation, 0), @"Cannot create restored hardlink");
+                    Check(!fstatat(sourceParent, targetLeaf.fileSystemRepresentation, &named, AT_SYMLINK_NOFOLLOW) && !fstatat(parent, leaf.fileSystemRepresentation, &linked, AT_SYMLINK_NOFOLLOW) && S_ISREG(linked.st_mode) && named.st_dev == pinned.st_dev && named.st_ino == pinned.st_ino && linked.st_dev == pinned.st_dev && linked.st_ino == pinned.st_ino, @"Restored hardlink target changed");
+                } @finally { if (targetFD >= 0) close(targetFD); if (parent >= 0) close(parent); close(sourceParent); } return;
+            }
             Check(relative.length && [type isEqual:@"file"], @"Invalid restored file location"); NSString *leaf = nil; int parent = ParentFD(root, relative, YES, &leaf);
             @try { current = openat(parent, leaf.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600); Check(current >= 0, @"Restore would overwrite an existing file or link"); } @finally { close(parent); }
         });
@@ -398,7 +527,7 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
             Progress(progress, @"restore", written, completed);
             NSString *relative = nil; ArchiveRoot *root = RootForPath(entry[@"path"], opened, &relative); [root pin]; Check(relative.length, @"Invalid root symbolic link"); NSString *leaf = nil; int parent = ParentFD(root, relative, NO, &leaf);
             @try {
-                NSString *target = RelocatedLink(entry[@"target"], info[@"sourceRoots"], roots); Check(!symlinkat(target.fileSystemRepresentation, parent, leaf.fileSystemRepresentation), @"Cannot create restored symbolic link");
+                NSString *target = RelocatedLink(entry[@"target"], info[@"sourceRoots"], roots, expected); Check(!symlinkat(target.fileSystemRepresentation, parent, leaf.fileSystemRepresentation), @"Cannot create restored symbolic link");
                 struct stat st; Check(!fstatat(parent, leaf.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW), @"Cannot inspect restored link");
                 uid_t uid = [entry[@"uid"] unsignedIntValue]; gid_t gid = [entry[@"gid"] unsignedIntValue]; if (st.st_uid != uid || st.st_gid != gid) Check(!fchownat(parent, leaf.fileSystemRepresentation, uid, gid, AT_SYMLINK_NOFOLLOW), @"Cannot restore symbolic link ownership");
                 Check(!fchmodat(parent, leaf.fileSystemRepresentation, [entry[@"mode"] unsignedIntValue], AT_SYMLINK_NOFOLLOW), @"Cannot restore symbolic link mode");
@@ -424,10 +553,19 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
     } @catch (NSException *exception) { PublishError(error, exception); return NO; }
     @finally { if (current >= 0) close(current); }
 }
++ (BOOL)synchronizeRoots:(NSDictionary<NSString *, NSString *> *)roots progress:(SHDWStateProgress)progress error:(NSError **)error {
+    @try {
+        NSArray<ArchiveRoot *> *opened = OpenRoots(roots); NSUInteger completed = 0;
+        for (ArchiveRoot *root in opened) {
+            [root pin]; SynchronizeDirectory(root.fd, root.device, root.prefix, @"", progress, &completed); [root pin];
+        }
+        return YES;
+    } @catch (NSException *exception) { PublishError(error, exception); return NO; }
+}
 + (BOOL)verifyRoots:(NSDictionary<NSString *,NSString *> *)roots info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error {
     @try {
         NSDictionary *expected = InfoEntries(info); NSArray<ArchiveRoot *> *opened = OpenRoots(roots); Check([[NSSet setWithArray:roots.allKeys] isEqual:[NSSet setWithArray:[info[@"sourceRoots"] allKeys]]], @"Verification root scope differs");
-        NSMutableSet *seen = [NSMutableSet new]; __block unsigned long long bytes = 0;
+        NSMutableSet *seen = [NSMutableSet new]; NSMutableDictionary *identities = [NSMutableDictionary new], *inodePaths = [NSMutableDictionary new], *verifiedStats = [NSMutableDictionary new], *verifiedHashes = [NSMutableDictionary new]; __block unsigned long long bytes = 0;
         __block void (^visit)(ArchiveRoot *, int, NSString *, NSString *);
         __block __weak void (^recurse)(ArchiveRoot *, int, NSString *, NSString *);
         visit = ^(ArchiveRoot *root, int parent, NSString *name, NSString *relative) {
@@ -447,13 +585,24 @@ static int OpenDirectoryAt(int parent, NSString *leaf, dev_t device) {
                     Check(!fstat(fd, &finalStat) && SameStat(st, finalStat) && !fstatat(parent, name.fileSystemRepresentation, &namedStat, AT_SYMLINK_NOFOLLOW) && SameStat(st, namedStat), @"Restored directory changed during verification");
                 } @finally { close(fd); }
             }
-            else if (S_ISLNK(st.st_mode)) Check([ReadLink(parent, name) isEqual:RelocatedLink(entry[@"target"], info[@"sourceRoots"], roots)], @"Restored symbolic link target differs");
+            else if (S_ISLNK(st.st_mode)) Check([ReadLink(parent, name) isEqual:RelocatedLink(entry[@"target"], info[@"sourceRoots"], roots, expected)], @"Restored symbolic link target differs");
             else {
-                Check(st.st_nlink == 1 && (unsigned long long)st.st_size == [entry[@"size"] unsignedLongLongValue], @"Restored file size or link count differs"); int fd = openat(parent, name.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); Check(fd >= 0, @"Cannot verify restored file");
+                Check((unsigned long long)st.st_size == [entry[@"size"] unsignedLongLongValue], @"Restored file size differs");
+                NSString *identity = entry[@"hardlink"] ?: path, *inode = InodeKey(st);
+                Check(!identities[identity] || [identities[identity] isEqual:inode], @"Restored hardlink identity differs");
+                Check(!inodePaths[inode] || [inodePaths[inode] isEqual:identity], @"Unexpected restored file alias");
+                identities[identity] = inode; inodePaths[inode] = identity; int fd = openat(parent, name.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); Check(fd >= 0, @"Cannot verify restored file");
                 @try {
                     struct stat openedStat, finalStat, namedStat;
                     Check(!fstat(fd, &openedStat) && SameStat(st, openedStat), @"Restored file changed before verification");
-                    unsigned long long size = 0; NSString *digest = HashFDProgress(fd, &size, ^(size_t count) { bytes += count; Progress(progress, @"verify_roots", bytes, seen.count); });
+                    unsigned long long size = (unsigned long long)st.st_size; NSString *digest = verifiedHashes[inode];
+                    if (digest) {
+                        struct stat previous; [verifiedStats[inode] getBytes:&previous length:sizeof(previous)];
+                        Check(SameStat(previous, st), @"Hardlink content changed during verification");
+                    } else {
+                        digest = HashFDProgress(fd, &size, ^(size_t count) { bytes += count; Progress(progress, @"verify_roots", bytes, seen.count); });
+                        verifiedStats[inode] = [NSData dataWithBytes:&st length:sizeof(st)]; verifiedHashes[inode] = digest;
+                    }
                     Check(!fstat(fd, &finalStat) && SameStat(st, finalStat) && !fstatat(parent, name.fileSystemRepresentation, &namedStat, AT_SYMLINK_NOFOLLOW) && SameStat(st, namedStat), @"Restored file changed during verification");
                     Check(size == [entry[@"size"] unsignedLongLongValue] && [digest isEqual:entry[@"sha256"]], @"Restored file checksum differs");
                 } @finally { close(fd); }

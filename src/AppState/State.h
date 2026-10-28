@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import "Archive.h"
+#include <sys/types.h>
 
 NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
@@ -14,6 +15,10 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 - (BOOL)stopTarget:(NSDictionary *)target error:(NSError **)error;
 - (BOOL)assertStopped:(NSDictionary *)target error:(NSError **)error;
 - (BOOL)flushPreferencesForTarget:(NSDictionary *)target error:(NSError **)error;
+- (nullable NSString *)currentVendorIdentifierForTarget:(NSDictionary *)target error:(NSError **)error;
+- (nullable NSDictionary *)capturePreferencesForTarget:(NSDictionary *)target error:(NSError **)error;
+- (BOOL)validatePreferences:(NSDictionary *)preferences target:(NSDictionary *)target error:(NSError **)error;
+- (BOOL)restorePreferences:(NSDictionary *)preferences target:(NSDictionary *)target error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)captureKeychainForTarget:(NSDictionary *)target error:(NSError **)error;
 - (BOOL)validateKeychain:(NSArray<NSDictionary *> *)records target:(NSDictionary *)target error:(NSError **)error;
 - (BOOL)restoreKeychain:(NSArray<NSDictionary *> *)records target:(NSDictionary *)target error:(NSError **)error;
@@ -25,12 +30,14 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 @interface SHDWAppStateStore : NSObject
 @property(nonatomic, copy, nullable) SHDWStateProgress progressHandler;
 - (nullable instancetype)initWithRoot:(NSString *)root backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
-// snapshots/<canonical IDFV>/manifest.plist + data.tar.zst. Metadata is title/note.
+// Storage and restored container entries use this UID/GID; SUID/SGID are rejected.
+- (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
+// snapshots/<canonical IDFV>/manifest.plist + data.tar.zst + state.tar.zst. Metadata is title/note.
 - (nullable NSDictionary *)backupBundle:(NSString *)bundleID metadata:(nullable NSDictionary *)metadata error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error;
 - (BOOL)recheckBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
-// A same-IDFV restore must not overwrite its selected source with live data.
-// Such requests require saveCurrent=NO. Failed/partial restores stay pending.
+// Restoration into the currently active IDFV is rejected.
+// Failed/partial restores stay pending; source identity restrictions still apply.
 - (nullable NSDictionary *)restoreBundle:(NSString *)bundleID idfv:(NSString *)idfv
                             saveCurrent:(BOOL)saveCurrent error:(NSError **)error;
 - (BOOL)editBundle:(NSString *)bundleID idfv:(NSString *)idfv metadata:(NSDictionary *)metadata error:(NSError **)error;

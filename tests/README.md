@@ -1,16 +1,20 @@
 # Shadow public tests
 
-Public tests are pure-C checks plus static contract scripts. They need make, Bash,
+Public tests combine pure-C checks, static contract scripts, and a macOS-only
+Foundation image-registry check. They need make, Bash,
 a host C compiler, Python 3.7+, and standard shell tools; no device, Docker, iOS SDK, or engine
 build is required. The lane/package contract also requires `THEOS` to point to a
 directory containing `bin/lane.sh`; a full Theos installation is not required.
 
 | Check | Command |
 | --- | --- |
+| runtime file identity (pure C) | `make -C tests verify-runtime-image-identity` |
+| loaded-image registry (macOS Foundation; skipped on other hosts) | `make -C tests verify-loaded-image-registry` |
 | svc path-rewrite (pure C) | `make -C tests verify-path-rewrite` |
 | fresh fd/DIR path policy (host doubles) | `make -C tests verify-fd-path-freshness` |
 | mount filtering (pure C + static query contract) | `make -C tests verify-mount-filter` |
 | rebind journal/repair (pure C) | `make -C tests verify-rebind-repair` |
+| KERN_PROCARGS2 payload filter (kernel-shaped payloads) | `make -C tests verify-procargs-filter` |
 | lane/package contract | `sh tests/verify-lane-contract.sh` |
 | binary compatibility checker (synthetic tool output) | `make -C tests verify-binary-compat` |
 | hook→engine matrix drift | `sh tests/verify-hook-matrix.sh` |
@@ -56,6 +60,9 @@ The optional `make -C tests verify-cleanup` requires macOS Foundation and Xcode
 command-line tools. It exercises cleanup traversal against temporary fixtures,
 including category boundaries, receipt preservation, container metadata,
 symlink and identity rejection, and detection of data left after cleanup.
+Late application UI snapshots are removed in a scoped finalization stage before
+the independent read-only recheck. Fixtures cover grouped snapshot directories,
+unselected preservation, changed sessions and unsafe ancestor/leaf rejection.
 Keychain doubles cover exact group scope, empty results, deletion without
 intermediate readback, and final residual detection. When `ldid` is available,
 it also checks signing and reading back an executable with exact access groups.
@@ -73,7 +80,9 @@ uses real temporary files and tar.zst archives, and runs functional checks with
 AddressSanitizer and UndefinedBehaviorSanitizer. A separate unsanitized run checks
 streaming progress and memory growth with many small files and a large file.
 Keychain, process control, and fingerprint preferences use an isolated backend
-double. These checks do not establish device permissions or application-level
+double. A streaming regression fixture also verifies that process checks remain
+bounded as file and progress-event counts grow, while backup, restore, and final
+verification still succeed. These checks do not establish device permissions or application-level
 restore correctness. See `src/AppState/README.md` for the core's integration scope
 and optional iOS compile/link checks. This target is not part of `test` or CI.
 
@@ -85,7 +94,11 @@ exit failures, bounded timeout/reaping and operation exclusion). Native Security
 queries/mutations, process authority, and preference persistence use test doubles:
 exact group/class validation, unsupported credential classes, empty/ambiguous
 results, replacement preflight, and a single fingerprint app-dictionary write are
-verified without accessing the user's Keychain or installed apps. This target
+verified without accessing the user's Keychain or installed apps. Native preference
+API doubles also exercise global/container and AnyHost/CurrentHost import, unknown
+configuration fields, unchanged-value no-op, stale-key removal, and synchronization
+failures. Split archive checks cover missing/corrupt/swapped state packages and
+pinning both archives during restore retries. This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.
 
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer
@@ -108,3 +121,13 @@ The full engine/detector/adversary/fuzz/device harness is private and
 not part of this repo (no URL). The engine-linked batteries were removed
 from `tests/Makefile`. For local harness discovery, follow `AGENTS.md`; neither
 host checks nor an old harness executable verify the installed iOS harness UI.
+
+`verify-process-stop.py` exercises the production termination barrier with deterministic process fixtures: delayed service flushes, natural exit, scoped SIGTERM, timeout before deletion, PID reuse, and unrelated/shared-container WebKit services. Device validation is still required for Darwin process inspection.
+The cleanup engine fixture also covers notification extension containers and receipt removal without touching another extension.
+
+Backup recovery regressions cover atomic tombstone deletion, per-snapshot corruption isolation, committed-IDFV verification-only finalization, added extension preference scopes, and scoped absolute symlink relocation. Installer tests ensure install does not create or change either preference store.
+
+`make verify-fingerprint` also checks persisted IDFV reads, immutable process
+snapshots, containing-app configuration for extensions, and scoped native
+accessor consistency. These host checks use Foundation and runtime doubles;
+private selector availability and actual hook installation require device checks.
