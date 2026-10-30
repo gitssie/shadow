@@ -34,6 +34,10 @@ static void FixturePreferencesFlush(CFStringRef,CFStringRef);
 #define SecItemAdd FixtureAdd
 #define SecItemUpdate FixtureUpdate
 #define dlsym FixtureSymbol
+static CFPropertyListRef FixtureExternalCopy(CFStringRef,CFStringRef,CFStringRef,CFStringRef);
+static Boolean FixtureExternalSync(CFStringRef,CFStringRef,CFStringRef);
+#define CFPreferencesCopyValue FixtureExternalCopy
+#define CFPreferencesSynchronize FixtureExternalSync
 #define SHADOW_STATE_SUPPORT 1
 #import "__CLEANER__"
 #undef dlsym
@@ -172,6 +176,21 @@ static FixtureDefaults *preferences;
 + (NSString *)deviceFingerprintForData:(NSDictionary *)data{return data[@"VendorIdentifier"];}
 - (NSDictionary *)configurationForApplication:(NSString *)identifier{(void)identifier;return @{@"valid":@YES,@"region":@"fallback"};}
 @end
+
+static id externalSettings;
+static BOOL externalSyncFailure;
+static NSUInteger externalReads;
+static void ExternalScope(CFStringRef domain,CFStringRef user,CFStringRef host){Check(CFEqual(domain,CFSTR(SHADOW_PREFS_PLIST))&&CFEqual(user,CFSTR("mobile"))&&CFEqual(host,kCFPreferencesAnyHost),@"external identity must read Shadow absolute suite in mobile context");}
+static Boolean FixtureExternalSync(CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);return !externalSyncFailure;}
+static CFPropertyListRef FixtureExternalCopy(CFStringRef key,CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);Check(CFEqual(key,CFSTR("local.fixture.app")),@"unexpected identity bundle");externalReads++;return externalSettings?CFBridgingRetain(externalSettings):NULL;}
+static void ExternalTests(void){
+    NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555";externalSettings=nil;externalReads=0;Check([StateReadExternalIdentity(bundle)isEqual:@""],@"missing identity is explicit empty wire value");
+    externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid]&&externalReads==2,@"token-independent identity query");
+    for(id malformed in @[@"bad",@{@"Fingerprint_Data":@"bad"},@{@"Fingerprint_Data":@{@"VendorIdentifier":@"bad"}},@{@"Fingerprint_Data":@{@"VendorIdentifier":@1}}]){externalSettings=malformed;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed identity accepted as absent");}
+    externalSyncFailure=YES;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"failed preference sync reported absent identity");externalSyncFailure=NO;
+    NSDictionary *capabilities=StateExternalCommand(bundle,@"capabilities",@{});Check([capabilities[@"ok"]boolValue],@"capabilities needs installed app or storage");Check(Reject(^{StateExternalCommand(bundle,@"capabilities",@{@"unexpected":@1});}),@"unknown external key accepted");
+    puts("external helper: same mobile suite, token-independent identity, missing/malformed distinction and capabilities passed");
+}
 static void KeychainTests(void){
     NSDictionary *local=Record((__bridge id)kSecClassGenericPassword,Group,@"local",@"service",@"local-data",NO),*internet=Record((__bridge id)kSecClassInternetPassword,Group,@"web",@"example.test",@"web-data",NO),*synced=Record((__bridge id)kSecClassGenericPassword,Group,@"cloud",@"service",@"cloud-old",YES),*other=Record((__bridge id)kSecClassGenericPassword,Other,@"other",@"service",@"untouched",NO);
     database=[@[local,internet,synced,other] mutableCopy];Reset();NSArray *captured=StateExportRecords(@[Group]);Check(captured.count==3&&deletes==0&&adds==0&&updates==0,@"read-only portable credential capture");
@@ -262,7 +281,7 @@ static void CatalogProjectionTests(void) {
     Check(catalog.count==2&&[catalog[0][@"unavailable"]boolValue]&&[catalog[0][@"error"]isEqual:@"corrupt"]&&[catalog[0][@"size"]isEqual:@0],@"corrupt snapshot status lost in catalog transport");
     Check([catalog[1][@"finalizationPending"]boolValue]&&[catalog[1][@"size"]isEqual:@50],@"pending finalization status lost in catalog transport");
 }
-int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
+int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();ExternalTests();Check(argc==2,@"fixture directory argument");KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
 '''
 
 

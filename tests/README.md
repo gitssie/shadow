@@ -87,7 +87,15 @@ verified without accessing the user's Keychain or installed apps. Native prefere
 API doubles also exercise global/container and AnyHost/CurrentHost import, unknown
 configuration fields, unchanged-value no-op, stale-key removal, and synchronization
 failures. Split archive checks cover missing/corrupt/swapped state packages and
-pinning both archives during restore retries. This target
+pinning both archives during restore retries. The same target also runs `verify-app-state-client.py` against the shared SDK,
+covering large stdin requests, private unlinked input, response bounds, malformed
+frames, validation, timeout and unknown outcomes without automatic retry.
+External helper fixtures check the exact mobile preference suite, absent versus
+malformed identity, failed synchronization and capability negotiation. Transfer
+fixtures use real archives to check manifest conflict rejection, pending-source
+protection, corrupt import rejection and read-only storage opening.
+
+This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.
 
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer

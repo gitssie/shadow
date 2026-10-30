@@ -137,6 +137,7 @@ verify-app-state:
 .PHONY: verify-app-state
 
 verify-backups: verify-app-state
+	python3 verify-app-state-client.py
 	python3 verify-backup-service.py
 	python3 verify-backup-keychain.py
 	python3 verify-state-backend.py

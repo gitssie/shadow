@@ -189,3 +189,26 @@ records, synchronizes all writes and commits the fingerprint. The data archive
 is unchanged. Verification-only identity finalization still requires the original
 raw-file baseline: if preference replay changed that baseline, finalization fails
 and retains pending recovery state without replaying or claiming data verification.
+
+## External helper API
+
+The installed helper accepts additive `capabilities`, `externalCatalog`,
+`externalEdit`, `exportState`, and `importState` actions through its existing
+`state <bundle> <action> <request>` entry point. External requests may use `-`
+for a bounded binary property list on standard input (96 MiB maximum). Existing
+Manager commands and scoped-worker limits are unchanged. Responses retain the
+existing NDJSON envelope containing a base64 binary property-list result.
+
+Catalog and transfer operations do not resolve installed targets or start scoped
+credential workers. Current identity is read separately in the mobile preferences
+domain; missing identity is represented as an empty string in the property-list
+wire result. The network adapter maps that value to JSON null. Malformed identity
+is an error. Export returns raw bytes plus manifest/state/data hashes; state
+export requires the expected state hash. Import receives both complete files and
+the expected current manifest hash. It rejects pending restoration sources and
+changes to immutable snapshot fields, copies the existing data archive into a
+private stage, verifies both complete archives and logical payload identity, and
+publishes the complete snapshot with a directory exchange. It never modifies
+live application state. Interrupted private stages are collected by the existing
+exclusive-operation cleanup. Permissions and device preference visibility still
+require device verification.

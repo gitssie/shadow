@@ -150,7 +150,7 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
             info[@"helperDetails"] = details;
             info[NSLocalizedDescriptionKey] = message;
             *error = [NSError errorWithDomain:failure.domain code:failure.code userInfo:info];
-            if (useInput && ([terminal[@"ok"] boolValue] || !WIFEXITED(status))) *error = UnknownError(*error);
+            if ([terminal[@"outcomeUnknown"] boolValue] || (useInput && ([terminal[@"ok"] boolValue] || !WIFEXITED(status)))) *error = UnknownError(*error);
         }
         return nil;
     }

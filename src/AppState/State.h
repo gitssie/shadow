@@ -32,9 +32,12 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 - (nullable instancetype)initWithRoot:(NSString *)root backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
 // Storage and restored container entries use this UID/GID; SUID/SGID are rejected.
 - (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
+- (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend readOnly:(BOOL)readOnly error:(NSError **)error;
 // snapshots/<canonical IDFV>/manifest.plist + data.tar.zst + state.tar.zst. Metadata is title/note.
 - (nullable NSDictionary *)backupBundle:(NSString *)bundleID metadata:(nullable NSDictionary *)metadata error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error;
+- (nullable NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(nullable NSString *)sha error:(NSError **)error;
+- (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)manifest state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error;
 - (BOOL)recheckBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
 // Restoration into the currently active IDFV is rejected.
 // Failed/partial restores stay pending; source identity restrictions still apply.

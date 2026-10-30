@@ -1,4 +1,5 @@
 #import "../AppState/State.h"
+#import "../common.h"
 #import <Shadow/Settings.h>
 #import <Shadow/Fingerprint.h>
 #import <Shadow/FingerprintState.h>
@@ -177,11 +178,56 @@ static NSArray *StateConciseCatalog(NSArray *catalog) {
     }
     return result;
 }
+static NSString *StateExternalIdentity(id settings) {
+    NSString *current=@"";if(settings){Require([settings isKindOfClass:NSDictionary.class],@"Invalid Shadow settings");id fingerprint=settings[@"Fingerprint_Data"];if(fingerprint){Require([fingerprint isKindOfClass:NSDictionary.class],@"Invalid Shadow fingerprint");id identity=fingerprint[@"VendorIdentifier"];if(identity){Require([identity isKindOfClass:NSString.class],@"Invalid current IDFV");current=[[NSUUID alloc]initWithUUIDString:identity].UUIDString;Require(current.length>0,@"Invalid current IDFV");}}}return current;
+}
+static NSString *StateReadExternalIdentity(NSString *identifier) {
+    Require(CFPreferencesSynchronize(CFSTR(SHADOW_PREFS_PLIST),CFSTR("mobile"),kCFPreferencesAnyHost),@"Cannot synchronize current Shadow identity");
+    CFPropertyListRef value=CFPreferencesCopyValue((__bridge CFStringRef)identifier,CFSTR(SHADOW_PREFS_PLIST),CFSTR("mobile"),kCFPreferencesAnyHost);
+    return StateExternalIdentity(CFBridgingRelease(value));
+}
+static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalCatalog",@"externalEdit",@"exportState",@"importState"] containsObject:action]; }
+static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action, NSDictionary *request) {
+    NSArray *allowed=[action isEqual:@"exportState"]?@[@"idfv",@"part",@"stateSHA"]:[action isEqual:@"importState"]?@[@"idfv",@"manifest",@"state",@"expectedManifestSHA"]:[action isEqual:@"externalEdit"]?@[@"idfv",@"metadata"]:@[];
+    for(id key in request)Require([allowed containsObject:key],@"Unknown external application state option");
+    NSError *error=nil;id result=nil;
+    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalCatalog",@"externalEdit",@"exportState",@"importState"]};
+    else {
+        Require(geteuid()==0,@"Cannot enter backup storage context");
+        int lock=SessionLockForAccess(identifier,![@[@"externalCatalog",@"exportState"] containsObject:action]);
+        @try {
+            NativeStateBackend *backend=[NativeStateBackend new];
+            BOOL reading=[@[@"externalCatalog",@"exportState"] containsObject:action];
+            struct stat storageInfo;BOOL missing=reading&&lstat(StateStorage.fileSystemRepresentation,&storageInfo)&&errno==ENOENT;
+            SHDWAppStateStore *store=missing?nil:[[SHDWAppStateStore alloc]initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend readOnly:reading error:&error];
+            if(missing&&[action isEqual:@"externalCatalog"])result=@{@"bundle_id":identifier,@"current_idfv":StateReadExternalIdentity(identifier),@"backups":@[]};
+            if(store){
+                if([action isEqual:@"externalCatalog"]){
+                    NSString *current=StateReadExternalIdentity(identifier);
+                    NSArray *catalog=[store catalogBundle:identifier error:&error];if(catalog)result=@{@"bundle_id":identifier,@"current_idfv":current,@"backups":StateConciseCatalog(catalog)};
+                }else if([action isEqual:@"exportState"])result=[store exportBundle:identifier idfv:request[@"idfv"] part:request[@"part"] expectedStateSHA:request[@"stateSHA"] error:&error];
+                else if([action isEqual:@"importState"]){if([store importBundle:identifier idfv:request[@"idfv"] manifest:request[@"manifest"] state:request[@"state"] expectedManifestSHA:request[@"expectedManifestSHA"] error:&error])result=@{@"imported":@YES};}
+                else if([store editBundle:identifier idfv:request[@"idfv"] metadata:request[@"metadata"] error:&error])result=@{@"edited":@YES};
+            }
+        } @finally{close(lock);}
+    }
+    if(!result)return @{@"ok":@NO,@"error":error.localizedDescription?:@"External application state operation failed",@"stateMayBePartial":@NO,@"outcomeUnknown":@([error.userInfo[@"outcomeUnknown"] boolValue])};
+    NSData *data=[NSPropertyListSerialization dataWithPropertyList:result format:NSPropertyListBinaryFormat_v1_0 options:0 error:&error];Require(data&&data.length<=96*1024*1024,@"External response exceeds size limit");return @{@"ok":@YES,@"result":[data base64EncodedStringWithOptions:0]};
+}
 static NSDictionary *StateCommand(int argc, const char *argv[]) {
     stateInitiatingParent = getppid(); StateParent();
     Require(argc == 4 || argc == 5, @"Expected an application state action and an optional encoded request");
     NSString *identifier = [NSString stringWithUTF8String:argv[2]], *action = [NSString stringWithUTF8String:argv[3]];
-    Require(BundleIdentifier(identifier) && [@[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck"] containsObject:action], @"Invalid application state action");
+    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
+    if(StateExternalAction(action)) {
+        NSDictionary *external=@{};
+        if(argc==5){NSString *encoded=[NSString stringWithUTF8String:argv[4]];NSData *bytes=nil;
+            if([encoded isEqual:@"-"]){NSMutableData *input=[NSMutableData new];char buffer[65536];for(;;){ssize_t n=read(STDIN_FILENO,buffer,sizeof(buffer));if(n<0&&errno==EINTR)continue;Require(n>=0,@"Cannot read external request");if(!n)break;Require(input.length+(NSUInteger)n<=96*1024*1024,@"External request exceeds size limit");[input appendBytes:buffer length:(NSUInteger)n];}bytes=input;}
+            else {Require(encoded.length<=256*1024,@"External request exceeds size limit");bytes=[[NSData alloc]initWithBase64EncodedString:encoded options:0];}
+            id value=bytes?[NSPropertyListSerialization propertyListWithData:bytes options:NSPropertyListImmutable format:NULL error:NULL]:nil;Require([value isKindOfClass:NSDictionary.class],@"Invalid external request");external=value;
+        }
+        return StateExternalCommand(identifier,action,external);
+    }
     NSDictionary *request = @{};
     if (argc == 5) { NSString *encoded = [NSString stringWithUTF8String:argv[4]]; Require(encoded.length <= 256 * 1024, @"Application state action request is too large"); id value = StateDecode([[NSData alloc] initWithBase64EncodedString:encoded options:0]); Require([value isKindOfClass:NSDictionary.class], @"Invalid application state action request"); request = value; }
     NSArray *allowed = [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : @[@"idfv"];

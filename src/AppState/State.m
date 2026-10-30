@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
+#import <CommonCrypto/CommonDigest.h>
 
 NSString *const SHDWAppStateErrorDomain = @"me.jjolano.shadow.app-state";
 static NSString *const StateFormat = @"ShadowAppState2";
@@ -264,6 +265,9 @@ static void CollectAbandonedSnapshots(int parent) {
     return [self initWithRoot:root ownerUID:geteuid() ownerGID:getegid() backend:backend error:error];
 }
 - (instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error {
+    return [self initWithRoot:root ownerUID:uid ownerGID:gid backend:backend readOnly:NO error:error];
+}
+- (instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend readOnly:(BOOL)readOnly error:(NSError **)error {
     if (!(self = [super init])) return nil; _rootFD = -1;
     if (![root isKindOfClass:NSString.class] || !root.isAbsolutePath || !backend) { Fail(error, @"Invalid backup storage."); return nil; }
     NSString *name = root.lastPathComponent; char *parent = realpath(root.stringByDeletingLastPathComponent.fileSystemRepresentation, NULL);
@@ -271,10 +275,10 @@ static void CollectAbandonedSnapshots(int parent) {
     NSString *parentPath = @(parent); free(parent);
     int parentFD = open(parentPath.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (parentFD < 0) { POSIXFail(error, @"Cannot open backup storage."); return nil; }
-    if (!MakeDirectory(parentFD, name.fileSystemRepresentation, uid, gid, YES, error)) { close(parentFD); POSIXFail(error, @"Cannot create backup storage."); return nil; }
+    if (!readOnly && !MakeDirectory(parentFD, name.fileSystemRepresentation, uid, gid, YES, error)) { close(parentFD); POSIXFail(error, @"Cannot create backup storage."); return nil; }
     int fd = openat(parentFD, name.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); close(parentFD);
     struct stat info;
-    if (fd < 0 || !MigrateStorage(fd, uid, gid, error) || fstat(fd, &info) || !PrivateNode(info, YES, uid, gid)) { if (fd >= 0) close(fd); Fail(error, @"Backup storage must be a private directory."); return nil; }
+    if (fd < 0 || (!readOnly && !MigrateStorage(fd, uid, gid, error)) || fstat(fd, &info) || !PrivateNode(info, YES, uid, gid)) { if (fd >= 0) close(fd); Fail(error, @"Backup storage must be a private directory."); return nil; }
     _ownerUID = uid; _ownerGID = gid; _rootFD = fd; _rootInfo = info; _root = [parentPath stringByAppendingPathComponent:name]; _backend = backend;
     return self;
 }
@@ -565,6 +569,77 @@ static void CollectAbandonedSnapshots(int parent) {
         if (!valid || ![self checkDirectory:directory error:error]) return nil;
         [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"date"] compare:a[@"date"]]; }]; return entries;
     } @finally { [operationDirectory releaseLock]; }
+}
+// External transfer uses the same directory authority and pending protection as
+// local operations. No live target or device backend is involved.
+static NSString *TransferHash(NSData *data) {
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hash = [NSMutableString new]; for (NSUInteger i=0;i<sizeof(digest);i++) [hash appendFormat:@"%02x",digest[i]]; return hash;
+}
+static NSData *TransferRead(int parent, NSString *name, NSUInteger limit, uid_t uid, gid_t gid, NSError **error) {
+    int fd=openat(parent,name.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC); if(fd<0){POSIXFail(error,@"Cannot read transfer file.");return nil;}
+    @try { struct stat st;if(fstat(fd,&st)||!PrivateNode(st,NO,uid,gid)||st.st_size<=0||(uint64_t)st.st_size>limit){Fail(error,@"Unsafe or oversized transfer file.");return nil;}
+        NSMutableData *data=[NSMutableData dataWithLength:(NSUInteger)st.st_size];NSUInteger offset=0;
+        while(offset<data.length){ssize_t n=read(fd,(char *)data.mutableBytes+offset,data.length-offset);if(n<0&&errno==EINTR)continue;if(n<=0){POSIXFail(error,@"Cannot read transfer file.");return nil;}offset+=(NSUInteger)n;}return data;
+    } @finally {close(fd);}
+}
+static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, gid_t gid, NSError **error) {
+    int fd=openat(parent,name.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return POSIXFail(error,@"Cannot stage transfer file.");
+    @try {if(!SetOwner(fd,uid,gid,error))return NO;NSUInteger offset=0;while(offset<data.length){ssize_t n=write(fd,(const char *)data.bytes+offset,data.length-offset);if(n<0&&errno==EINTR)continue;if(n<=0)return POSIXFail(error,@"Cannot stage transfer file.");offset+=(NSUInteger)n;}return fsync(fd)==0?YES:POSIXFail(error,@"Cannot synchronize transfer file.");} @finally{close(fd);}
+}
+- (NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(NSString *)sha error:(NSError **)error {
+    SHDWStateDirectory *directory=nil;int fd=-1;
+    @try {if(error)*error=nil;NSString *canonical=UUIDValue(idfv);if(!canonical||![@[@"manifest",@"state"] containsObject:part]){Fail(error,@"Invalid transfer selection.");return nil;}
+        directory=[self directory:bundleID create:NO exclusive:NO missing:NULL error:error];if(!directory)return nil;
+        NSDictionary *manifest=[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error];if(!manifest)return nil;
+        if([part isEqual:@"state"]&&!Same(sha,manifest[@"stateArchiveInfo"][@"sha256"])){Fail(error,@"Snapshot changed; read its manifest again.");return nil;}
+        fd=openat(directory.snapshots,canonical.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(fd<0){POSIXFail(error,@"Cannot open transfer snapshot.");return nil;}
+        NSData *metadata=TransferRead(fd,@"manifest.plist",16*1024*1024,self.ownerUID,self.ownerGID,error);if(!metadata)return nil;
+        NSData *bytes=[part isEqual:@"manifest"]?metadata:TransferRead(fd,@"state.tar.zst",64*1024*1024,self.ownerUID,self.ownerGID,error);if(!bytes)return nil;
+        if([part isEqual:@"state"]&&!Same(TransferHash(bytes),sha)){Fail(error,@"State checksum mismatch.");return nil;}
+        if(![self checkDirectory:directory error:error])return nil;
+        return @{@"data":bytes,@"manifestSHA":TransferHash(metadata),@"stateSHA":manifest[@"stateArchiveInfo"][@"sha256"],@"dataSHA":manifest[@"archiveInfo"][@"sha256"]};
+    } @finally{if(fd>=0)close(fd);[directory releaseLock];}
+}
+- (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)metadata state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error {
+    SHDWStateDirectory *directory=nil;int source=-1,stageFD=-1,snapshots=-1,candidate=-1;NSString *stage=nil;BOOL published=NO,keepStage=NO;
+    @try {if(error)*error=nil;NSString *canonical=UUIDValue(idfv);
+        if(!canonical||![metadata isKindOfClass:NSData.class]||!metadata.length||metadata.length>16*1024*1024||![state isKindOfClass:NSData.class]||!state.length||state.length>64*1024*1024||![sha isKindOfClass:NSString.class]||sha.length!=64)return Fail(error,@"Invalid import request.");
+        directory=[self directory:bundleID create:NO exclusive:YES missing:NULL error:error];if(!directory)return NO;
+        NSDictionary *pending=[self pending:directory error:error];if(!pending)return NO;if(Same(pending[@"idfv"],canonical))return Fail(error,@"The pending restoration source cannot be replaced.");
+        NSDictionary *original=[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error];if(!original)return NO;
+        source=openat(directory.snapshots,canonical.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(source<0)return POSIXFail(error,@"Cannot open import snapshot.");
+        NSData *old=TransferRead(source,@"manifest.plist",16*1024*1024,self.ownerUID,self.ownerGID,error);if(!old)return NO;if(!Same(TransferHash(old),sha))return Fail(error,@"Snapshot changed during transfer.");
+        id parsed=[NSPropertyListSerialization propertyListWithData:metadata options:NSPropertyListMutableContainers format:NULL error:error];if(![parsed isKindOfClass:NSDictionary.class])return Fail(error,@"Invalid import manifest.");
+        NSMutableDictionary *a=[original mutableCopy],*b=[parsed mutableCopy];for(NSString *key in @[@"stateArchiveInfo",@"title",@"note",@"digest"]){[a removeObjectForKey:key];[b removeObjectForKey:key];}if(!Same(a,b))return Fail(error,@"Import cannot change snapshot data or identity.");
+        stage=[@".capture-" stringByAppendingString:NSUUID.UUID.UUIDString];if(!MakeDirectory(directory.fd,stage.fileSystemRepresentation,self.ownerUID,self.ownerGID,NO,error))return NO;
+        stageFD=openat(directory.fd,stage.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(stageFD<0)return POSIXFail(error,@"Cannot open import staging.");
+        if(!MakeDirectory(stageFD,"snapshots",self.ownerUID,self.ownerGID,NO,error))return NO;snapshots=openat(stageFD,"snapshots",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(snapshots<0)return POSIXFail(error,@"Cannot open import staging.");
+        if(!MakeDirectory(snapshots,canonical.fileSystemRepresentation,self.ownerUID,self.ownerGID,NO,error))return NO;candidate=openat(snapshots,canonical.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(candidate<0)return POSIXFail(error,@"Cannot open import staging.");
+        if(!TransferWrite(candidate,@"manifest.plist",metadata,self.ownerUID,self.ownerGID,error)||!TransferWrite(candidate,@"state.tar.zst",state,self.ownerUID,self.ownerGID,error))return NO;
+        int input=openat(source,"data.tar.zst",O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC),output=-1;
+        @try {struct stat st;if(input<0||fstat(input,&st)||!PrivateNode(st,NO,self.ownerUID,self.ownerGID))return Fail(error,@"Unsafe source data archive.");output=openat(candidate,"data.tar.zst",O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(output<0||!SetOwner(output,self.ownerUID,self.ownerGID,error))return NO;
+            char buffer[131072];for(;;){ssize_t n=read(input,buffer,sizeof(buffer));if(n<0&&errno==EINTR)continue;if(n<0)return POSIXFail(error,@"Cannot copy snapshot data.");if(!n)break;ssize_t offset=0;while(offset<n){ssize_t w=write(output,buffer+offset,(size_t)(n-offset));if(w<0&&errno==EINTR)continue;if(w<=0)return POSIXFail(error,@"Cannot stage snapshot data.");offset+=w;}}if(fsync(output))return POSIXFail(error,@"Cannot synchronize snapshot data.");
+        } @finally{if(input>=0)close(input);if(output>=0)close(output);}
+        SHDWStateDirectory *validation=[SHDWStateDirectory new];validation.path=[directory.path stringByAppendingPathComponent:stage];validation.snapshots=dup(snapshots);
+        NSDictionary *verified=[self manifest:bundleID idfv:canonical directory:validation verify:YES error:error];if(!verified||![self payloads:verified directory:validation error:error])return NO;
+        if(![self checkDirectory:directory error:error]||fsync(candidate)||fsync(snapshots)||fsync(stageFD))return Fail(error,@"Cannot synchronize imported snapshot.");
+#if defined(__APPLE__) && defined(RENAME_SWAP)
+        if(renameatx_np(snapshots,canonical.fileSystemRepresentation,directory.snapshots,canonical.fileSystemRepresentation,RENAME_SWAP))return POSIXFail(error,@"Cannot atomically publish imported snapshot.");
+#else
+        return Fail(error,@"Atomic snapshot replacement is unavailable.");
+#endif
+        published=YES;if(fsync(directory.snapshots)||fsync(snapshots)||fsync(directory.fd)) {
+#if defined(__APPLE__) && defined(RENAME_SWAP)
+            if(!renameatx_np(snapshots,canonical.fileSystemRepresentation,directory.snapshots,canonical.fileSystemRepresentation,RENAME_SWAP)) {
+                int syncCatalog=fsync(directory.snapshots),syncStage=fsync(snapshots),syncApp=fsync(directory.fd);
+                if(!syncCatalog&&!syncStage&&!syncApp)published=NO;
+            }
+#endif
+            if(published){keepStage=YES;if(error)*error=[NSError errorWithDomain:SHDWAppStateErrorDomain code:3 userInfo:@{NSLocalizedDescriptionKey:@"Imported snapshot publication could not be synchronized.",@"outcomeUnknown":@YES}];return NO;}
+            return POSIXFail(error,@"Imported snapshot publication could not be synchronized.");
+        }return YES;
+    } @finally{if(candidate>=0)close(candidate);if(snapshots>=0)close(snapshots);if(stageFD>=0)close(stageFD);if(source>=0)close(source);if(stage&&directory&&!keepStage){RemoveChild(directory.fd,stage.fileSystemRepresentation,nil,NULL);if(published)fsync(directory.fd);}[directory releaseLock];}
 }
 - (BOOL)recheckBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
