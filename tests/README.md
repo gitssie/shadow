@@ -21,6 +21,7 @@ directory containing `bin/lane.sh`; a full Theos installation is not required.
 | raw syscall metadata | `sh tests/verify-syscall-meta.sh` |
 | settings structure | `sh tests/verify-settings-structure.sh` |
 | JB-identifier data contract | `make -C tests jb-identifiers` |
+| Debian numeric ownership and payload preservation | `make -C tests verify-deb-ownership` |
 | package maintainer scripts | `sh tests/MaintainerScriptTests.sh` |
 
 Run the public checks from the repository root:

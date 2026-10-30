@@ -199,3 +199,9 @@ verify-loaded-image-registry:
 	@echo "SKIP: loaded image registry host checks require macOS Foundation"
 endif
 .PHONY: verify-loaded-image-registry
+
+verify-deb-ownership:
+	python3 verify-deb-ownership.py
+
+.PHONY: verify-deb-ownership
+test: verify-deb-ownership
