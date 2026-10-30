@@ -39,8 +39,9 @@ static NSMutableDictionary *keychainClassCounts;
 static pid_t keychainParent;
 static NSDictionary *failureDetails;
 
+static NSString *stateFailureCode;
 static void Fail(NSString *message) {
-    @throw [NSException exceptionWithName:@"CleanupFailure" reason:message userInfo:nil];
+    @throw [NSException exceptionWithName:@"CleanupFailure" reason:message userInfo:stateFailureCode?@{@"errorCode":stateFailureCode}:nil];
 }
 static void Require(BOOL condition, NSString *message) { if (!condition) Fail(message); }
 static NSString *Canonical(NSString *path) {
@@ -850,7 +851,7 @@ static int SessionLockForAccess(NSString *identifier, BOOL exclusive) {
     NSString *path = [SessionRoot stringByAppendingPathComponent:[Hash(@[identifier]) stringByAppendingString:@".lock"]];
     int fd = open(path.fileSystemRepresentation, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != 0 || st.st_nlink != 1) { if (fd >= 0) close(fd); Fail(@"Cannot open application operation session"); }
-    if (flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { close(fd); Fail(@"An operation is already running."); }
+    if (flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { close(fd); stateFailureCode=@"busy"; Fail(@"An operation is already running."); }
     return fd;
 }
 static int SessionLock(NSString *identifier) { return SessionLockForAccess(identifier, YES); }
@@ -988,7 +989,7 @@ int CleanerMain(int argc, const char *argv[]) {
     @catch (NSException *exception) {
         BOOL recheck = argc >= 2 && !strcmp(argv[1], "recheck");
         result = @{@"ok":@NO, @"error":exception.reason ?: @"Cleanup failed", @"partial":@(mutated || recheck),
-            @"details":failureDetails ?: @{}, @"remainingSteps":remainingSteps ?: @[], @"step":recheck ? @"recheck" : argc == 5 && !strcmp(argv[1], "run") ? [NSString stringWithUTF8String:argv[4]] : @""}; status = 1;
+            @"errorCode":exception.userInfo[@"errorCode"] ?: @"operation_failed", @"sourceDomain":exception.name,@"sourceCode":@1, @"details":failureDetails ?: @{}, @"remainingSteps":remainingSteps ?: @[], @"step":recheck ? @"recheck" : argc == 5 && !strcmp(argv[1], "run") ? [NSString stringWithUTF8String:argv[4]] : @""}; status = 1;
     }
     NSData *data = [NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingSortedKeys error:NULL];
     if (data) { fwrite(data.bytes, 1, data.length, stdout); fputc('\n', stdout); }

@@ -30,7 +30,9 @@ mode = request.get("mode", "valid")
 def emit(value):
     sys.stdout.buffer.write(json.dumps(value, separators=(",", ":")).encode() + b"\n")
     sys.stdout.buffer.flush()
-if mode == "timeout":
+if mode.startswith("error:"):
+    emit({"ok":False,"error":"本地化消息，与分类无关","errorCode":mode[6:],"sourceDomain":"fixture.source","sourceCode":41,"posixCode":13,"details":{"phase":"fixture"},"stateMayBePartial":True})
+elif mode == "timeout":
     time.sleep(10)
 elif mode == "malformed":
     os.write(1, b"{bad}\n")
@@ -93,6 +95,13 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     }
     calls=Calls(path); client.timeout=0.3;
     NSTimeInterval start=NSProcessInfo.processInfo.systemUptime;
+
+    for(NSString *code in @[@"busy",@"shadow_unavailable",@"invalid_request",@"restore_pending",@"active_environment",@"snapshot_unavailable",@"invalid_archive",@"permission_denied",@"operation_failed",@"outcome_unknown"]){
+        Check(![client invokeAction:@"externalVerify" bundleIdentifier:@"local.fixture.app" request:@{@"mode":[@"error:" stringByAppendingString:code]} progress:nil error:&error],@"structured error returned success");
+        NSError *source=error.userInfo[NSUnderlyingErrorKey],*posix=source.userInfo[NSUnderlyingErrorKey];
+        Check([error.userInfo[@"errorCode"]isEqual:code]&&[source.domain isEqual:@"fixture.source"]&&source.code==41&&[posix.domain isEqual:NSPOSIXErrorDomain]&&posix.code==13&&[error.userInfo[@"helperDetails"][@"phase"]isEqual:@"fixture"]&&[error.userInfo[@"stateMayBePartial"]boolValue],@"stable structured helper error lost in SDK");
+    }
+    calls=Calls(path);start=NSProcessInfo.processInfo.systemUptime;
     Check(![client invokeAction:@"importState" bundleIdentifier:@"local.fixture.app" request:Import(@"timeout") progress:nil error:&error] && error.code==4 && [error.userInfo[@"outcomeUnknown"]boolValue],@"import timeout preserves unknown outcome");
     Check(NSProcessInfo.processInfo.systemUptime-start<3 && Calls(path)==calls+1,@"timeout supervised with no automatic retry");
     puts("shared AppState SDK: bounded stdin, private unlinked input, >8MiB response, validation, caller-thread progress, malformed frames and timeout/no-retry passed");

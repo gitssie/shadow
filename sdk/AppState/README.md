@@ -18,6 +18,10 @@ External adapters first request `capabilities` and require API version 1, format
 | capabilities | empty dictionary | apiVersion, format, operations |
 | externalCatalog | empty dictionary | bundle_id, current_idfv, backups |
 | externalEdit | idfv, metadata containing title/note | edited |
+| backup | optional metadata containing title and/or note | concise snapshot metadata |
+| restore | idfv, saveCurrent | restoration result |
+| externalDelete | idfv | deleted |
+| externalVerify | idfv | verified |
 | exportState | idfv, part (manifest/state), stateSHA for state | data (NSData), manifestSHA, stateSHA, dataSHA |
 | importState | idfv, manifest/state (NSData), expectedManifestSHA | imported |
 
@@ -46,3 +50,20 @@ authentication, operation IDs, and streaming remain in the consuming product.
 Verification: `make -C tests verify-backups` exercises real archive/store code,
 SDK process transport, Manager coordination and native adapter doubles. Device
 permissions and real application restore behavior require separate device checks.
+
+Stable failures retain the human-readable message while supplying `errorCode`
+in `NSError.userInfo`, plus `sourceDomain`, `sourceCode` and optional `posixCode`
+for diagnostics. `stateMayBePartial` and `outcomeUnknown` remain independent:
+a known failed restore can leave partial live state without losing its outcome.
+Clients must not parse localized messages to identify errors. Examples include
+`busy`, `invalid_request`, `shadow_unavailable`, `restore_pending`,
+`active_environment`, `snapshot_unavailable`, `invalid_archive`,
+`permission_denied`, `operation_failed` and `outcome_unknown`.
+
+Backup and restore execute the same existing helper actions used by Manager.
+Omitted backup metadata retains the normal Shadow defaults; individual title
+or note updates preserve the other value for the same IDFV. Restoration retains
+Shadow's same-IDFV and pending recovery behavior and never launches the app.
+The HTTP adapter defaults saveCurrent to true; an explicit pending retry uses
+false. External deletion and full verification operate on saved storage without
+resolving live application containers or launching device workers.

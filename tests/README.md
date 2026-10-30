@@ -130,3 +130,10 @@ Backup recovery regressions cover atomic tombstone deletion, per-snapshot corrup
 snapshots, containing-app configuration for extensions, and scoped native
 accessor consistency. These host checks use Foundation and runtime doubles;
 private selector availability and actual hook installation require device checks.
+
+AppState helper checks also cover stable machine error codes through the real
+process transport, preserving source/POSIX codes and independent partial/unknown
+flags. Core fixtures check busy locks, active/pending protection, damaged and
+missing snapshots, and partial metadata updates. Native helper fixtures verify
+that saved-snapshot deletion and full verification dispatch without live target
+resolution. These checks do not establish live device permissions.

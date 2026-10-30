@@ -33,7 +33,7 @@ static void RestoreArchiveLocale(locale_t locale, locale_t previous) {
     if (locale) { uselocale(previous); freelocale(locale); }
 }
 static void PublishError(NSError **error, NSException *exception) {
-    if (error) *error = [NSError errorWithDomain:SHDWStateArchiveErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Archive operation failed"}];
+    if (error) *error = [NSError errorWithDomain:SHDWStateArchiveErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Archive operation failed",@"errorCode":@"invalid_archive"}];
 }
 static NSString *Hex(const unsigned char *bytes, size_t count) {
     NSMutableString *value = [NSMutableString new];

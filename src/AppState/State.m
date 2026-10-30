@@ -16,13 +16,14 @@ static NSString *const PreferencesPayload = @"preferences/records.plist";
 static NSUInteger const MaximumPlistSize = 64 * 1024 * 1024;
 static NSUInteger const MaximumPayloadSize = 16 * 1024 * 1024;
 
-static BOOL Fail(NSError **error, NSString *message) {
-    if (error) *error = [NSError errorWithDomain:SHDWAppStateErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: message}];
+static BOOL FailCode(NSError **error, NSString *machineCode, NSString *message) {
+    if (error) *error = [NSError errorWithDomain:SHDWAppStateErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey: message,@"errorCode":machineCode}];
     return NO;
 }
+static BOOL Fail(NSError **error, NSString *message) { return FailCode(error,@"operation_failed",message); }
 static BOOL POSIXFail(NSError **error, NSString *message) {
     int saved = errno;
-    if (error) *error = [NSError errorWithDomain:SHDWAppStateErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: message, NSUnderlyingErrorKey:[NSError errorWithDomain:NSPOSIXErrorDomain code:saved userInfo:nil]}];
+    if (error) *error = [NSError errorWithDomain:SHDWAppStateErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: message, @"errorCode":(saved==EACCES||saved==EPERM)?@"permission_denied":saved==ENOENT?@"snapshot_unavailable":@"operation_failed", NSUnderlyingErrorKey:[NSError errorWithDomain:NSPOSIXErrorDomain code:saved userInfo:nil]}];
     return NO;
 }
 static BOOL Same(id a, id b) { return a == b || [a isEqual:b]; }
@@ -83,7 +84,7 @@ static BOOL MigrateStorage(int fd, uid_t uid, gid_t gid, NSError **error) {
     if (fstat(fd, &root)) return POSIXFail(error, @"Cannot inspect backup storage ownership.");
     if (PrivateNode(root, YES, uid, gid)) return YES;
     if (geteuid() != 0 || !LegacyNode(root, YES, gid)) return Fail(error, @"Backup storage has an unexpected owner.");
-    if (flock(fd, LOCK_EX | LOCK_NB)) return Fail(error, @"Backup ownership migration is already running.");
+    if (flock(fd, LOCK_EX | LOCK_NB)) return FailCode(error,@"busy",@"Backup ownership migration is already running.");
     BOOL success = YES; DIR *dir = fdopendir(openat(fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     if (!dir) { flock(fd, LOCK_UN); return POSIXFail(error, @"Cannot enumerate backup storage."); }
     @try {
@@ -96,7 +97,7 @@ static BOOL MigrateStorage(int fd, uid_t uid, gid_t gid, NSError **error) {
             struct stat app, lockInfo;
             if (child < 0 || fstat(child, &app) || app.st_dev != root.st_dev || (!LegacyNode(app, YES, gid) && !PrivateNode(app, YES, uid, gid))) { if (child >= 0) close(child); success = Fail(error, @"Unsafe application backup ownership."); break; }
             int lock = openat(child, ".lock", O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-            if (lock < 0 || fstat(lock, &lockInfo) || (!LegacyNode(lockInfo, NO, gid) && !PrivateNode(lockInfo, NO, uid, gid)) || flock(lock, LOCK_EX | LOCK_NB)) { if (lock >= 0) close(lock); close(child); success = Fail(error, @"Application backup is busy or unsafe during ownership migration."); break; }
+            if (lock < 0 || fstat(lock, &lockInfo) || (!LegacyNode(lockInfo, NO, gid) && !PrivateNode(lockInfo, NO, uid, gid)) || flock(lock, LOCK_EX | LOCK_NB)) { if (lock >= 0) close(lock); close(child); success = FailCode(error,@"busy",@"Application backup is busy or unsafe during ownership migration."); break; }
             success = MigrateTree(child, root.st_dev, uid, gid, error);
             flock(lock, LOCK_UN); close(lock); close(child); if (!success) break;
         }
@@ -146,9 +147,9 @@ static BOOL EmptyPreferenceArtifact(NSString *root, NSString *relative, struct s
 }
 static NSDictionary *Metadata(id metadata, NSString *fallback, NSError **error) {
     if (!metadata) return @{ @"title": [fallback substringToIndex:MIN(fallback.length, (NSUInteger)100)], @"note": @"" };
-    if (![metadata isKindOfClass:NSDictionary.class] || [metadata count] != 2 || ![metadata[@"title"] isKindOfClass:NSString.class] || ![metadata[@"note"] isKindOfClass:NSString.class]) { Fail(error, @"Invalid snapshot name or note."); return nil; }
+    if (![metadata isKindOfClass:NSDictionary.class] || [metadata count] != 2 || ![metadata[@"title"] isKindOfClass:NSString.class] || ![metadata[@"note"] isKindOfClass:NSString.class]) { FailCode(error,@"invalid_request",@"Invalid snapshot name or note."); return nil; }
     NSString *title = [metadata[@"title"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (!title.length || title.length > 100 || [metadata[@"note"] length] > 1000) { Fail(error, @"Invalid snapshot name or note."); return nil; }
+    if (!title.length || title.length > 100 || [metadata[@"note"] length] > 1000) { FailCode(error,@"invalid_request",@"Invalid snapshot name or note."); return nil; }
     return @{ @"title": title, @"note": metadata[@"note"] };
 }
 static NSData *Encode(id value, NSError **error) { return [NSPropertyListSerialization dataWithPropertyList:value format:NSPropertyListBinaryFormat_v1_0 options:0 error:error]; }
@@ -288,7 +289,7 @@ static void CollectAbandonedSnapshots(int parent) {
 }
 - (SHDWStateDirectory *)directory:(NSString *)bundle create:(BOOL)create exclusive:(BOOL)exclusive missing:(BOOL *)missing error:(NSError **)error {
     if (missing) *missing = NO;
-    if (!BundleValue(bundle) || ![self checkRoot:error]) { if (error && !*error) Fail(error, @"Invalid application identifier."); return nil; }
+    if (!BundleValue(bundle) || ![self checkRoot:error]) { if (error && !*error) FailCode(error,@"invalid_request",@"Invalid application identifier."); return nil; }
     struct stat info;
     if (fstatat(self.rootFD, bundle.fileSystemRepresentation, &info, AT_SYMLINK_NOFOLLOW)) {
         if (errno == ENOENT && !create) { if (missing) *missing = YES; return nil; }
@@ -304,7 +305,7 @@ static void CollectAbandonedSnapshots(int parent) {
     }
     directory.lock = openat(directory.fd, ".lock", O_RDWR | O_NOFOLLOW | O_CLOEXEC);
     if (directory.lock < 0 || fstat(directory.lock, &info) || !PrivateNode(info, NO, self.ownerUID, self.ownerGID)) { Fail(error, @"Application backup lock is unsafe."); return nil; }
-    if (flock(directory.lock, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { Fail(error, @"An application state operation is already running."); return nil; }
+    if (flock(directory.lock, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { FailCode(error,@"busy",@"An application state operation is already running."); return nil; }
     if (create && !MakeDirectory(directory.fd, "snapshots", self.ownerUID, self.ownerGID, YES, error)) { POSIXFail(error, @"Cannot create snapshot storage."); return nil; }
     directory.snapshots = openat(directory.fd, "snapshots", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (directory.snapshots < 0 || fstat(directory.snapshots, &info) || !PrivateNode(info, YES, self.ownerUID, self.ownerGID)) { Fail(error, @"Snapshot storage is unsafe."); return nil; } directory.snapshotInfo = info;
@@ -380,26 +381,26 @@ static void CollectAbandonedSnapshots(int parent) {
     return YES;
 }
 - (NSDictionary *)manifest:(NSString *)bundle idfv:(NSString *)idfv directory:(SHDWStateDirectory *)directory verify:(BOOL)verify error:(NSError **)error {
-    int fd = openat(directory.snapshots, idfv.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) { POSIXFail(error, @"Snapshot is unavailable."); return nil; }
+    int fd = openat(directory.snapshots, idfv.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) { POSIXFail(error,@"Snapshot is unavailable."); return nil; }
     NSDictionary *manifest = nil;
     @try {
         struct stat info;
         if (fstat(fd, &info) || !PrivateNode(info, YES, self.ownerUID, self.ownerGID)) { Fail(error, @"Snapshot directory is unsafe."); return nil; }
         id value = ReadPlistAt(fd, @"manifest.plist", self.ownerUID, self.ownerGID, error);
-        if (![value isKindOfClass:NSDictionary.class] || !Same(value[@"format"], StateFormat) || !Same(value[@"bundleID"], bundle) || !Same(value[@"idfv"], idfv) || !Metadata(@{ @"title": value[@"title"] ?: @0, @"note": value[@"note"] ?: @0 }, bundle, NULL) || ![value[@"date"] isKindOfClass:NSDate.class] || !PlainString(value[@"version"]) || !PlainString(value[@"build"]) || ![value[@"roots"] isKindOfClass:NSDictionary.class] || ![value[@"roots"] count] || ![value[@"archiveInfo"] isKindOfClass:NSDictionary.class] || ![value[@"keychainGroups"] isKindOfClass:NSArray.class]) { if (error && !*error) Fail(error, @"Snapshot manifest is invalid."); return nil; }
+        if (![value isKindOfClass:NSDictionary.class] || !Same(value[@"format"], StateFormat) || !Same(value[@"bundleID"], bundle) || !Same(value[@"idfv"], idfv) || !Metadata(@{ @"title": value[@"title"] ?: @0, @"note": value[@"note"] ?: @0 }, bundle, NULL) || ![value[@"date"] isKindOfClass:NSDate.class] || !PlainString(value[@"version"]) || !PlainString(value[@"build"]) || ![value[@"roots"] isKindOfClass:NSDictionary.class] || ![value[@"roots"] count] || ![value[@"archiveInfo"] isKindOfClass:NSDictionary.class] || ![value[@"keychainGroups"] isKindOfClass:NSArray.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot manifest is invalid."); return nil; }
         if (![self validateArchiveOwnership:value[@"archiveInfo"] error:error]) return nil;
         NSMutableDictionary *sourceRoots = [NSMutableDictionary new];
-        for (id prefix in value[@"roots"]) { id root = value[@"roots"][prefix]; if (![prefix isKindOfClass:NSString.class] || ![prefix hasPrefix:@"containers/"] || ![root isKindOfClass:NSDictionary.class] || !PlainString(root[@"containerID"]) || !PlainString(root[@"nativePath"]) || ![root[@"nativePath"] isAbsolutePath]) { Fail(error, @"Snapshot container mapping is invalid."); return nil; } sourceRoots[prefix] = root[@"nativePath"]; }
-        if (!Same(sourceRoots, value[@"archiveInfo"][@"sourceRoots"])) { Fail(error, @"Snapshot archive mapping differs."); return nil; }
+        for (id prefix in value[@"roots"]) { id root = value[@"roots"][prefix]; if (![prefix isKindOfClass:NSString.class] || ![prefix hasPrefix:@"containers/"] || ![root isKindOfClass:NSDictionary.class] || !PlainString(root[@"containerID"]) || !PlainString(root[@"nativePath"]) || ![root[@"nativePath"] isAbsolutePath]) { FailCode(error,@"invalid_archive",@"Snapshot container mapping is invalid."); return nil; } sourceRoots[prefix] = root[@"nativePath"]; }
+        if (!Same(sourceRoots, value[@"archiveInfo"][@"sourceRoots"])) { FailCode(error,@"invalid_archive",@"Snapshot archive mapping differs."); return nil; }
         {
             NSDictionary *stateInfo = value[@"stateArchiveInfo"];
-            if (![stateInfo isKindOfClass:NSDictionary.class] || !Same(stateInfo[@"sourceRoots"], @{}) || ![stateInfo[@"entries"] isKindOfClass:NSArray.class] || [stateInfo[@"entries"] count] != 3) { Fail(error, @"Snapshot state archive is invalid."); return nil; }
+            if (![stateInfo isKindOfClass:NSDictionary.class] || !Same(stateInfo[@"sourceRoots"], @{}) || ![stateInfo[@"entries"] isKindOfClass:NSArray.class] || [stateInfo[@"entries"] count] != 3) { FailCode(error,@"invalid_archive",@"Snapshot state archive is invalid."); return nil; }
             NSMutableSet *names = [NSMutableSet new];
             for (id entry in stateInfo[@"entries"]) {
-                if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"path"] isKindOfClass:NSString.class] || !Same(entry[@"type"], @"file")) { Fail(error, @"Snapshot state archive entry is invalid."); return nil; }
+                if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"path"] isKindOfClass:NSString.class] || !Same(entry[@"type"], @"file")) { FailCode(error,@"invalid_archive",@"Snapshot state archive entry is invalid."); return nil; }
                 [names addObject:entry[@"path"]];
             }
-            if (![names isEqual:[NSSet setWithArray:@[IdentityPayload, KeychainPayload, PreferencesPayload]]]) { Fail(error, @"Snapshot state payload scope differs."); return nil; }
+            if (![names isEqual:[NSSet setWithArray:@[IdentityPayload, KeychainPayload, PreferencesPayload]]]) { FailCode(error,@"invalid_archive",@"Snapshot state payload scope differs."); return nil; }
             for (NSDictionary *entry in value[@"archiveInfo"][@"entries"]) {
                 BOOL contained = NO;
                 for (NSString *prefix in sourceRoots) if ([entry[@"path"] isEqual:prefix] || [entry[@"path"] hasPrefix:[prefix stringByAppendingString:@"/"]]) { contained = YES; break; }
@@ -407,7 +408,7 @@ static void CollectAbandonedSnapshots(int parent) {
             }
         }
         for (NSString *name in @[@"data.tar.zst", @"state.tar.zst"]) {
-            if (fstatat(fd, name.fileSystemRepresentation, &info, AT_SYMLINK_NOFOLLOW) || !PrivateNode(info, NO, self.ownerUID, self.ownerGID)) { Fail(error, @"Snapshot archive is unsafe."); return nil; }
+            if (fstatat(fd, name.fileSystemRepresentation, &info, AT_SYMLINK_NOFOLLOW) || !PrivateNode(info, NO, self.ownerUID, self.ownerGID)) { FailCode(error,@"invalid_archive",@"Snapshot archive is unsafe."); return nil; }
             NSString *archive = [[directory.path stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[idfv stringByAppendingPathComponent:name]];
             NSDictionary *archiveInfo = value[[name isEqual:@"data.tar.zst"] ? @"archiveInfo" : @"stateArchiveInfo"];
             if (verify && ![SHDWStateArchive verifyPath:archive info:archiveInfo progress:self.progressHandler error:error]) return nil;
@@ -421,11 +422,11 @@ static void CollectAbandonedSnapshots(int parent) {
     NSDictionary *data = [SHDWStateArchive readPayloadsAtPath:path info:manifest[@"stateArchiveInfo"] names:@[IdentityPayload, KeychainPayload, PreferencesPayload] error:error]; if (!data) return nil;
     id identity = [NSPropertyListSerialization propertyListWithData:data[IdentityPayload] ?: [NSData data] options:NSPropertyListImmutable format:NULL error:error];
     id keychain = [NSPropertyListSerialization propertyListWithData:data[KeychainPayload] ?: [NSData data] options:NSPropertyListImmutable format:NULL error:error];
-    if (![identity isKindOfClass:NSDictionary.class] || [identity count] != 2 || ![identity[@"data"] isKindOfClass:NSDictionary.class] || ![identity[@"configuration"] isKindOfClass:NSDictionary.class] || !Same(identity[@"data"][@"VendorIdentifier"], manifest[@"idfv"]) || ![keychain isKindOfClass:NSArray.class]) { if (error && !*error) Fail(error, @"Snapshot identity or credential payload is invalid."); return nil; }
+    if (![identity isKindOfClass:NSDictionary.class] || [identity count] != 2 || ![identity[@"data"] isKindOfClass:NSDictionary.class] || ![identity[@"configuration"] isKindOfClass:NSDictionary.class] || !Same(identity[@"data"][@"VendorIdentifier"], manifest[@"idfv"]) || ![keychain isKindOfClass:NSArray.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot identity or credential payload is invalid."); return nil; }
     NSMutableDictionary *result = [@{ @"fingerprint": @{ @"data": identity[@"data"], @"configuration": identity[@"configuration"], @"locked": @YES }, @"keychain": keychain } mutableCopy];
     {
         id preferences = [NSPropertyListSerialization propertyListWithData:data[PreferencesPayload] ?: [NSData data] options:NSPropertyListImmutable format:NULL error:error];
-        if (![preferences isKindOfClass:NSDictionary.class]) { if (error && !*error) Fail(error, @"Snapshot preferences are invalid."); return nil; }
+        if (![preferences isKindOfClass:NSDictionary.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot preferences are invalid."); return nil; }
         result[@"preferences"] = preferences;
     }
     return result;
@@ -438,7 +439,7 @@ static void CollectAbandonedSnapshots(int parent) {
 }
 - (NSDictionary *)backup:(NSString *)bundle metadata:(NSDictionary *)metadata directory:(SHDWStateDirectory *)directory error:(NSError **)error {
     NSDictionary *pending = [self pending:directory error:error]; if (!pending) return nil;
-    if (pending.count) { Fail(error, @"Retry the incomplete restoration before creating a backup."); return nil; }
+    if (pending.count) { FailCode(error,@"restore_pending",@"Retry the incomplete restoration before creating a backup."); return nil; }
     NSDictionary *context = [self target:bundle error:error]; if (!context) return nil;
     [self event:@"backup" stage:@"stop"];
     if (![self.backend stopTarget:context[@"target"] error:error] || ![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:context[@"target"] error:error]) return nil;
@@ -454,7 +455,13 @@ static void CollectAbandonedSnapshots(int parent) {
     NSDictionary *previous = replacing ? [self manifest:bundle idfv:idfv directory:directory verify:NO error:error] : nil; if (replacing && !previous) return nil;
     NSDate *backupDate = NSDate.date;
     NSDateFormatter *nameFormatter = [NSDateFormatter new]; nameFormatter.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]; nameFormatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
-    NSDictionary *display = Metadata(metadata ?: (previous ? @{ @"title": previous[@"title"], @"note": previous[@"note"] } : nil), [nameFormatter stringFromDate:backupDate], error); if (!display) return nil;
+    NSDictionary *resolvedMetadata=metadata;
+    if(metadata){
+        if(![metadata isKindOfClass:NSDictionary.class]){FailCode(error,@"invalid_request",@"Invalid backup metadata.");return nil;}
+        for(id key in metadata)if(![@[@"title",@"note"]containsObject:key]){FailCode(error,@"invalid_request",@"Invalid backup metadata field.");return nil;}
+        NSMutableDictionary *merged=[@{@"title":previous[@"title"]?:[nameFormatter stringFromDate:backupDate],@"note":previous[@"note"]?:@""}mutableCopy];[merged addEntriesFromDictionary:metadata];resolvedMetadata=merged;
+    }
+    NSDictionary *display = Metadata(resolvedMetadata ?: (previous ? @{ @"title": previous[@"title"], @"note": previous[@"note"] } : nil), [nameFormatter stringFromDate:backupDate], error); if (!display) return nil;
     NSDictionary *identity = @{ @"data": fingerprint[@"data"], @"configuration": fingerprint[@"configuration"] };
     NSData *identityData = Encode(identity, error), *keychainData = Encode(records, error), *preferencesData = Encode(preferences, error); if (!identityData || !keychainData || !preferencesData || identityData.length > MaximumPayloadSize || keychainData.length > MaximumPayloadSize || preferencesData.length > MaximumPayloadSize) { if (error && !*error) Fail(error, @"Snapshot identity or credentials are too large."); return nil; }
     NSString *stage = [@".capture-" stringByAppendingString:NSUUID.UUID.UUIDString];
@@ -529,7 +536,7 @@ static void CollectAbandonedSnapshots(int parent) {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
         if (error) *error = nil;
-        if (!BundleValue(bundleID)) { Fail(error, @"Invalid application identifier."); return nil; }
+        if (!BundleValue(bundleID)) { FailCode(error,@"invalid_request",@"Invalid application identifier."); return nil; }
         // Resolve overlap before creating even lock or catalog files: storage
         // accidentally inside a live container must remain untouched.
         if (![self target:bundleID error:error]) return nil;
@@ -589,14 +596,14 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 }
 - (NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(NSString *)sha error:(NSError **)error {
     SHDWStateDirectory *directory=nil;int fd=-1;
-    @try {if(error)*error=nil;NSString *canonical=UUIDValue(idfv);if(!canonical||![@[@"manifest",@"state"] containsObject:part]){Fail(error,@"Invalid transfer selection.");return nil;}
+    @try {if(error)*error=nil;NSString *canonical=UUIDValue(idfv);if(!canonical||![@[@"manifest",@"state"] containsObject:part]){FailCode(error,@"invalid_request",@"Invalid transfer selection.");return nil;}
         directory=[self directory:bundleID create:NO exclusive:NO missing:NULL error:error];if(!directory)return nil;
         NSDictionary *manifest=[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error];if(!manifest)return nil;
         if([part isEqual:@"state"]&&!Same(sha,manifest[@"stateArchiveInfo"][@"sha256"])){Fail(error,@"Snapshot changed; read its manifest again.");return nil;}
         fd=openat(directory.snapshots,canonical.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(fd<0){POSIXFail(error,@"Cannot open transfer snapshot.");return nil;}
         NSData *metadata=TransferRead(fd,@"manifest.plist",16*1024*1024,self.ownerUID,self.ownerGID,error);if(!metadata)return nil;
         NSData *bytes=[part isEqual:@"manifest"]?metadata:TransferRead(fd,@"state.tar.zst",64*1024*1024,self.ownerUID,self.ownerGID,error);if(!bytes)return nil;
-        if([part isEqual:@"state"]&&!Same(TransferHash(bytes),sha)){Fail(error,@"State checksum mismatch.");return nil;}
+        if([part isEqual:@"state"]&&!Same(TransferHash(bytes),sha)){FailCode(error,@"invalid_archive",@"State checksum mismatch.");return nil;}
         if(![self checkDirectory:directory error:error])return nil;
         return @{@"data":bytes,@"manifestSHA":TransferHash(metadata),@"stateSHA":manifest[@"stateArchiveInfo"][@"sha256"],@"dataSHA":manifest[@"archiveInfo"][@"sha256"]};
     } @finally{if(fd>=0)close(fd);[directory releaseLock];}
@@ -604,9 +611,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 - (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)metadata state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error {
     SHDWStateDirectory *directory=nil;int source=-1,stageFD=-1,snapshots=-1,candidate=-1;NSString *stage=nil;BOOL published=NO,keepStage=NO;
     @try {if(error)*error=nil;NSString *canonical=UUIDValue(idfv);
-        if(!canonical||![metadata isKindOfClass:NSData.class]||!metadata.length||metadata.length>16*1024*1024||![state isKindOfClass:NSData.class]||!state.length||state.length>64*1024*1024||![sha isKindOfClass:NSString.class]||sha.length!=64)return Fail(error,@"Invalid import request.");
+        if(!canonical||![metadata isKindOfClass:NSData.class]||!metadata.length||metadata.length>16*1024*1024||![state isKindOfClass:NSData.class]||!state.length||state.length>64*1024*1024||![sha isKindOfClass:NSString.class]||sha.length!=64)return FailCode(error,@"invalid_request",@"Invalid import request.");
         directory=[self directory:bundleID create:NO exclusive:YES missing:NULL error:error];if(!directory)return NO;
-        NSDictionary *pending=[self pending:directory error:error];if(!pending)return NO;if(Same(pending[@"idfv"],canonical))return Fail(error,@"The pending restoration source cannot be replaced.");
+        NSDictionary *pending=[self pending:directory error:error];if(!pending)return NO;if(Same(pending[@"idfv"],canonical))return FailCode(error,@"restore_pending",@"The pending restoration source cannot be replaced.");
         NSDictionary *original=[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error];if(!original)return NO;
         source=openat(directory.snapshots,canonical.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(source<0)return POSIXFail(error,@"Cannot open import snapshot.");
         NSData *old=TransferRead(source,@"manifest.plist",16*1024*1024,self.ownerUID,self.ownerGID,error);if(!old)return NO;if(!Same(TransferHash(old),sha))return Fail(error,@"Snapshot changed during transfer.");
@@ -636,7 +643,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 if(!syncCatalog&&!syncStage&&!syncApp)published=NO;
             }
 #endif
-            if(published){keepStage=YES;if(error)*error=[NSError errorWithDomain:SHDWAppStateErrorDomain code:3 userInfo:@{NSLocalizedDescriptionKey:@"Imported snapshot publication could not be synchronized.",@"outcomeUnknown":@YES}];return NO;}
+            if(published){keepStage=YES;if(error)*error=[NSError errorWithDomain:SHDWAppStateErrorDomain code:3 userInfo:@{NSLocalizedDescriptionKey:@"Imported snapshot publication could not be synchronized.",@"outcomeUnknown":@YES,@"errorCode":@"outcome_unknown"}];return NO;}
             return POSIXFail(error,@"Imported snapshot publication could not be synchronized.");
         }return YES;
     } @finally{if(candidate>=0)close(candidate);if(snapshots>=0)close(snapshots);if(stageFD>=0)close(stageFD);if(source>=0)close(source);if(stage&&directory&&!keepStage){RemoveChild(directory.fd,stage.fileSystemRepresentation,nil,NULL);if(published)fsync(directory.fd);}[directory releaseLock];}
@@ -644,7 +651,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 - (BOOL)recheckBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
-        if (error) *error = nil; NSString *canonical = UUIDValue(idfv); if (!canonical) return Fail(error, @"Invalid snapshot identity.");
+        if (error) *error = nil; NSString *canonical = UUIDValue(idfv); if (!canonical) return FailCode(error,@"invalid_request",@"Invalid snapshot identity.");
         SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:NO missing:NULL error:error]; if (!directory) return NO;
         NSDictionary *manifest = [self manifest:bundleID idfv:canonical directory:directory verify:YES error:error];
         return manifest && [self payloads:manifest directory:directory error:error] && [self checkDirectory:directory error:error];
@@ -653,9 +660,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 - (BOOL)editBundle:(NSString *)bundleID idfv:(NSString *)idfv metadata:(NSDictionary *)metadata error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
-        if (error) *error = nil; if (!metadata) return Fail(error, @"Snapshot name and note are required."); NSString *canonical = UUIDValue(idfv); NSDictionary *display = Metadata(metadata, bundleID ?: @"", error); if (!canonical || !display) return display ? Fail(error, @"Invalid snapshot identity.") : NO;
+        if (error) *error = nil; if (!metadata) return FailCode(error,@"invalid_request",@"Snapshot name and note are required."); NSString *canonical = UUIDValue(idfv); NSDictionary *display = Metadata(metadata, bundleID ?: @"", error); if (!canonical || !display) return display ? FailCode(error,@"invalid_request",@"Invalid snapshot identity.") : NO;
         SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return NO;
-        NSDictionary *pending = [self pending:directory error:error]; if (!pending) return NO; if (Same(pending[@"idfv"], canonical)) return Fail(error, @"The pending restoration source cannot be edited.");
+        NSDictionary *pending = [self pending:directory error:error]; if (!pending) return NO; if (Same(pending[@"idfv"], canonical)) return FailCode(error,@"restore_pending",@"The pending restoration source cannot be edited.");
         NSMutableDictionary *manifest = [[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error] mutableCopy]; if (!manifest) return NO; [manifest addEntriesFromDictionary:display];
         if (![self checkDirectory:directory error:error]) return NO;
         int fd = openat(directory.snapshots, canonical.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) return POSIXFail(error, @"Cannot open the snapshot.");
@@ -666,9 +673,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 - (BOOL)deleteBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
-        if (error) *error = nil; NSString *canonical = UUIDValue(idfv); if (!canonical) return Fail(error, @"Invalid snapshot identity.");
+        if (error) *error = nil; NSString *canonical = UUIDValue(idfv); if (!canonical) return FailCode(error,@"invalid_request",@"Invalid snapshot identity.");
         SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return NO;
-        NSDictionary *pending = [self pending:directory error:error]; if (!pending) return NO; if (Same(pending[@"idfv"], canonical)) return Fail(error, @"The pending restoration source cannot be deleted.");
+        NSDictionary *pending = [self pending:directory error:error]; if (!pending) return NO; if (Same(pending[@"idfv"], canonical)) return FailCode(error,@"restore_pending",@"The pending restoration source cannot be deleted.");
         if (![self checkDirectory:directory error:error]) return NO;
         CollectAbandonedSnapshots(directory.fd);
         NSString *tombstone = [@".delete-" stringByAppendingString:NSUUID.UUID.UUIDString];
@@ -715,11 +722,11 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
     @try {
         if (error) *error = nil; BOOL mutated = NO, restored = NO; NSDictionary *recovery = nil;
         @try {
-            NSString *canonical = UUIDValue(idfv); if (!canonical) { Fail(error, @"Invalid snapshot identity."); return nil; }
+            NSString *canonical = UUIDValue(idfv); if (!canonical) { FailCode(error,@"invalid_request",@"Invalid snapshot identity."); return nil; }
             SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return nil;
             NSDictionary *pending = [self pending:directory error:error]; if (!pending) return nil;
             recovery = pending.count ? pending : nil; mutated = pending.count > 0;
-            if (pending.count && (!Same(pending[@"idfv"], canonical) || saveCurrent)) { Fail(error, @"Retry the pending source without saving the incomplete current state."); return nil; }
+            if (pending.count && (!Same(pending[@"idfv"], canonical) || saveCurrent)) { FailCode(error,@"restore_pending",@"Retry the pending source without saving the incomplete current state."); return nil; }
             NSDictionary *manifest = [self manifest:bundleID idfv:canonical directory:directory verify:YES error:error]; if (!manifest) return nil;
             if (pending.count && (!Same(pending[@"archiveSHA"], manifest[@"archiveInfo"][@"sha256"]) || !Same(pending[@"stateArchiveSHA"], manifest[@"stateArchiveInfo"][@"sha256"]))) { Fail(error, @"The restoration source changed."); return nil; }
             NSDictionary *payloads = [self payloads:manifest directory:directory error:error]; if (!payloads) return nil;
@@ -729,7 +736,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
             if (![currentIDFV isKindOfClass:NSString.class]) { if (error && !*error) Fail(error, @"Cannot read the current application IDFV."); return nil; }
             BOOL sameIdentity = Same(UUIDValue(currentIDFV), canonical);
             BOOL finalizing = sameIdentity && pending.count && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]];
-            if (sameIdentity && !finalizing) { Fail(error, @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
+            if (sameIdentity && !finalizing) { FailCode(error,@"active_environment", @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
             NSMutableDictionary *roots = [NSMutableDictionary new]; NSMutableSet *ids = [NSMutableSet new];
             for (NSString *prefix in manifest[@"roots"]) {
                 NSString *identifier = manifest[@"roots"][prefix][@"containerID"];

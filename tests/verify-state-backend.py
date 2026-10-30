@@ -183,12 +183,28 @@ static NSUInteger externalReads;
 static void ExternalScope(CFStringRef domain,CFStringRef user,CFStringRef host){Check(CFEqual(domain,CFSTR(SHADOW_PREFS_PLIST))&&CFEqual(user,CFSTR("mobile"))&&CFEqual(host,kCFPreferencesAnyHost),@"external identity must read Shadow absolute suite in mobile context");}
 static Boolean FixtureExternalSync(CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);return !externalSyncFailure;}
 static CFPropertyListRef FixtureExternalCopy(CFStringRef key,CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);Check(CFEqual(key,CFSTR("local.fixture.app")),@"unexpected identity bundle");externalReads++;return externalSettings?CFBridgingRetain(externalSettings):NULL;}
+@interface SavedOnlyFixture : NSObject
+@property(nonatomic)NSUInteger deletes,verifications;
+@end
+@implementation SavedOnlyFixture
+- (BOOL)deleteBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"delete mapping changed identity");self.deletes++;return YES;}
+- (BOOL)recheckBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"verify mapping changed identity");self.verifications++;return YES;}
+@end
 static void ExternalTests(void){
     NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555";externalSettings=nil;externalReads=0;Check([StateReadExternalIdentity(bundle)isEqual:@""],@"missing identity is explicit empty wire value");
     externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid]&&externalReads==2,@"token-independent identity query");
     for(id malformed in @[@"bad",@{@"Fingerprint_Data":@"bad"},@{@"Fingerprint_Data":@{@"VendorIdentifier":@"bad"}},@{@"Fingerprint_Data":@{@"VendorIdentifier":@1}}]){externalSettings=malformed;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed identity accepted as absent");}
     externalSyncFailure=YES;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"failed preference sync reported absent identity");externalSyncFailure=NO;
-    NSDictionary *capabilities=StateExternalCommand(bundle,@"capabilities",@{});Check([capabilities[@"ok"]boolValue],@"capabilities needs installed app or storage");Check(Reject(^{StateExternalCommand(bundle,@"capabilities",@{@"unexpected":@1});}),@"unknown external key accepted");
+    NSDictionary *capabilities=StateExternalCommand(bundle,@"capabilities",@{});Check([capabilities[@"ok"]boolValue],@"capabilities needs installed app or storage");
+    NSData *capData=[[NSData alloc]initWithBase64EncodedString:capabilities[@"result"] options:0];NSDictionary *caps=[NSPropertyListSerialization propertyListWithData:capData options:NSPropertyListImmutable format:NULL error:NULL];for(NSString *operation in @[@"backup",@"restore",@"externalDelete",@"externalVerify"])Check([caps[@"operations"]containsObject:operation],@"missing public operation capability");
+    for(NSString *code in @[@"busy",@"invalid_request",@"restore_pending",@"active_environment",@"snapshot_unavailable",@"invalid_archive",@"permission_denied",@"operation_failed",@"outcome_unknown"]){NSError *source=[NSError errorWithDomain:@"fixture.source" code:41 userInfo:@{NSLocalizedDescriptionKey:@"arbitrary localized message",@"errorCode":code,NSUnderlyingErrorKey:[NSError errorWithDomain:NSPOSIXErrorDomain code:13 userInfo:nil]}];NSDictionary *terminal=StateErrorTerminal(source);Check([terminal[@"errorCode"]isEqual:code]&&[terminal[@"sourceDomain"]isEqual:@"fixture.source"]&&[terminal[@"sourceCode"]integerValue]==41&&[terminal[@"posixCode"]integerValue]==13,@"typed terminal classification changed");}
+    Check(StateExternalAction(@"externalDelete")&&StateExternalAction(@"externalVerify"),@"store-only external operations unavailable");
+Check(Reject(^{StateExternalCommand(bundle,@"capabilities",@{@"unexpected":@1});}),@"unknown external key accepted");
+    SavedOnlyFixture *saved=[SavedOnlyFixture new];NSError *savedError=nil;
+    Check([StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalDelete",@{@"idfv":uuid},&savedError)[@"deleted"]boolValue]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalVerify",@{@"idfv":uuid},&savedError)[@"verified"]boolValue]&&saved.deletes==1&&saved.verifications==1,@"saved operations require live device backend");
+    stateInitiatingParent=getppid();NSMutableArray *frames=[NSMutableArray new];SHDWStateProgress progress=StateProgressHandler(^(NSDictionary *frame){[frames addObject:frame];});
+    progress(@{@"phase":@"verify",@"stage":@"data",@"bytes":@1,@"secret":@"hidden"});progress(@{@"phase":@"verify",@"stage":@"data",@"bytes":@2});progress(@{@"phase":@"verify",@"stage":@"state",@"entries":@3});
+    Check(frames.count==2&&[frames[0][@"event"]isEqual:@"progress"]&&[frames[0][@"progress"][@"bytes"]isEqual:@1]&&frames[0][@"progress"][@"secret"]==nil&&[frames[1][@"progress"][@"stage"]isEqual:@"state"],@"shared verify progress framing/throttling/filtering changed");
     puts("external helper: same mobile suite, token-independent identity, missing/malformed distinction and capabilities passed");
 }
 static void KeychainTests(void){

@@ -12,11 +12,11 @@
 
 static const NSUInteger MaximumFrame = 8 * 1024 * 1024;
 static NSError *UnknownError(NSError *error) {
-    NSMutableDictionary *info = [error.userInfo mutableCopy]; info[@"outcomeUnknown"] = @YES;
+    NSMutableDictionary *info = [error.userInfo mutableCopy]; info[@"outcomeUnknown"] = @YES; info[@"errorCode"]=@"outcome_unknown";
     return [NSError errorWithDomain:error.domain code:error.code userInfo:info];
 }
 static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
-    return [NSError errorWithDomain:@"me.jjolano.shadow.backup" code:code userInfo:@{NSLocalizedDescriptionKey:message, @"stateMayBePartial":@(partial)}];
+    return [NSError errorWithDomain:@"me.jjolano.shadow.backup" code:code userInfo:@{NSLocalizedDescriptionKey:message, @"stateMayBePartial":@(partial),@"errorCode":code==1?@"shadow_unavailable":code==2?@"invalid_request":@"operation_failed"}];
 }
 @interface SHDWAppStateClient ()
 @property(nonatomic, copy) NSString *helperPath;
@@ -37,8 +37,8 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
 }
 - (id)invokeAction:(NSString *)action bundleIdentifier:(NSString *)bundleIdentifier request:(NSDictionary *)request progress:(SHDWAppStateClientProgress)progress error:(NSError **)error {
     if (error) *error = nil;
-    BOOL external = [@[@"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState"] containsObject:action];
-    NSArray *allowed = @[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck", @"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState"];
+    BOOL external = [@[@"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState", @"externalDelete", @"externalVerify"] containsObject:action];
+    NSArray *allowed = @[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck", @"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState", @"externalDelete", @"externalVerify"];
     if (![allowed containsObject:action] || ![bundleIdentifier isKindOfClass:NSString.class] || !bundleIdentifier.length ||
         [bundleIdentifier rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"] invertedSet]].location != NSNotFound ||
         ![request isKindOfClass:NSDictionary.class] || !isfinite(self.timeout) || self.timeout <= 0) {
@@ -136,8 +136,9 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
     if (invalid || !exited) { kill(-child, SIGKILL); kill(child, SIGKILL); }
     if (!exited) while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
     BOOL partial = [action isEqual:@"restore"];
+    BOOL mutating=[@[@"backup",@"restore",@"edit",@"delete",@"externalEdit",@"externalDelete",@"importState"] containsObject:action];
     if (invalid || buffer.length || !terminal) {
-        if (error) { *error = BackupError(4, @"The backup operation was interrupted. Check its status before trying again.", partial); if (useInput) *error = UnknownError(*error); }
+        if (error) { *error = BackupError(4, @"The backup operation was interrupted. Check its status before trying again.", partial); if (mutating) *error = UnknownError(*error); }
         return nil;
     }
     if (![terminal[@"ok"] boolValue] || !WIFEXITED(status) || WEXITSTATUS(status)) {
@@ -148,9 +149,17 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
             NSMutableDictionary *info = [failure.userInfo mutableCopy];
             NSDictionary *details = [terminal[@"details"] isKindOfClass:NSDictionary.class] ? terminal[@"details"] : @{};
             info[@"helperDetails"] = details;
+            info[@"partial"]=@([terminal[@"partial"]boolValue]);
+            for(NSString *key in @[@"errorCode",@"sourceDomain"])if([terminal[key] isKindOfClass:NSString.class])info[key]=terminal[key];
+            for(NSString *key in @[@"sourceCode",@"posixCode"])if([terminal[key] isKindOfClass:NSNumber.class])info[key]=terminal[key];
+            if([info[@"sourceDomain"] isKindOfClass:NSString.class]&&[info[@"sourceCode"] isKindOfClass:NSNumber.class]){
+                NSMutableDictionary *sourceInfo=[@{NSLocalizedDescriptionKey:message} mutableCopy];
+                if(info[@"posixCode"])sourceInfo[NSUnderlyingErrorKey]=[NSError errorWithDomain:NSPOSIXErrorDomain code:[info[@"posixCode"]integerValue] userInfo:nil];
+                info[NSUnderlyingErrorKey]=[NSError errorWithDomain:info[@"sourceDomain"] code:[info[@"sourceCode"]integerValue] userInfo:sourceInfo];
+            }
             info[NSLocalizedDescriptionKey] = message;
             *error = [NSError errorWithDomain:failure.domain code:failure.code userInfo:info];
-            if ([terminal[@"outcomeUnknown"] boolValue] || (useInput && ([terminal[@"ok"] boolValue] || !WIFEXITED(status)))) *error = UnknownError(*error);
+            if ([terminal[@"outcomeUnknown"] boolValue] || (mutating && ([terminal[@"ok"] boolValue] || !WIFEXITED(status)))) *error = UnknownError(*error);
         }
         return nil;
     }
@@ -158,7 +167,7 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
     NSData *data = [payload isKindOfClass:NSString.class] ? [[NSData alloc] initWithBase64EncodedString:payload options:0] : nil;
     id result = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:NULL] : nil;
     if (![result isKindOfClass:NSDictionary.class] && ![result isKindOfClass:NSArray.class]) {
-        if (error) { *error = BackupError(6, @"The backup helper returned an invalid result.", partial); if (useInput) *error = UnknownError(*error); }
+        if (error) { *error = BackupError(6, @"The backup helper returned an invalid result.", partial); if (mutating) *error = UnknownError(*error); }
         return nil;
     }
     return result;
