@@ -26,6 +26,12 @@ git -C "$WORK/hookkit" checkout --quiet --detach "$HOOKKIT" 2>/dev/null || {
     git -C "$WORK/hookkit" checkout --quiet --detach FETCH_HEAD
 }
 
+# Validate exact package pins before allowing a checkout to replace Theos files.
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
+python3 "$ROOT/scripts/check-hookkit-version.py" \
+    "$ROOT/packaging/controls/control.$LANE.in" \
+    --source-control "$WORK/hookkit/packaging/layout/DEBIAN/control"
+
 # Build and stage just this lane's framework into $THEOS at the location
 # build-support/hookkit.mk resolves. install-theos.sh owns the lane -> path layout.
 bash "$WORK/hookkit/tools/release/install-theos.sh" "$LANE"

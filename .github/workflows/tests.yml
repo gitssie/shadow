@@ -77,6 +77,9 @@ jobs:
       - name: rebind-repair check
         run: make -C tests verify-rebind-repair
 
+      - name: HookKit exact-version regression
+        run: make -C tests verify-hookkit-version
+
       - name: Debian numeric ownership regression
         run: make -C tests verify-deb-ownership
 

@@ -21,6 +21,7 @@
 - Lanes: `rootful-legacy|rootful-modern|rootless|roothide` (`rootful` = both rootful; `all` = everything — avoid).
 - `./build.sh quick` = compile-only check (framework + dylibs, rootful-modern); no package, no compat checks.
 - Requires `$THEOS` and HookKit in the lane-resolved location defined by `build-support/hookkit.mk` (CI provisioning: `.github/scripts/install-hookkit-theos.sh <lane>`).
+- For rootless, preserve the exact HookKit dependency in `packaging/controls/control.rootless.in`. Install the matching maintained HookKit checkout into the same `$THEOS`; `scripts/check-hookkit-version.py` rejects stale framework metadata before compilation. Check source/revision before replacing an installed compatibility build with the generic CI pin.
 
 ## Test
 - Public host checks: `make -C tests test`; maintainer-script checks separately: `sh tests/MaintainerScriptTests.sh`. Prerequisites, individual checks, and CI coverage are in `tests/README.md`.

@@ -46,6 +46,17 @@ with tempfile.TemporaryDirectory(prefix="shadow-hookkit-version-") as temporary:
     for lane in ("rootful-legacy", "rootful-modern", "roothide"):
         control.write_bytes((root / "packaging/controls" / ("control." + lane + ".in")).read_bytes())
         run(True, "not exact")
+    control.write_text("Depends: me.jjolano.fmwk.hookkit (= 3.0.6-1)\n")
+    source = base / "source-control"
+    for version, success in (("3.0.4", False), ("3.0.6-1", True), ("3.0.6-2", False), (None, False)):
+        source.write_text("Package: me.jjolano.fmwk.hookkit\n" + ("Version: " + version + "\n" if version else ""))
+        result = subprocess.run([sys.executable, str(script), str(control), "--source-control", str(source)], capture_output=True, text=True)
+        assert (result.returncode == 0) == success, result.stdout + result.stderr
+        if not success:
+            assert "refusing to overwrite" in result.stderr
+    control.write_text("Depends: me.jjolano.fmwk.hookkit (>= 3.0.4)\n")
+    result = subprocess.run([sys.executable, str(script), str(control), "--source-control", str(base / "absent")], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
     for requirement in ("=", "= invalid", "= 3.0.6) , me.jjolano.fmwk.hookkit (= 3.0.6"):
         control.write_text("Depends: me.jjolano.fmwk.hookkit (" + requirement + ")\n")
         run(False)
@@ -54,3 +65,6 @@ build = (root / "build.sh").read_text()
 assert build.index('python3 "$ROOT/scripts/check-hookkit-version.py"') > build.index('local hookkit_theos=')
 assert build.index('python3 "$ROOT/scripts/check-hookkit-version.py"') < build.index('rm -rf "$LIBRARY_PATH"')
 print("HookKit version guard: exact Debian pin, stale/missing/malformed framework metadata, binary/XML plist and unchanged range lanes passed")
+
+installer = (root / ".github/scripts/install-hookkit-theos.sh").read_text()
+assert installer.index('--source-control') < installer.index('bash "$WORK/hookkit/tools/release/install-theos.sh"')

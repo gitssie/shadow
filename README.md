@@ -45,6 +45,13 @@ Requires [Theos](https://theos.dev). One lane at a time:
 ./build.sh rootful-modern
 ```
 
+Rootless builds require the exact HookKit dependency declared in
+`packaging/controls/control.rootless.in`. From the matching maintained HookKit
+checkout, run `bash tools/release/install-theos.sh rootless` with the same
+`THEOS` used for Shadow and TrollVNC. Shadow checks the installed framework
+version before compiling; the later ABI check remains a separate check.
+
+
 Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See `build-support/lanes.sh` for the matrix. Tests: `make -C tests test` ([details](tests/README.md)).
 
 ## Legal
