@@ -92,6 +92,7 @@ HARNESS = r'''
 #import <Foundation/Foundation.h>
 #import <Shadow/Fingerprint.h>
 #import "Services/BackupService.h"
+#import "SHDWAppStateClient.h"
 #import "Services/CleanupService.h"
 #import "Services/OperationCoordinator.h"
 #import "Services/BackupPolicy.h"
@@ -113,7 +114,7 @@ NSString *JBPath(NSString *value) { return value; }
 @end
 @interface SHDWBackupService (FixtureSeam)
 - (NSString *)helperPath;
-- (BOOL)validateHelperAtPath:(NSString *)path error:(NSError **)error;
+- (SHDWAppStateClient *)appStateClient;
 - (NSTimeInterval)operationTimeout;
 @end
 @interface TestBackup : SHDWBackupService
@@ -122,9 +123,15 @@ NSString *JBPath(NSString *value) { return value; }
 @property(nonatomic) NSTimeInterval timeout;
 @property(nonatomic) BOOL rejectHelper;
 @end
+@interface FixtureClient : SHDWAppStateClient
+@property(nonatomic, weak) TestBackup *owner;
+@end
+@implementation FixtureClient
+- (BOOL)validateHelperAtPath:(NSString *)path error:(NSError **)error { (void)path;self.owner.validations++;if(self.owner.rejectHelper){if(error)*error=[NSError errorWithDomain:@"fixture" code:9 userInfo:@{NSLocalizedDescriptionKey:@"untrusted fixture"}];return NO;}return YES; }
+@end
 @implementation TestBackup
 - (NSString *)helperPath { return [fixtures stringByAppendingPathComponent:[@"fixture-" stringByAppendingString:self.fixture]]; }
-- (BOOL)validateHelperAtPath:(NSString *)path error:(NSError **)error { (void)path;self.validations++;if(self.rejectHelper){if(error)*error=[NSError errorWithDomain:@"fixture" code:9 userInfo:@{NSLocalizedDescriptionKey:@"untrusted fixture"}];return NO;}return YES; }
+- (SHDWAppStateClient *)appStateClient { FixtureClient *client=[[FixtureClient alloc]initWithHelperPath:[self helperPath]];client.owner=self;client.timeout=[self operationTimeout];return client; }
 - (NSTimeInterval)operationTimeout { return self.timeout ?: 5; }
 @end
 @interface SHDWCleanupService (FixtureSeam)
@@ -241,8 +248,9 @@ def main():
         harness = temp / "main.m"
         harness.write_text(HARNESS)
         sources = [ROOT / "src/Shadow.app/Services" / (name + ".m") for name in ("BackupService", "OperationCoordinator", "CleanupService", "OwnershipDiagnostics")]
+        sources.append(ROOT / "sdk/AppState/SHDWAppStateClient.m")
         binary = temp / "check"
-        command = ["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-incomplete-implementation", "-framework", "Foundation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1", "-I" + str(ROOT / "src/Shadow.framework/Headers"), "-I" + str(ROOT / "src/Shadow.app"), str(harness), *map(str, sources), "-o", str(binary)]
+        command = ["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-incomplete-implementation", "-framework", "Foundation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1", "-I" + str(ROOT / "src/Shadow.framework/Headers"), "-I" + str(ROOT / "src/Shadow.app"), "-I" + str(ROOT / "sdk/AppState"), str(harness), *map(str, sources), "-o", str(binary)]
         subprocess.run(command, check=True)
         environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:abort_on_error=1", UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1")
         subprocess.run([str(binary), str(temp)], env=environment, check=True, timeout=60)
