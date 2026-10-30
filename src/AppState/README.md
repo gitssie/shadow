@@ -182,3 +182,10 @@ also builds these libraries; packaged builds link them into the cleaner helper.
 Host and compile/link checks do not verify live iOS permissions, Keychain
 entitlement behavior, file protection, UIKit rendering, or app compatibility after
 restore. Those require device verification before release.
+
+Restoration fully verifies extracted files against `data.tar.zst` before replaying
+preferences from `state.tar.zst`. It then verifies logical preferences and Keychain
+records, synchronizes all writes and commits the fingerprint. The data archive
+is unchanged. Verification-only identity finalization still requires the original
+raw-file baseline: if preference replay changed that baseline, finalization fails
+and retains pending recovery state without replaying or claiming data verification.

@@ -23,6 +23,7 @@ typedef NS_ENUM(NSInteger, SHDWIPSwitchError) {
 + (BOOL)hasIPChangeFrom:(SHDWIPSnapshot *)before to:(SHDWIPSnapshot *)after;
 @property (nonatomic, readonly, getter=isRunning) BOOL running;
 - (void)startWithURL:(NSURL *)URL
+           baseline:(SHDWIPSnapshot * _Nullable)baseline
            progress:(void (^ _Nullable)(SHDWIPSwitchPhase phase, SHDWIPSnapshot * _Nullable snapshot))progress
          completion:(void (^)(SHDWIPSnapshot * _Nullable before, SHDWIPSnapshot * _Nullable current, NSError * _Nullable error))completion;
 - (void)queryWithProgress:(void (^ _Nullable)(SHDWIPSwitchPhase phase, SHDWIPSnapshot * _Nullable snapshot))progress

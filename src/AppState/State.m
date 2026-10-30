@@ -605,7 +605,7 @@ static void CollectAbandonedSnapshots(int parent) {
         return YES;
     } @finally { [operationDirectory releaseLock]; }
 }
-- (BOOL)verifyRestoredPayloads:(NSDictionary *)payloads manifest:(NSDictionary *)manifest context:(NSDictionary *)context directory:(SHDWStateDirectory *)directory roots:(NSDictionary *)roots identifiers:(NSSet *)ids error:(NSError **)error {
+- (BOOL)verifyRestoredPayloads:(NSDictionary *)payloads context:(NSDictionary *)context directory:(SHDWStateDirectory *)directory identifiers:(NSSet *)ids error:(NSError **)error {
     NSDictionary *target = context[@"target"];
     [self event:@"restore" stage:@"recheck"];
     NSArray *actualRecords = [self.backend captureKeychainForTarget:target error:error];
@@ -613,7 +613,7 @@ static void CollectAbandonedSnapshots(int parent) {
     if (!actualRecords || !preferences || !Same(LogicalPreferences(payloads[@"preferences"]), LogicalPreferences(preferences)) || ![self records:actualRecords equal:payloads[@"keychain"]]) {
         if (error && !*error) Fail(error, @"Restored data or credentials did not pass verification."); return NO;
     }
-    if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:[self archiveProgressForPhase:@"restore"] error:error]) return NO;
+    if (![self guard:context directory:directory refresh:YES error:error]) return NO;
     for (NSString *identifier in target[@"containers"]) if (![ids containsObject:identifier]) {
         NSString *path = target[@"containers"][identifier]; __block NSError *enumerationError = nil;
         NSDirectoryEnumerator *entries = [NSFileManager.defaultManager enumeratorAtURL:[NSURL fileURLWithPath:path isDirectory:YES] includingPropertiesForKeys:nil options:0 errorHandler:^BOOL(NSURL *url, NSError *failure) { (void)url; enumerationError = failure; return NO; }];
@@ -669,7 +669,8 @@ static void CollectAbandonedSnapshots(int parent) {
             if (finalizing) {
                 // This path never clears or restores application state. It only
                 // verifies the already committed state before releasing pending.
-                if (![self.backend flushPreferencesForTarget:target error:error] || ![self verifyRestoredPayloads:payloads manifest:manifest context:context directory:directory roots:roots identifiers:ids error:error] ||
+                if (![self.backend flushPreferencesForTarget:target error:error] ||
+                    ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:[self archiveProgressForPhase:@"restore"] error:error] || ![self verifyRestoredPayloads:payloads context:context directory:directory identifiers:ids error:error] ||
                     ![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:[self archiveProgressForPhase:@"restore"] error:error] ||
                     ![self verifyRestoredFingerprint:payloads[@"fingerprint"] context:context error:error]) return nil;
             } else {
@@ -695,9 +696,10 @@ static void CollectAbandonedSnapshots(int parent) {
                 }
                 NSString *archive = [[directory.path stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[canonical stringByAppendingPathComponent:@"data.tar.zst"]];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive restorePath:archive info:manifest[@"archiveInfo"] roots:roots progress:progress error:error]) return nil;
+                if (![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:progress error:error]) return nil;
                 [self event:@"restore" stage:@"preferences"];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restorePreferences:payloads[@"preferences"] target:target error:error] || ![self.backend flushPreferencesForTarget:target error:error]) return nil;
-                if (![self verifyRestoredPayloads:payloads manifest:manifest context:context directory:directory roots:roots identifiers:ids error:error]) return nil;
+                if (![self verifyRestoredPayloads:payloads context:context directory:directory identifiers:ids error:error]) return nil;
                 // Preference replay can create files after extraction; use one barrier
                 // after all data writes, including directories created implicitly.
                 // Persist all current destinations before committing the identity.
