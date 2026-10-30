@@ -56,6 +56,9 @@ stage_deps() { # rootful-legacy|rootful-modern|rootless|roothide
         return 1
     }
 
+    python3 "$ROOT/scripts/check-hookkit-version.py" \
+        "$ROOT/packaging/controls/control.$profile.in" "$hookkit_theos"
+
     rm -rf "$LIBRARY_PATH" "$INCLUDE_PATH"
     mkdir -p "$LIBRARY_PATH" "$INCLUDE_PATH"
     cp -R "$altlist" "$LIBRARY_PATH/AltList.framework"

@@ -205,3 +205,9 @@ verify-deb-ownership:
 
 .PHONY: verify-deb-ownership
 test: verify-deb-ownership
+
+verify-hookkit-version:
+	python3 verify-hookkit-version.py
+
+.PHONY: verify-hookkit-version
+test: verify-hookkit-version
