@@ -22,8 +22,17 @@ External adapters first request `capabilities` and require API version 1, format
 | restore | idfv, saveCurrent | restoration result |
 | externalDelete | idfv | deleted |
 | externalVerify | idfv | verified |
+| externalOwnership | idfv | idfv, owner |
+| externalClaim | idfv | idfv, owner=rv; inactive only |
+| externalRelease | idfv | idfv, owner=phone |
 | exportState | idfv, part (manifest/state), stateSHA for state | data (NSData), manifestSHA, stateSHA, dataSHA |
 | importState | idfv, manifest/state (NSData), expectedManifestSHA | imported |
+
+Saved-state export/import/edit/delete/verify accept optional `requester` (`phone`
+or `rv`, default phone). It must match the manifest owner. This cooperative
+single-RV context carries no credentials or generation. Backup/restore always
+operate on behalf of the phone. Ownership queries and catalog are unrestricted;
+JSON adapters supply reserved `owner_id: null` (omitted in plist transport).
 
 The current_idfv empty string represents absent identity in the property-list
 transport. JSON adapters translate it to null. Malformed identity is an error.
@@ -57,7 +66,7 @@ for diagnostics. `stateMayBePartial` and `outcomeUnknown` remain independent:
 a known failed restore can leave partial live state without losing its outcome.
 Clients must not parse localized messages to identify errors. Examples include
 `busy`, `invalid_request`, `shadow_unavailable`, `restore_pending`,
-`active_environment`, `snapshot_unavailable`, `invalid_archive`,
+`active_environment`, `ownership_conflict`, `snapshot_unavailable`, `invalid_archive`,
 `permission_denied`, `operation_failed` and `outcome_unknown`.
 
 Backup and restore execute the same existing helper actions used by Manager.

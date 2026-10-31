@@ -180,7 +180,7 @@ static NSArray *StateConciseCatalog(NSArray *catalog) {
     NSMutableArray *result = [NSMutableArray new];
     for (NSDictionary *manifest in catalog) {
         NSMutableDictionary *entry = [NSMutableDictionary new];
-        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"restorePending", @"recoverySource", @"finalizationPending", @"unavailable", @"error"]) if (manifest[key]) entry[key] = manifest[key];
+        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"owner", @"restorePending", @"recoverySource", @"finalizationPending", @"unavailable", @"error"]) if (manifest[key]) entry[key] = manifest[key];
         if ([manifest[@"unavailable"] boolValue]) { entry[@"size"] = @0; [result addObject:entry]; continue; }
         NSNumber *dataSize = manifest[@"archiveInfo"][@"archiveSize"], *stateSize = manifest[@"stateArchiveInfo"][@"archiveSize"] ?: @0;
         Require([dataSize isKindOfClass:NSNumber.class] && [stateSize isKindOfClass:NSNumber.class] && [dataSize isEqual:@(dataSize.unsignedLongLongValue)] && [stateSize isEqual:@(stateSize.unsignedLongLongValue)] && dataSize.unsignedLongLongValue <= UINT64_MAX - stateSize.unsignedLongLongValue, @"Invalid backup archive size");
@@ -222,34 +222,41 @@ static NSDictionary *StateErrorTerminal(NSError *error) {
     if([value[@"outcomeUnknown"]boolValue])value[@"errorCode"]=@"outcome_unknown";
     return value;
 }
-static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify"] containsObject:action]; }
+static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"] containsObject:action]; }
 static NSDictionary *StateSavedAction(SHDWAppStateStore *store,NSString *bundle,NSString *action,NSDictionary *request,NSError **error) {
+    if([action isEqual:@"externalClaim"])return [store claimBundle:bundle idfv:request[@"idfv"] error:error];
+    if([action isEqual:@"externalRelease"])return [store releaseBundle:bundle idfv:request[@"idfv"] error:error];
+    if([action isEqual:@"externalOwnership"])return [store ownershipBundle:bundle idfv:request[@"idfv"] error:error];
     if([action isEqual:@"externalDelete"])return [store deleteBundle:bundle idfv:request[@"idfv"] error:error]?@{@"deleted":@YES}:nil;
     return [store recheckBundle:bundle idfv:request[@"idfv"] error:error]?@{@"verified":@YES}:nil;
 }
 static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action, NSDictionary *request) {
-    NSArray *allowed=[action isEqual:@"exportState"]?@[@"idfv",@"part",@"stateSHA"]:[action isEqual:@"importState"]?@[@"idfv",@"manifest",@"state",@"expectedManifestSHA"]:[action isEqual:@"externalEdit"]?@[@"idfv",@"metadata"]:[@[@"externalDelete",@"externalVerify"] containsObject:action]?@[@"idfv"]:@[];
+    NSArray *allowed=[action isEqual:@"exportState"]?@[@"idfv",@"part",@"stateSHA"]:[action isEqual:@"importState"]?@[@"idfv",@"manifest",@"state",@"expectedManifestSHA"]:[action isEqual:@"externalEdit"]?@[@"idfv",@"metadata"]:[@[@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"] containsObject:action]?@[@"idfv"]:@[];
+    if([@[@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify"]containsObject:action])allowed=[allowed arrayByAddingObject:@"requester"];
+    if(request[@"requester"])Require([@[@"phone",@"rv"]containsObject:request[@"requester"]],@"Invalid backup requester");
     stateFailureCode=@"invalid_request";for(id key in request)Require([allowed containsObject:key],@"Unknown external application state option");
     NSError *error=nil;id result=nil;
-    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"restore",@"externalDelete",@"externalVerify"]};
+    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
     else {
         stateFailureCode=@"permission_denied";Require(geteuid()==0,@"Cannot enter backup storage context");
-        stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,![@[@"externalCatalog",@"exportState",@"externalVerify"] containsObject:action]);
+        stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,![@[@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action]);
         @try {
             NativeStateBackend *backend=[NativeStateBackend new];
-            BOOL reading=[@[@"externalCatalog",@"exportState",@"externalVerify"] containsObject:action];
+            BOOL reading=[@[@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action];
             struct stat storageInfo;BOOL missing=reading&&lstat(StateStorage.fileSystemRepresentation,&storageInfo)&&errno==ENOENT;
             SHDWAppStateStore *store=missing?nil:[[SHDWAppStateStore alloc]initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend readOnly:reading error:&error];
             if(missing&&[action isEqual:@"externalCatalog"])result=@{@"bundle_id":identifier,@"current_idfv":StateReadExternalIdentity(identifier),@"backups":@[]};
             if(missing&&!result)error=[NSError errorWithDomain:SHDWAppStateErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:@"Snapshot is unavailable.",@"errorCode":@"snapshot_unavailable"}];
             if(store){
+                store.requester=request[@"requester"]?:@"phone";
+                store.currentIdentityProvider=^NSString *(NSString *bundle){return StateReadExternalIdentity(bundle);};
                 if([action isEqual:@"externalVerify"])store.progressHandler=StateProgressHandler(^(NSDictionary *frame){StateOutput(frame);});
                 if([action isEqual:@"externalCatalog"]){
                     NSString *current=StateReadExternalIdentity(identifier);
                     NSArray *catalog=[store catalogBundle:identifier error:&error];if(catalog)result=@{@"bundle_id":identifier,@"current_idfv":current,@"backups":StateConciseCatalog(catalog)};
                 }else if([action isEqual:@"exportState"])result=[store exportBundle:identifier idfv:request[@"idfv"] part:request[@"part"] expectedStateSHA:request[@"stateSHA"] error:&error];
                 else if([action isEqual:@"importState"]){if([store importBundle:identifier idfv:request[@"idfv"] manifest:request[@"manifest"] state:request[@"state"] expectedManifestSHA:request[@"expectedManifestSHA"] error:&error])result=@{@"imported":@YES};}
-                else if([@[@"externalDelete",@"externalVerify"]containsObject:action])result=StateSavedAction(store,identifier,action,request,&error);
+                else if([@[@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]containsObject:action])result=StateSavedAction(store,identifier,action,request,&error);
                 else if([store editBundle:identifier idfv:request[@"idfv"] metadata:request[@"metadata"] error:&error])result=@{@"edited":@YES};
             }
         } @finally{close(lock);}

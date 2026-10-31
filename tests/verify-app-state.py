@@ -212,6 +212,44 @@ static void CheckStorageOwner(NSString *root) {
         Check(S_ISDIR(info.st_mode) || (S_ISREG(info.st_mode) && info.st_nlink == 1), @"unsafe backup node");
     }
 }
+static void CheckBusinessOwnership(SHDWAppStateStore *store, FakeBackend *backend, NSString *root) {
+    NSError *error=nil;NSDictionary *oldFingerprint=backend.fingerprint;backend.fingerprint=FP(A,@"active-owner",YES);
+    NSString *path=SnapshotPath(root,A,@"manifest.plist");NSData *original=[NSData dataWithContentsOfFile:path];
+    NSString *dataSHA=Digest(SnapshotPath(root,A,@"data.tar.zst")),*stateSHA=Digest(SnapshotPath(root,A,@"state.tar.zst"));
+    Check([[store ownershipBundle:BID idfv:A error:&error][@"owner"] isEqual:@"phone"],@"new backup must belong to phone");
+    Check(![store claimBundle:BID idfv:A error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"active_environment"],@"active ownership claim accepted");
+    NSMutableDictionary *legacy=[[NSDictionary dictionaryWithContentsOfFile:path]mutableCopy];[legacy removeObjectForKey:@"owner"];
+    Check([[NSPropertyListSerialization dataWithPropertyList:legacy format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL]writeToFile:path options:0 error:NULL],@"legacy owner fixture");
+    NSData *legacyBytes=[NSData dataWithContentsOfFile:path];
+    Check([[store ownershipBundle:BID idfv:A error:&error][@"owner"]isEqual:@"phone"]&&[legacyBytes isEqual:[NSData dataWithContentsOfFile:path]],@"legacy read rewrote metadata");
+    backend.fingerprint=FP(B,@"ownership-other",NO);
+    Check([[store claimBundle:BID idfv:A error:&error][@"owner"]isEqual:@"rv"],@"inactive claim failed");
+    NSData *claimed=[NSData dataWithContentsOfFile:path];
+    Check([store claimBundle:BID idfv:A error:&error]&&[claimed isEqual:[NSData dataWithContentsOfFile:path]],@"single-RV claim was not idempotent");
+    Check(![store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"phone exported RV state");
+    Check(![store recheckBundle:BID idfv:A error:&error],@"phone verified RV state");
+    Check(![store editBundle:BID idfv:A metadata:@{@"title":@"blocked"} error:&error],@"phone edited RV backup");
+    Check(![store deleteBundle:BID idfv:A error:&error],@"phone deleted RV backup");
+    Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"phone restored RV backup");
+    backend.fingerprint=FP(A,@"active-owner",YES);NSUInteger before=backend.calls.count;
+    Check(![store backupBundle:BID metadata:nil error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"phone overwrote RV backup");
+    Check(![[backend.calls subarrayWithRange:NSMakeRange(before,backend.calls.count-before)]containsObject:@"stop"],@"blocked backup stopped active app");
+    backend.fingerprint=FP(B,@"ownership-other",NO);store.requester=@"rv";
+    NSDictionary *exported=[store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error];Check(exported!=nil,@"RV cannot export its manifest");
+    NSDictionary *state=[store exportBundle:BID idfv:A part:@"state" expectedStateSHA:exported[@"stateSHA"] error:&error];Check(state!=nil,@"RV cannot export its state");
+    Check([store recheckBundle:BID idfv:A error:&error],@"RV cannot verify its state");
+    Check([store importBundle:BID idfv:A manifest:exported[@"data"] state:state[@"data"] expectedManifestSHA:exported[@"manifestSHA"] error:&error],@"RV cannot import its state");
+    Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"RV bypassed return-before-restore rule");
+    NSMutableDictionary *forged=[[NSPropertyListSerialization propertyListWithData:exported[@"data"] options:NSPropertyListMutableContainers format:NULL error:NULL]mutableCopy];forged[@"owner"]=@"phone";
+    NSData *forgedBytes=[NSPropertyListSerialization dataWithPropertyList:forged format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+    Check(![store importBundle:BID idfv:A manifest:forgedBytes state:state[@"data"] expectedManifestSHA:exported[@"manifestSHA"] error:&error],@"upload changed owner");
+    Check([[store releaseBundle:BID idfv:A error:&error][@"owner"]isEqual:@"phone"],@"release failed");
+    Check(![store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error],@"RV accessed returned state");
+    store.requester=nil;Check([store recheckBundle:BID idfv:A error:&error],@"phone access not restored");
+    Check([original writeToFile:path options:0 error:NULL],@"restore ownership fixture metadata");backend.fingerprint=oldFingerprint;
+    Check([dataSHA isEqual:Digest(SnapshotPath(root,A,@"data.tar.zst"))]&&[stateSHA isEqual:Digest(SnapshotPath(root,A,@"state.tar.zst"))],@"ownership changed archive bytes");
+    puts("app-state business ownership: active rejection, legacy defaults, RV exclusion, requester access, import protection and release passed");
+}
 static void RejectBeforeRestore(SHDWAppStateStore *store, FakeBackend *backend, NSString *root, NSString *data, NSString *group, NSString *message) {
     NSDictionary *stored=StoreTree(root),*live=Tree(data),*groups=Tree(group),*fingerprint=backend.fingerprint;NSArray *keys=backend.keychain;NSDictionary *preferences=backend.preferences;NSError *error=nil;
     Reset(backend);Check(![store recheckBundle:BID idfv:A error:&error],message);Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error]&&backend.calls.count==0,message);
@@ -320,6 +358,7 @@ static void StateTests(NSString *base) {
     NSDictionary *safeManifestValue=[NSPropertyListSerialization propertyListWithData:safeManifest options:NSPropertyListImmutable format:NULL error:NULL];
     store.progressHandler=nil;
     NSString *firstState=SnapshotPath(root,A,@"state.tar.zst");NSData *safeState=[NSData dataWithContentsOfFile:firstState];
+    CheckBusinessOwnership(store,backend,root);
     Check([safeManifestValue[@"format"] isEqual:@"ShadowAppState2"]&&safeState.length>0,@"backup did not publish split archive format");
     Check([safeManifestValue[@"archiveInfo"][@"payloads"] count]==0&&[safeManifestValue[@"stateArchiveInfo"][@"sourceRoots"] count]==0,@"split archives mix container roots and state payloads");
     for(NSDictionary *entry in safeManifestValue[@"archiveInfo"][@"entries"])Check([entry[@"path"] hasPrefix:@"containers/"],@"application archive contains state payloads");
@@ -400,9 +439,11 @@ static void RecoveryAndCatalogTests(NSString *base) {
     for(NSString *call in backend.calls)Check(![call hasPrefix:@"restore-"],@"successful finalization replayed restoration");
     Check([hashA isEqual:Digest(SnapshotPath(root,A,@"data.tar.zst"))]&&[ContentTree(data) isEqual:savedData],@"finalization changed source archive or live files");
     backend.fingerprint=FP(B,@"second",NO);backend.additionalPreferenceRecords=nil;Check([store backupBundle:BID metadata:nil error:&error],@"capture healthy second snapshot");
-    NSString *healthyHash=Digest(SnapshotPath(root,B,@"data.tar.zst"));Put(SnapshotPath(root,A,@""),@"manifest.plist",Bytes(@"truncated manifest"));
+    NSData *deletionMetadata=Get(SnapshotPath(root,A,@""),@"manifest.plist");NSString *healthyHash=Digest(SnapshotPath(root,B,@"data.tar.zst"));Put(SnapshotPath(root,A,@""),@"manifest.plist",Bytes(@"truncated manifest"));
     catalog=[store catalogBundle:BID error:&error];Check(catalog.count==2,@"corrupt entry hid healthy backups");NSUInteger unavailable=0;for(NSDictionary *item in catalog)if([item[@"unavailable"] boolValue]){unavailable++;Check([item[@"idfv"] isEqual:A]&&[item[@"error"] length],@"corrupt entry lost identity or diagnostic");}Check(unavailable==1,@"corrupt backup not represented individually");
-    Check([store deleteBundle:BID idfv:A error:&error],@"corrupt manifest prevented safe snapshot deletion");Check([[store catalogBundle:BID error:&error] count]==1&&[healthyHash isEqual:Digest(SnapshotPath(root,B,@"data.tar.zst"))],@"corrupt deletion damaged healthy backup");
+    Check(![store deleteBundle:BID idfv:A error:&error],@"unreadable ownership permitted deletion");
+    Put(SnapshotPath(root,A,@""),@"manifest.plist",deletionMetadata);
+    Check([store deleteBundle:BID idfv:A error:&error],@"repaired ownership prevented safe snapshot deletion");Check([[store catalogBundle:BID error:&error] count]==1&&[healthyHash isEqual:Digest(SnapshotPath(root,B,@"data.tar.zst"))],@"corrupt deletion damaged healthy backup");
     NSString *healthyArchive=SnapshotPath(root,B,@"data.tar.zst");Check(!chflags(healthyArchive.fileSystemRepresentation,UF_IMMUTABLE),@"make interrupted deletion fixture");
     Check([store deleteBundle:BID idfv:B error:&error]&&[[store catalogBundle:BID error:&error] count]==0,@"failed physical cleanup left published broken backup");
     NSString *appRoot=[root stringByAppendingPathComponent:BID];NSArray *children=[NSFileManager.defaultManager contentsOfDirectoryAtPath:appRoot error:NULL];NSUInteger tombstones=0;

@@ -29,6 +29,12 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 
 @interface SHDWAppStateStore : NSObject
 @property(nonatomic, copy, nullable) SHDWStateProgress progressHandler;
+// Cooperative caller context, not an authentication credential. Defaults to phone.
+@property(nonatomic, copy, nullable) NSString *requester;
+@property(nonatomic, copy, nullable) NSString * _Nullable (^currentIdentityProvider)(NSString *bundleID);
+- (nullable NSDictionary *)ownershipBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
+- (nullable NSDictionary *)claimBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
+- (nullable NSDictionary *)releaseBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
 - (nullable instancetype)initWithRoot:(NSString *)root backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
 // Storage and restored container entries use this UID/GID; SUID/SGID are rejected.
 - (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;

@@ -74,6 +74,8 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     Check(value && !error && [value[@"stdin"]boolValue] && progress==1,@"large binary stdin request");
     value=[client invokeAction:@"exportState" bundleIdentifier:@"local.fixture.app" request:@{@"mode":@"large"} progress:nil error:&error];
     Check(value && !error && [value[@"data"]length]==7*1024*1024,@"external response exceeds old frame limit");
+    for(NSString *action in @[@"externalClaim",@"externalRelease",@"externalOwnership"])
+        Check([client invokeAction:action bundleIdentifier:@"local.fixture.app" request:@{@"idfv":@"11111111-2222-3333-4444-555555555555"} progress:nil error:&error]!=nil,@"ownership action rejected by shared SDK");
     NSUInteger calls=Calls(path);
     for (NSString *action in @[@"unknown",@"state;touch"]) {
         Check(![client invokeAction:action bundleIdentifier:@"local.fixture.app" request:@{} progress:nil error:&error] && error.code==2,@"unsupported action rejected");
@@ -96,7 +98,7 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     calls=Calls(path); client.timeout=0.3;
     NSTimeInterval start=NSProcessInfo.processInfo.systemUptime;
 
-    for(NSString *code in @[@"busy",@"shadow_unavailable",@"invalid_request",@"restore_pending",@"active_environment",@"snapshot_unavailable",@"invalid_archive",@"permission_denied",@"operation_failed",@"outcome_unknown"]){
+    for(NSString *code in @[@"busy",@"shadow_unavailable",@"invalid_request",@"restore_pending",@"active_environment",@"ownership_conflict",@"snapshot_unavailable",@"invalid_archive",@"permission_denied",@"operation_failed",@"outcome_unknown"]){
         Check(![client invokeAction:@"externalVerify" bundleIdentifier:@"local.fixture.app" request:@{@"mode":[@"error:" stringByAppendingString:code]} progress:nil error:&error],@"structured error returned success");
         NSError *source=error.userInfo[NSUnderlyingErrorKey],*posix=source.userInfo[NSUnderlyingErrorKey];
         Check([error.userInfo[@"errorCode"]isEqual:code]&&[source.domain isEqual:@"fixture.source"]&&source.code==41&&[posix.domain isEqual:NSPOSIXErrorDomain]&&posix.code==13&&[error.userInfo[@"helperDetails"][@"phase"]isEqual:@"fixture"]&&[error.userInfo[@"stateMayBePartial"]boolValue],@"stable structured helper error lost in SDK");

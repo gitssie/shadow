@@ -37,6 +37,7 @@
         [NSLayoutConstraint activateConstraints:@[[icon.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:16], [icon.centerYAnchor constraintEqualToAnchor:button.centerYAnchor], [icon.widthAnchor constraintEqualToConstant:20], [icon.heightAnchor constraintEqualToConstant:20], [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:12], [title.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-16], [title.topAnchor constraintEqualToAnchor:button.topAnchor constant:12], [title.bottomAnchor constraintEqualToAnchor:button.bottomAnchor constant:-12]]];
         button.accessibilityIdentifier = [@"backup.action." stringByAppendingString:actions[index]];
         button.enabled = index == 0 ? SHDWBackupCanRestore(self.snapshot, sameIDFV) : (index == 3 ? !recoverySource : (!unavailable && (index != 1 || !recoverySource))); button.alpha = button.enabled ? 1 : 0.4;
+        if (!SHDWBackupPhoneOwned(self.snapshot)) { button.enabled = NO; button.alpha = 0.4; }
         [button addTarget:self action:@selector(selectAction:) forControlEvents:UIControlEventTouchUpInside]; [button.heightAnchor constraintGreaterThanOrEqualToConstant:48].active = YES; [card addArrangedSubview:button];
     }
     [self.contentStack addArrangedSubview:card];

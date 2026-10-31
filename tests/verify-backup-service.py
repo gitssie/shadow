@@ -225,6 +225,13 @@ static void Next(void) {
 }
 int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==2,@"fixture directory argument");fixtures=[NSString stringWithUTF8String:argv[1]];
 Check(!SHDWBackupCanRestore(@{},YES)&&SHDWBackupCanRestore(@{},NO),@"ordinary same-IDFV restore was enabled");
+Check(SHDWBackupPhoneOwned(@{})&&!SHDWBackupPhoneOwned(@{@"owner":@"rv"})&&!SHDWBackupCanRestore(@{@"owner":@"rv"},NO),@"RV owner allowed phone controls");
+NSString *active=@"11111111-2222-3333-4444-555555555555";
+NSDictionary *first=@{@"idfv":@"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},*current=@{@"idfv":active},*last=@{@"idfv":@"99999999-8888-7777-6666-555555555555"};
+NSArray *input=@[first,current,last];
+Check([SHDWBackupActiveFirst(input,active)isEqual:@[current,first,last]],@"active backup was not pinned while preserving other order");
+Check([SHDWBackupActiveFirst(input,nil)isEqual:input]&&[SHDWBackupActiveFirst(input,@"absent")isEqual:input],@"unknown active identity reordered backups");
+Check([SHDWBackupActiveFirst(@[first,last],active)isEqual:@[first,last]],@"missing active backup created or reordered an entry");
 NSDictionary *pending=@{@"restorePending":@YES,@"recoverySource":@YES};
 Check(!SHDWBackupCanRestore(pending,YES)&&SHDWBackupCanRestore(pending,NO),@"incomplete restore bypassed identity rule");
 NSDictionary *finalizing=@{@"restorePending":@YES,@"recoverySource":@YES,@"finalizationPending":@YES};
