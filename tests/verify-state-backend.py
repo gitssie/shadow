@@ -195,6 +195,10 @@ static CFPropertyListRef FixtureExternalCopy(CFStringRef key,CFStringRef domain,
 - (BOOL)recheckBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"verify mapping changed identity");self.verifications++;return YES;}
 @end
 static void ExternalTests(NSString *base){
+    Check([StateExternalIdentityPaths(@"/var/jb",@SHADOW_PREFS_PLIST)isEqual:@[@"/var/jb/var/mobile/Library/Preferences/me.jjolano.shadow.plist",@SHADOW_PREFS_PLIST]],@"production persisted identity builder lost bootstrap prefix");
+    Check([StateExternalIdentityPaths(@"",@SHADOW_PREFS_PLIST)isEqual:@[@SHADOW_PREFS_PLIST]],@"rootful identity builder duplicated raw path");
+    Check([StateExternalIdentityPaths(@"/",@SHADOW_PREFS_PLIST)isEqual:@[@SHADOW_PREFS_PLIST]],@"root slash identity builder duplicated raw path");
+
     NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555";externalSettings=nil;externalReads=0;Check([StateReadExternalIdentity(bundle)isEqual:@""],@"missing identity is explicit empty wire value");
     externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid]&&externalReads==2,@"token-independent identity query");
     for(id malformed in @[@"bad",@{@"Fingerprint_Data":@"bad"},@{@"Fingerprint_Data":@{@"VendorIdentifier":@"bad"}},@{@"Fingerprint_Data":@{@"VendorIdentifier":@1}}]){externalSettings=malformed;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed identity accepted as absent");}

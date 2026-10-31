@@ -191,9 +191,13 @@ static NSArray *StateConciseCatalog(NSArray *catalog) {
 static NSString *StateExternalIdentity(id settings) {
     NSString *current=@"";if(settings){Require([settings isKindOfClass:NSDictionary.class],@"Invalid Shadow settings");id fingerprint=settings[@"Fingerprint_Data"];if(fingerprint){Require([fingerprint isKindOfClass:NSDictionary.class],@"Invalid Shadow fingerprint");id identity=fingerprint[@"VendorIdentifier"];if(identity){Require([identity isKindOfClass:NSString.class],@"Invalid current IDFV");current=[[NSUUID alloc]initWithUUIDString:identity].UUIDString;Require(current.length>0,@"Invalid current IDFV");}}}return current;
 }
+static NSArray<NSString *> *StateExternalIdentityPaths(NSString *root,NSString *preferencesPath) {
+    NSString *persisted=root.length?[root stringByAppendingPathComponent:preferencesPath]:preferencesPath;
+    return [persisted isEqual:preferencesPath]?@[preferencesPath]:@[persisted,preferencesPath];
+}
 #ifndef SHDW_STATE_IDENTITY_PATHS
 #import <Shadow/JBPath.h>
-#define SHDW_STATE_IDENTITY_PATHS() @[JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST]
+#define SHDW_STATE_IDENTITY_PATHS() StateExternalIdentityPaths(shdw_jbroot_prefix(), @SHADOW_PREFS_PLIST)
 #endif
 static NSString *StateReadExternalIdentity(NSString *identifier) {
     Require(CFPreferencesSynchronize(CFSTR(SHADOW_PREFS_PLIST),CFSTR("mobile"),kCFPreferencesAnyHost),@"Cannot synchronize current Shadow identity");
