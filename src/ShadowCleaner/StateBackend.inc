@@ -191,10 +191,26 @@ static NSArray *StateConciseCatalog(NSArray *catalog) {
 static NSString *StateExternalIdentity(id settings) {
     NSString *current=@"";if(settings){Require([settings isKindOfClass:NSDictionary.class],@"Invalid Shadow settings");id fingerprint=settings[@"Fingerprint_Data"];if(fingerprint){Require([fingerprint isKindOfClass:NSDictionary.class],@"Invalid Shadow fingerprint");id identity=fingerprint[@"VendorIdentifier"];if(identity){Require([identity isKindOfClass:NSString.class],@"Invalid current IDFV");current=[[NSUUID alloc]initWithUUIDString:identity].UUIDString;Require(current.length>0,@"Invalid current IDFV");}}}return current;
 }
+#ifndef SHDW_STATE_IDENTITY_PATHS
+#import <Shadow/JBPath.h>
+#define SHDW_STATE_IDENTITY_PATHS() @[JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST]
+#endif
 static NSString *StateReadExternalIdentity(NSString *identifier) {
     Require(CFPreferencesSynchronize(CFSTR(SHADOW_PREFS_PLIST),CFSTR("mobile"),kCFPreferencesAnyHost),@"Cannot synchronize current Shadow identity");
     CFPropertyListRef value=CFPreferencesCopyValue((__bridge CFStringRef)identifier,CFSTR(SHADOW_PREFS_PLIST),CFSTR("mobile"),kCFPreferencesAnyHost);
-    return StateExternalIdentity(CFBridgingRelease(value));
+    NSString *current=StateExternalIdentity(CFBridgingRelease(value));
+    if(current.length)return current;
+    NSMutableSet *visited=[NSMutableSet new];BOOL sawValidRoot=NO;
+    for(NSString *path in SHDW_STATE_IDENTITY_PATHS()) {
+        if([visited containsObject:path])continue;[visited addObject:path];
+        NSError *readError=nil;NSData *bytes=[NSData dataWithContentsOfFile:path options:0 error:&readError];
+        if(!bytes){if([readError.domain isEqual:NSCocoaErrorDomain]&&readError.code==NSFileReadNoSuchFileError)continue;Require(NO,@"Cannot read persisted Shadow identity");}
+        if(!bytes.length&&sawValidRoot)continue;
+        id root=[NSPropertyListSerialization propertyListWithData:bytes options:NSPropertyListImmutable format:NULL error:NULL];
+        Require([root isKindOfClass:NSDictionary.class],@"Invalid persisted Shadow settings");
+        sawValidRoot=YES;current=StateExternalIdentity(root[identifier]);if(current.length)return current;
+    }
+    return @"";
 }
 static NSDictionary *StateErrorTerminal(NSError *error) {
     NSMutableDictionary *value=[@{@"ok":@NO,@"error":error.localizedDescription?:@"Application state operation failed",@"errorCode":error.userInfo[@"errorCode"]?:([error.domain isEqual:SHDWStateArchiveErrorDomain]?@"invalid_archive":@"operation_failed"),@"sourceDomain":error.domain?:SHDWAppStateErrorDomain,@"sourceCode":@(error?error.code:1),@"details":failureDetails?:@{},@"partial":@([error.userInfo[@"stateMayBePartial"]boolValue]),@"stateMayBePartial":@([error.userInfo[@"stateMayBePartial"]boolValue]),@"outcomeUnknown":@([error.userInfo[@"outcomeUnknown"]boolValue])} mutableCopy];

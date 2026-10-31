@@ -38,6 +38,8 @@ static CFPropertyListRef FixtureExternalCopy(CFStringRef,CFStringRef,CFStringRef
 static Boolean FixtureExternalSync(CFStringRef,CFStringRef,CFStringRef);
 #define CFPreferencesCopyValue FixtureExternalCopy
 #define CFPreferencesSynchronize FixtureExternalSync
+static NSArray *FixtureExternalPaths(void);
+#define SHDW_STATE_IDENTITY_PATHS() FixtureExternalPaths()
 #define SHADOW_STATE_SUPPORT 1
 #import "__CLEANER__"
 #undef dlsym
@@ -177,6 +179,8 @@ static FixtureDefaults *preferences;
 - (NSDictionary *)configurationForApplication:(NSString *)identifier{(void)identifier;return @{@"valid":@YES,@"region":@"fallback"};}
 @end
 
+static NSArray *externalPaths;
+static NSArray *FixtureExternalPaths(void){return externalPaths?:@[];}
 static id externalSettings;
 static BOOL externalSyncFailure;
 static NSUInteger externalReads;
@@ -190,10 +194,22 @@ static CFPropertyListRef FixtureExternalCopy(CFStringRef key,CFStringRef domain,
 - (BOOL)deleteBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"delete mapping changed identity");self.deletes++;return YES;}
 - (BOOL)recheckBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"verify mapping changed identity");self.verifications++;return YES;}
 @end
-static void ExternalTests(void){
+static void ExternalTests(NSString *base){
     NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555";externalSettings=nil;externalReads=0;Check([StateReadExternalIdentity(bundle)isEqual:@""],@"missing identity is explicit empty wire value");
     externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid]&&externalReads==2,@"token-independent identity query");
     for(id malformed in @[@"bad",@{@"Fingerprint_Data":@"bad"},@{@"Fingerprint_Data":@{@"VendorIdentifier":@"bad"}},@{@"Fingerprint_Data":@{@"VendorIdentifier":@1}}]){externalSettings=malformed;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed identity accepted as absent");}
+    externalSettings=nil;NSString *rooted=[base stringByAppendingPathComponent:@"rooted-identity.plist"],*stale=[base stringByAppendingPathComponent:@"stale-identity.plist"];
+    NSDictionary *persisted=@{bundle:@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}}};Check([persisted writeToFile:rooted atomically:YES]&&[[NSData data]writeToFile:stale atomically:YES],@"persisted identity fixture");
+    externalPaths=@[rooted,stale];NSData *rootedBefore=[NSData dataWithContentsOfFile:rooted],*staleBefore=[NSData dataWithContentsOfFile:stale];NSDictionary *rootedAttributes=[NSFileManager.defaultManager attributesOfItemAtPath:rooted error:NULL];
+    Check([StateReadExternalIdentity(bundle)isEqual:uuid],@"CF-missing identity did not read persisted Shadow selection");
+    Check([[NSData dataWithContentsOfFile:rooted]isEqual:rootedBefore]&&[[NSData dataWithContentsOfFile:stale]isEqual:staleBefore]&&[[NSFileManager.defaultManager attributesOfItemAtPath:rooted error:NULL][NSFileModificationDate]isEqual:rootedAttributes[NSFileModificationDate]],@"persisted identity query wrote preferences");
+    Check([@{}writeToFile:rooted atomically:YES],@"absent selected-app fixture");Check([StateReadExternalIdentity(bundle)isEqual:@""],@"absent persisted app rejected empty stale placeholder");
+    Check([[@"invalid secondary plist" dataUsingEncoding:NSUTF8StringEncoding]writeToFile:stale atomically:NO],@"malformed secondary fixture");Check(Reject(^{StateReadExternalIdentity(bundle);}),@"nonempty malformed secondary source ignored");
+    Check([[NSData data]writeToFile:stale atomically:NO],@"restore empty secondary fixture");externalPaths=@[stale];Check(Reject(^{StateReadExternalIdentity(bundle);}),@"empty sole source accepted as absent");externalPaths=@[rooted,stale];
+    Check([@{bundle:@{@"Fingerprint_Data":@{@"VendorIdentifier":@"invalid"}}}writeToFile:rooted atomically:YES],@"malformed persisted fixture");Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed persisted identity became missing");
+    externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid],@"valid preference cache lost precedence over persisted data");
+    externalSettings=nil;Check([[@"invalid plist" dataUsingEncoding:NSUTF8StringEncoding]writeToFile:rooted atomically:NO],@"malformed persisted plist fixture");Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed persisted plist became missing");
+    externalPaths=@[];
     externalSyncFailure=YES;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"failed preference sync reported absent identity");externalSyncFailure=NO;
     NSDictionary *capabilities=StateExternalCommand(bundle,@"capabilities",@{});Check([capabilities[@"ok"]boolValue],@"capabilities needs installed app or storage");
     NSData *capData=[[NSData alloc]initWithBase64EncodedString:capabilities[@"result"] options:0];NSDictionary *caps=[NSPropertyListSerialization propertyListWithData:capData options:NSPropertyListImmutable format:NULL error:NULL];for(NSString *operation in @[@"backup",@"restore",@"externalDelete",@"externalVerify"])Check([caps[@"operations"]containsObject:operation],@"missing public operation capability");
@@ -297,7 +313,7 @@ static void CatalogProjectionTests(void) {
     Check(catalog.count==2&&[catalog[0][@"unavailable"]boolValue]&&[catalog[0][@"error"]isEqual:@"corrupt"]&&[catalog[0][@"size"]isEqual:@0],@"corrupt snapshot status lost in catalog transport");
     Check([catalog[1][@"finalizationPending"]boolValue]&&[catalog[1][@"size"]isEqual:@50],@"pending finalization status lost in catalog transport");
 }
-int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();ExternalTests();Check(argc==2,@"fixture directory argument");KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
+int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");ExternalTests([NSString stringWithUTF8String:argv[1]]);KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
 '''
 
 
