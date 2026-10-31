@@ -45,6 +45,30 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
         id data = app[@"Fingerprint_Data"]; id value = [data isKindOfClass:NSDictionary.class] ? data[@"VendorIdentifier"] : nil;
         return @{@"idfv":[value isKindOfClass:NSString.class] ? value : @""};
     }
+    if ([mode isEqual:@"state-fingerprint-reset-check"]) {
+        Require(SHDWFingerprintApplicationEnabled(app),@"Fingerprint is disabled.");
+        return @{@"ready":@YES};
+    }
+    if ([mode isEqual:@"state-fingerprint-reset"]) {
+        Require(getppid()==keychainParent && TargetStopped(target),@"The application must remain stopped before resetting its fingerprint");
+        Require(SHDWFingerprintApplicationEnabled(app),@"Fingerprint is disabled.");
+        NSString *expected=request[@"idfv"];
+        Require([app[@"Fingerprint_Data"][@"VendorIdentifier"] isEqual:expected],@"The application identity changed before fingerprint reset.");
+        SHDWFingerprintStore *store=SHDWFingerprintStore.sharedStore;NSError *failure=nil;
+        BOOL locked=[store lockedForApplication:identifier],refreshed=NO;
+        @try {
+            Require(!locked || [store setLocked:NO forApplication:identifier error:&failure],failure.localizedDescription ?: @"Cannot unlock fingerprint");
+            refreshed=[store refreshApplication:identifier error:&failure];
+            Require(refreshed,failure.localizedDescription ?: @"Cannot refresh fingerprint");
+        } @finally {
+            if(!refreshed && locked && ![store lockedForApplication:identifier])Require([store setLocked:YES forApplication:identifier error:&failure],@"Cannot restore fingerprint lock");
+        }
+        Require([defaults synchronize],@"Cannot verify reset fingerprint");
+        NSDictionary *updated=[defaults dictionaryForKey:identifier];
+        NSString *idfv=updated[@"Fingerprint_Data"][@"VendorIdentifier"];
+        Require([[NSUUID alloc]initWithUUIDString:idfv] && ![idfv isEqual:expected] && SHDWFingerprintApplicationLocked(updated),@"Reset fingerprint verification failed");
+        return @{@"idfv":idfv,@"locked":@YES};
+    }
     if ([mode isEqual:@"state-fingerprint-capture"]) {
         NSDictionary *data = app[@"Fingerprint_Data"], *configuration = app[@"Fingerprint_Config"];
         Require([data isKindOfClass:NSDictionary.class] && [configuration isKindOfClass:NSDictionary.class] &&
@@ -64,7 +88,7 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
     Require([[defaults dictionaryForKey:identifier] isEqual:updated], @"Restored fingerprint preferences failed readback"); return @{@"restored":@YES, @"locked":@YES};
 }
 static NSDictionary *StateWorker(NSString *mode, NSDictionary *target, NSString *directory) {
-    Require([@[@"state-export", @"state-validate", @"state-restore", @"state-registration", @"state-fingerprint-capture", @"state-fingerprint-identity", @"state-fingerprint-validate", @"state-fingerprint-restore", @"state-preferences-capture", @"state-preferences-validate", @"state-preferences-restore"] containsObject:mode], @"Unknown scoped application state worker");
+    Require([@[@"state-export", @"state-validate", @"state-restore", @"state-registration", @"state-fingerprint-reset", @"state-fingerprint-reset-check", @"state-fingerprint-capture", @"state-fingerprint-identity", @"state-fingerprint-validate", @"state-fingerprint-restore", @"state-preferences-capture", @"state-preferences-validate", @"state-preferences-restore"] containsObject:mode], @"Unknown scoped application state worker");
     NSDictionary *request = @{}; NSString *path = [directory stringByAppendingPathComponent:@"request.plist"]; struct stat st;
     if (!lstat(path.fileSystemRepresentation, &st)) {
         Require(S_ISREG(st.st_mode) && st.st_uid == 0 && st.st_nlink == 1 && (st.st_mode & 0777) == 0600 && st.st_size > 0 && st.st_size <= (off_t)StateFrameLimit, @"Unsafe scoped application state request");
@@ -180,7 +204,7 @@ static NSArray *StateConciseCatalog(NSArray *catalog) {
     NSMutableArray *result = [NSMutableArray new];
     for (NSDictionary *manifest in catalog) {
         NSMutableDictionary *entry = [NSMutableDictionary new];
-        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"owner", @"restorePending", @"recoverySource", @"finalizationPending", @"unavailable", @"error"]) if (manifest[key]) entry[key] = manifest[key];
+        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"owner", @"restorePending", @"recoverySource", @"resetPending", @"finalizationPending", @"unavailable", @"error"]) if (manifest[key]) entry[key] = manifest[key];
         if ([manifest[@"unavailable"] boolValue]) { entry[@"size"] = @0; [result addObject:entry]; continue; }
         NSNumber *dataSize = manifest[@"archiveInfo"][@"archiveSize"], *stateSize = manifest[@"stateArchiveInfo"][@"archiveSize"] ?: @0;
         Require([dataSize isKindOfClass:NSNumber.class] && [stateSize isKindOfClass:NSNumber.class] && [dataSize isEqual:@(dataSize.unsignedLongLongValue)] && [stateSize isEqual:@(stateSize.unsignedLongLongValue)] && dataSize.unsignedLongLongValue <= UINT64_MAX - stateSize.unsignedLongLongValue, @"Invalid backup archive size");
@@ -218,6 +242,8 @@ static NSString *StateReadExternalIdentity(NSString *identifier) {
 }
 static NSDictionary *StateErrorTerminal(NSError *error) {
     NSMutableDictionary *value=[@{@"ok":@NO,@"error":error.localizedDescription?:@"Application state operation failed",@"errorCode":error.userInfo[@"errorCode"]?:([error.domain isEqual:SHDWStateArchiveErrorDomain]?@"invalid_archive":@"operation_failed"),@"sourceDomain":error.domain?:SHDWAppStateErrorDomain,@"sourceCode":@(error?error.code:1),@"details":failureDetails?:@{},@"partial":@([error.userInfo[@"stateMayBePartial"]boolValue]),@"stateMayBePartial":@([error.userInfo[@"stateMayBePartial"]boolValue]),@"outcomeUnknown":@([error.userInfo[@"outcomeUnknown"]boolValue])} mutableCopy];
+    if(error.userInfo[@"backupIDFV"])value[@"backupIDFV"]=error.userInfo[@"backupIDFV"];
+    if(error.userInfo[@"step"])value[@"step"]=error.userInfo[@"step"];
     NSError *underlying=error.userInfo[NSUnderlyingErrorKey];if([underlying.domain isEqual:NSPOSIXErrorDomain])value[@"posixCode"]=@(underlying.code);
     if([value[@"outcomeUnknown"]boolValue])value[@"errorCode"]=@"outcome_unknown";
     return value;
@@ -236,7 +262,7 @@ static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action
     if(request[@"requester"])Require([@[@"phone",@"rv"]containsObject:request[@"requester"]],@"Invalid backup requester");
     stateFailureCode=@"invalid_request";for(id key in request)Require([allowed containsObject:key],@"Unknown external application state option");
     NSError *error=nil;id result=nil;
-    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
+    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"backupAndReset",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
     else {
         stateFailureCode=@"permission_denied";Require(geteuid()==0,@"Cannot enter backup storage context");
         stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,![@[@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action]);
@@ -269,7 +295,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     stateInitiatingParent = getppid(); StateParent();
     Require(argc == 4 || argc == 5, @"Expected an application state action and an optional encoded request");
     NSString *identifier = [NSString stringWithUTF8String:argv[2]], *action = [NSString stringWithUTF8String:argv[3]];
-    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
+    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"backup", @"backupAndReset", @"restore", @"edit", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
     if(StateExternalAction(action)) {
         NSDictionary *external=@{};
         if(argc==5){NSString *encoded=[NSString stringWithUTF8String:argv[4]];NSData *bytes=nil;
@@ -281,7 +307,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     }
     NSDictionary *request = @{};
     if (argc == 5) { NSString *encoded = [NSString stringWithUTF8String:argv[4]]; Require(encoded.length <= 256 * 1024, @"Application state action request is too large"); id value = StateDecode([[NSData alloc] initWithBase64EncodedString:encoded options:0]); Require([value isKindOfClass:NSDictionary.class], @"Invalid application state action request"); request = value; }
-    NSArray *allowed = [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : @[@"idfv"];
+    NSArray *allowed = [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : [action isEqual:@"backupAndReset"] ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : @[@"idfv"];
     for (id key in request) Require([allowed containsObject:key], @"Unknown application state action option");
     if (![action isEqual:@"catalog"] && ![action isEqual:@"backup"]) Require([request[@"idfv"] isKindOfClass:NSString.class], @"A saved fingerprint identifier is required");
     if (request[@"saveCurrent"]) Require([request[@"saveCurrent"] isKindOfClass:NSNumber.class] && [@[@NO, @YES] containsObject:request[@"saveCurrent"]], @"Invalid save-current option");
@@ -292,12 +318,34 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     @try {
         Require([Canonical(StateStorage.stringByDeletingLastPathComponent) isEqual:StateStorage.stringByDeletingLastPathComponent], @"Backup storage parent is not canonical"); NativeStateBackend *backend = [NativeStateBackend new]; NSError *error = nil;
         NSDictionary *target = [backend resolveBundle:identifier error:&error]; if(!target)return StateErrorTerminal(error);
-        StateWorkerValue(target[@"authority"], @"state-registration", nil);
+        StateWorkerValue(target[@"authority"], [action isEqual:@"backupAndReset"]?@"state-fingerprint-reset-check":@"state-registration", nil);
         SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend error:&error]; if(!store)return StateErrorTerminal(error);
         store.progressHandler=StateProgressHandler(^(NSDictionary *frame){StateOutput(frame);});
         id result = nil;
         if ([action isEqual:@"catalog"]) { NSArray *catalog = [store catalogBundle:identifier error:&error]; if (catalog) result = StateConciseCatalog(catalog); }
         else if ([action isEqual:@"backup"]) { NSDictionary *manifest = [store backupBundle:identifier metadata:request[@"metadata"] error:&error]; if (manifest) result = StateConciseCatalog(@[manifest]).firstObject; }
+        else if ([action isEqual:@"backupAndReset"]) {
+            result=[store backupAndResetBundle:identifier expectedIDFV:request[@"idfv"] reset:^NSDictionary *(NSDictionary *resolved,NSError **resetError){
+                NSDictionary *authority=resolved[@"authority"];NSArray *steps=@[@"files",@"preferences",@"web",@"keychain",@"receipts",@"fingerprint"];
+                NSString *expected=[[NSUUID alloc]initWithUUIDString:request[@"idfv"]].UUIDString;
+                NSString *resetStage=@"prepare";
+                @try {
+                    StateParent();Require(TargetStopped(authority),@"The application must remain stopped before reset");
+                    NSArray *queries=CleanupPreferenceQueries(authority,steps);
+                    if(queries.count)PreferenceCache(queries,NO,NO);
+                    for(NSString *step in steps) {
+                        resetStage=step;StateParent();Require(TargetStopped(authority),@"Target application restarted; reset stopped");
+                        stateFailureCode=@"idfv_mismatch";Require([StateReadExternalIdentity(identifier) isEqual:expected],@"The application identity changed during reset.");stateFailureCode=@"operation_failed";
+                        StateOutput(@{@"event":@"progress",@"progress":@{@"phase":@"reset",@"stage":step}});
+                        if([step isEqual:@"fingerprint"]){mutated=YES;StateWorkerValue(authority,@"state-fingerprint-reset",@{@"idfv":expected});}
+                        else CleanupRunStep(authority,step,queries);
+                    }
+                    resetStage=@"verify";StateParent();StateOutput(@{@"event":@"progress",@"progress":@{@"phase":@"reset",@"stage":@"verify"}});
+                    CleanupFinalize(authority,steps);CleanupVerify(authority,steps,queries);
+                    return @{@"verified":@YES};
+                } @catch(NSException *exception){StateFailure(resetError,exception);if(resetError&&*resetError){NSMutableDictionary *info=[(*resetError).userInfo mutableCopy];info[@"step"]=resetStage;*resetError=[NSError errorWithDomain:(*resetError).domain code:(*resetError).code userInfo:info];}return nil;}
+            } error:&error];
+        }
         else if ([action isEqual:@"restore"]) result = [store restoreBundle:identifier idfv:request[@"idfv"] saveCurrent:[request[@"saveCurrent"] boolValue] error:&error];
         else if ([action isEqual:@"edit"]) { if ([store editBundle:identifier idfv:request[@"idfv"] metadata:request[@"metadata"] error:&error]) result = @{@"edited":@YES}; }
         else if ([action isEqual:@"delete"]) { if ([store deleteBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"deleted":@YES}; }

@@ -23,5 +23,5 @@ static inline BOOL SHDWBackupCanRestore(NSDictionary *snapshot, BOOL sameIDFV) {
     if (!SHDWBackupPhoneOwned(snapshot)) return NO;
     if ([snapshot[@"unavailable"] boolValue]) return NO;
     if ([snapshot[@"restorePending"] boolValue] && ![snapshot[@"recoverySource"] boolValue]) return NO;
-    return !sameIDFV || SHDWBackupFinalizationOnly(snapshot, sameIDFV);
+    return !sameIDFV || SHDWBackupFinalizationOnly(snapshot, sameIDFV) || ([snapshot[@"recoverySource"] boolValue] && [snapshot[@"resetPending"] boolValue]);
 }

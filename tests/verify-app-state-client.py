@@ -74,7 +74,7 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     Check(value && !error && [value[@"stdin"]boolValue] && progress==1,@"large binary stdin request");
     value=[client invokeAction:@"exportState" bundleIdentifier:@"local.fixture.app" request:@{@"mode":@"large"} progress:nil error:&error];
     Check(value && !error && [value[@"data"]length]==7*1024*1024,@"external response exceeds old frame limit");
-    for(NSString *action in @[@"externalClaim",@"externalRelease",@"externalOwnership"])
+    for(NSString *action in @[@"externalClaim",@"externalRelease",@"externalOwnership",@"backupAndReset"])
         Check([client invokeAction:action bundleIdentifier:@"local.fixture.app" request:@{@"idfv":@"11111111-2222-3333-4444-555555555555"} progress:nil error:&error]!=nil,@"ownership action rejected by shared SDK");
     NSUInteger calls=Calls(path);
     for (NSString *action in @[@"unknown",@"state;touch"]) {

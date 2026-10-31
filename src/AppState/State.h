@@ -41,6 +41,10 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 - (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend readOnly:(BOOL)readOnly error:(NSError **)error;
 // snapshots/<canonical IDFV>/manifest.plist + data.tar.zst + state.tar.zst. Metadata is title/note.
 - (nullable NSDictionary *)backupBundle:(NSString *)bundleID metadata:(nullable NSDictionary *)metadata error:(NSError **)error;
+// The caller supplies the native full-reset adapter; storage keeps one exclusive
+// lock through identity validation, verified backup publication and reset.
+- (nullable NSDictionary *)backupAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
+    reset:(NSDictionary * _Nullable (^)(NSDictionary *target, NSError **error))reset error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error;
 - (nullable NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(nullable NSString *)sha error:(NSError **)error;
 - (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)manifest state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error;

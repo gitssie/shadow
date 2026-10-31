@@ -392,6 +392,7 @@ LOCK_HARNESS = r'''#import <Foundation/Foundation.h>
 static NSString *SessionRoot;
 static void Fail(NSString *reason) { @throw [NSException exceptionWithName:@"LockFixture" reason:reason userInfo:nil]; }
 static void Require(BOOL value, NSString *reason) { if(!value) Fail(reason); }
+static NSString *stateFailureCode;
 static NSString *Hash(NSArray *values) { return values.firstObject; }
 __LOCK_SOURCE__
 static void Blocked(BOOL exclusive) {

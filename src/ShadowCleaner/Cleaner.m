@@ -861,6 +861,45 @@ static void SaveSession(NSString *identifier, NSDictionary *session) {
     Require([data writeToFile:SessionPath(identifier) options:NSDataWritingAtomic error:NULL], @"Cannot save cleanup progress");
     Require(!chmod(SessionPath(identifier).fileSystemRepresentation, 0600), @"Cannot secure cleanup progress");
 }
+// Shared by the Manager's selected-step flow and the atomic backup/reset action.
+static NSUInteger CleanupRunStep(NSDictionary *target, NSString *argument, NSArray *queries) {
+    NSUInteger count = 0;
+    if ([argument isEqual:@"keychain"]) { mutated = YES; Keychain(target, YES, YES); }
+    else {
+        // Synchronize known domains around deletion. Cache invalidation is domain-wide;
+        // the captured queries and final value checks retain container scope.
+        NSArray *preferenceQueries = ([argument isEqual:@"files"] || [argument isEqual:@"preferences"]) ?
+        PreferenceQueriesForStep(queries, argument) : nil;
+        if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
+        ContainerStep(target, argument, YES, &count); ExternalStep(target, argument, YES, &count);
+        if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
+        if ([argument isEqual:@"receipts"]) BundleReceipts(target, YES, &count);
+    }
+    return count;
+}
+static void CleanupFinalize(NSDictionary *target, NSArray *steps) {
+    Require(TargetStopped(target), @"Target application restarted before final verification");
+    if ([steps containsObject:@"files"]) for (NSUInteger pass=0;pass<5;pass++) {
+        if(pass)usleep(250000);
+        Require(TargetStopped(target), @"Target application restarted during cleanup finalization");
+        FinalizeSnapshots(target,steps);
+    }
+}
+static NSDictionary *CleanupVerify(NSDictionary *target, NSArray *steps, NSArray *queries) {
+    Require(TargetStopped(target), @"Target application restarted before final verification");
+    NSMutableArray *failed=[NSMutableArray new]; __block NSDictionary *keychainCounts=@{};
+    VerifyCleanupSteps(target,steps,^(NSString *step){
+        @try {
+            if([step isEqual:@"keychain"]){keychainCounts=Keychain(target,NO,YES)[@"classCounts"];return;}
+            NSUInteger count=0;ContainerStep(target,step,NO,&count);ExternalStep(target,step,NO,&count);
+            if([step isEqual:@"receipts"])BundleReceipts(target,NO,&count);
+            Require(!count,@"Selected application data remained after cleanup");
+            if([step isEqual:@"files"]||[step isEqual:@"preferences"])PreferenceCache(PreferenceQueriesForStep(queries,step),YES,NO);
+        } @catch(NSException *exception){(void)exception;[failed addObject:step];}
+    });
+    remainingSteps=[failed copy];Require(!failed.count,@"Final verification found remaining selected application data");
+    return @{@"ok":@YES,@"recheckVerified":@YES,@"scope":@{@"steps":steps,@"preservedSharedGroups":target[@"preservedSharedGroups"],@"systemSharedCachesCovered":@NO,@"keychainClassCounts":keychainCounts}};
+}
 #ifdef SHADOW_STATE_SUPPORT
 #import "StateBackend.inc"
 #endif
@@ -937,48 +976,16 @@ static NSDictionary *Execute(int argc, const char *argv[]) {
         NSArray *steps = session[@"steps"]; NSUInteger next = [session[@"next"] unsignedIntegerValue];
         if ([command isEqual:@"finalize"] || [command isEqual:@"recheck"]) {
             ValidateCompletedSession(session, scope[@"token"], [argument componentsSeparatedByString:@","], order);
-            Require(TargetStopped(target), @"Target application restarted before final verification");
             if ([command isEqual:@"finalize"]) {
-                if ([steps containsObject:@"files"]) {
-                    // Allow pending system snapshot writes to settle before the independent check.
-                    for (NSUInteger pass = 0; pass < 5; pass++) {
-                        if (pass) usleep(250000);
-                        Require(TargetStopped(target), @"Target application restarted during cleanup finalization");
-                        FinalizeSnapshots(target, steps);
-                    }
-                }
-                return @{@"ok":@YES, @"finalized":@YES};
+                CleanupFinalize(target, steps);
+                return @{@"ok":@YES,@"finalized":@YES};
             }
-            NSMutableArray *failed = [NSMutableArray new];
-            __block NSDictionary *keychainCounts = @{};
-            VerifyCleanupSteps(target, steps, ^(NSString *step) {
-                @try {
-                    if ([step isEqual:@"keychain"]) { keychainCounts = Keychain(target, NO, YES)[@"classCounts"]; return; }
-                    NSUInteger count = 0; ContainerStep(target, step, NO, &count); ExternalStep(target, step, NO, &count);
-                    if ([step isEqual:@"receipts"]) BundleReceipts(target, NO, &count);
-                    Require(!count, @"Selected application data remained after cleanup");
-                    if ([step isEqual:@"files"] || [step isEqual:@"preferences"])
-                        PreferenceCache(PreferenceQueriesForStep(session[@"preferenceQueries"], step), YES, NO);
-                } @catch (NSException *exception) { (void)exception; [failed addObject:step]; }
-            });
-            remainingSteps = [failed copy]; Require(!failed.count, @"Final verification found remaining selected application data");
-            return @{@"ok":@YES, @"recheckVerified":@YES, @"scope":@{@"steps":steps, @"preservedSharedGroups":target[@"preservedSharedGroups"], @"systemSharedCachesCovered":@NO, @"keychainClassCounts":keychainCounts}};
+            return CleanupVerify(target,steps,session[@"preferenceQueries"]);
         }
         Require([order containsObject:argument] && ![argument isEqual:@"fingerprint"], @"Invalid helper cleanup step");
         Require([session[@"token"] isEqual:scope[@"token"]] && NSDate.date.timeIntervalSince1970 - [session[@"created"] doubleValue] < 1800 && next < steps.count && [steps[next] isEqual:argument], @"Cleanup session expired or step is out of order");
         Require(TargetStopped(target), @"Target application restarted; cleanup stopped");
-        NSUInteger count = 0;
-        if ([argument isEqual:@"keychain"]) { mutated = YES; Keychain(target, YES, YES); }
-        else {
-            // Synchronize known domains around deletion. Cache invalidation is domain-wide;
-            // the captured queries and final value checks retain container scope.
-            NSArray *preferenceQueries = ([argument isEqual:@"files"] || [argument isEqual:@"preferences"]) ?
-                PreferenceQueriesForStep(session[@"preferenceQueries"], argument) : nil;
-            if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
-            ContainerStep(target, argument, YES, &count); ExternalStep(target, argument, YES, &count);
-            if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
-            if ([argument isEqual:@"receipts"]) BundleReceipts(target, YES, &count);
-        }
+        NSUInteger count = CleanupRunStep(target, argument, session[@"preferenceQueries"]);
         NSMutableDictionary *updated = [session mutableCopy]; updated[@"next"] = @(next + 1); SaveSession(identifier, updated);
         return @{@"ok":@YES, @"step":argument, @"removedEntries":@(count), @"executed":@YES, @"verified":@NO};
     } @finally { close(lock); }

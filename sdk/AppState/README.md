@@ -76,3 +76,9 @@ Shadow's same-IDFV and pending recovery behavior and never launches the app.
 The HTTP adapter defaults saveCurrent to true; an explicit pending retry uses
 false. External deletion and full verification operate on saved storage without
 resolving live application containers or launching device workers.
+
+The `backupAndReset` action accepts only the expected current `idfv`. Shadow
+owns mandatory verified backup and full reset in one operation; callers must not
+compose independent cleanup commands or retry after transport loss. A helper
+capability check must include `backupAndReset` before invoking it. Known failures
+retain `backupIDFV` and `step`; interruption remains `outcomeUnknown`.

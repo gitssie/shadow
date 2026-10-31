@@ -235,3 +235,25 @@ publishes the complete snapshot with a directory exchange. It never modifies
 live application state. Interrupted private stages are collected by the existing
 exclusive-operation cleanup. Permissions and device preference visibility still
 require device verification.
+
+## Atomic backup and reset
+
+`backupAndResetBundle:expectedIDFV:reset:error:` keeps the exclusive snapshot lock
+through stop/identity validation, verified backup publication, full native reset,
+and verification of a new locked fingerprint. The helper action `backupAndReset`
+requires only `idfv`; clients cannot select steps or skip backup. It uses the same
+cleanup step/finalize/recheck functions as Manager and leaves the app stopped.
+
+Before the first cleanup mutation, the verified source is pinned in the existing
+pending record with `resetRecovery` and phase `resetting`. Failure or interruption
+retains that source: another backup/reset cannot overwrite good data with partial
+state. Explicit restore without save-current can replay a pending reset source
+into its same live IDFV, including retry after an interrupted fingerprint write.
+The reset-recovery marker survives identity-pending until identity commitment;
+ordinary same-IDFV restoration remains prohibited. Catalog exposes `resetPending`
+for the Manager's recovery action. Successful verified reset removes pending.
+
+Known reset errors retain `backupIDFV` and `step`; the shared SDK forwards these,
+and HTTP maps the saved identity to `backup_id`. Timeouts remain unknown and are
+never replayed automatically. Device cleanup permissions and UI behavior still
+require separate live validation; host fixture results do not establish those.

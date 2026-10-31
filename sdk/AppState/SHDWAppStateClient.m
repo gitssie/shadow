@@ -38,7 +38,7 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
 - (id)invokeAction:(NSString *)action bundleIdentifier:(NSString *)bundleIdentifier request:(NSDictionary *)request progress:(SHDWAppStateClientProgress)progress error:(NSError **)error {
     if (error) *error = nil;
     BOOL external = [@[@"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState", @"externalDelete", @"externalVerify", @"externalClaim", @"externalRelease", @"externalOwnership"] containsObject:action];
-    NSArray *allowed = @[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck", @"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState", @"externalDelete", @"externalVerify", @"externalClaim", @"externalRelease", @"externalOwnership"];
+    NSArray *allowed = @[@"catalog", @"backup", @"backupAndReset", @"restore", @"edit", @"delete", @"recheck", @"capabilities", @"externalCatalog", @"externalEdit", @"exportState", @"importState", @"externalDelete", @"externalVerify", @"externalClaim", @"externalRelease", @"externalOwnership"];
     if (![allowed containsObject:action] || ![bundleIdentifier isKindOfClass:NSString.class] || !bundleIdentifier.length ||
         [bundleIdentifier rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"] invertedSet]].location != NSNotFound ||
         ![request isKindOfClass:NSDictionary.class] || !isfinite(self.timeout) || self.timeout <= 0) {
@@ -135,8 +135,8 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
     close(channel[0]);
     if (invalid || !exited) { kill(-child, SIGKILL); kill(child, SIGKILL); }
     if (!exited) while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-    BOOL partial = [action isEqual:@"restore"];
-    BOOL mutating=[@[@"backup",@"restore",@"edit",@"delete",@"externalEdit",@"externalDelete",@"importState",@"externalClaim",@"externalRelease"] containsObject:action];
+    BOOL partial = [@[@"restore",@"backupAndReset"] containsObject:action];
+    BOOL mutating=[@[@"backup",@"backupAndReset",@"restore",@"edit",@"delete",@"externalEdit",@"externalDelete",@"importState",@"externalClaim",@"externalRelease"] containsObject:action];
     if (invalid || buffer.length || !terminal) {
         if (error) { *error = BackupError(4, @"The backup operation was interrupted. Check its status before trying again.", partial); if (mutating) *error = UnknownError(*error); }
         return nil;
@@ -150,7 +150,7 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
             NSDictionary *details = [terminal[@"details"] isKindOfClass:NSDictionary.class] ? terminal[@"details"] : @{};
             info[@"helperDetails"] = details;
             info[@"partial"]=@([terminal[@"partial"]boolValue]);
-            for(NSString *key in @[@"errorCode",@"sourceDomain"])if([terminal[key] isKindOfClass:NSString.class])info[key]=terminal[key];
+            for(NSString *key in @[@"errorCode",@"sourceDomain",@"backupIDFV",@"step"])if([terminal[key] isKindOfClass:NSString.class])info[key]=terminal[key];
             for(NSString *key in @[@"sourceCode",@"posixCode"])if([terminal[key] isKindOfClass:NSNumber.class])info[key]=terminal[key];
             if([info[@"sourceDomain"] isKindOfClass:NSString.class]&&[info[@"sourceCode"] isKindOfClass:NSNumber.class]){
                 NSMutableDictionary *sourceInfo=[@{NSLocalizedDescriptionKey:message} mutableCopy];

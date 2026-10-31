@@ -322,7 +322,8 @@ static void CollectAbandonedSnapshots(int parent) {
     id pending = ReadPlistAt(directory.fd, @"pending.plist", self.ownerUID, self.ownerGID, error);
     if (![pending isKindOfClass:NSDictionary.class] || !Same(pending[@"format"], StateFormat) || !UUIDValue(pending[@"idfv"]) || !Same(pending[@"idfv"], UUIDValue(pending[@"idfv"])) || !Same(pending[@"bundleID"], directory.path.lastPathComponent) || ![pending[@"archiveSHA"] isKindOfClass:NSString.class] || [pending[@"archiveSHA"] length] != 64 || ![pending[@"date"] isKindOfClass:NSDate.class]) { if (error && !*error) Fail(error, @"Restoration state is invalid."); return nil; }
     if ((![pending[@"stateArchiveSHA"] isKindOfClass:NSString.class] || [pending[@"stateArchiveSHA"] length] != 64)) { Fail(error, @"Restoration state archive identity is invalid."); return nil; }
-    if (pending[@"phase"] && ![@[@"restoring", @"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]]) { Fail(error, @"Restoration phase is invalid."); return nil; }
+    if (pending[@"phase"] && ![@[@"resetting", @"restoring", @"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]]) { Fail(error, @"Restoration phase is invalid."); return nil; }
+    if(pending[@"resetRecovery"] && (![pending[@"resetRecovery"]isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)pending[@"resetRecovery"])!=CFBooleanGetTypeID())){Fail(error,@"Invalid reset recovery state.");return nil;}
     return pending;
 }
 - (NSDictionary *)target:(NSString *)bundle error:(NSError **)error {
@@ -568,6 +569,57 @@ static void CollectAbandonedSnapshots(int parent) {
     } @catch (NSException *exception) { Fail(error, exception.reason ?: @"Backup failed."); return nil; }
     @finally { [operationDirectory releaseLock]; }
 }
+- (NSDictionary *)backupAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
+    reset:(NSDictionary *(^)(NSDictionary *, NSError **))reset error:(NSError **)error {
+    SHDWStateDirectory *directory = nil; NSDictionary *saved = nil; BOOL resetting = NO;
+    NSString *stage = @"identity";
+    @try {
+        if (error) *error = nil;
+        NSString *expected = UUIDValue(idfv);
+        if (!BundleValue(bundleID) || !expected || !reset) { FailCode(error,@"invalid_request",@"A bundle identifier and expected IDFV are required."); return nil; }
+        NSDictionary *context = [self target:bundleID error:error]; if (!context) return nil;
+        directory = [self directory:bundleID create:YES exclusive:YES missing:NULL error:error]; if (!directory) return nil;
+        NSDictionary *pending = [self pending:directory error:error]; if (!pending) return nil;
+        if (pending.count) {
+            FailCode(error,@"restore_pending",@"Finish the pending restoration before resetting the application.");
+            if(error&&*error){NSMutableDictionary *info=[(*error).userInfo mutableCopy];info[@"backupIDFV"]=pending[@"idfv"];*error=[NSError errorWithDomain:(*error).domain code:(*error).code userInfo:info];}
+            return nil;
+        }
+        if (![self.backend stopTarget:context[@"target"] error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
+        NSString *current = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);
+        if (error && *error) return nil;
+        if (!Same(current,expected)) { FailCode(error,@"idfv_mismatch",@"The current application IDFV does not match the requested environment."); return nil; }
+        stage = @"backup";
+        saved = [self backup:bundleID metadata:nil directory:directory error:error]; if (!saved) return nil;
+        if (!Same(saved[@"idfv"],expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed while its backup was created."); return nil; }
+        if (![self manifest:bundleID idfv:expected directory:directory verify:YES error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
+        current = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);
+        if (error && *error) return nil;
+        if (!Same(current,expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed before reset."); return nil; }
+        stage = @"reset"; [self event:@"reset" stage:@"prepare"];
+        NSDictionary *recovery=@{@"format":saved[@"format"],@"bundleID":bundleID,@"idfv":expected,
+            @"archiveSHA":saved[@"archiveInfo"][@"sha256"],@"stateArchiveSHA":saved[@"stateArchiveInfo"][@"sha256"],@"date":NSDate.date,@"phase":@"resetting",@"resetRecovery":@YES};
+        if (!WritePlistAt(directory.fd,@"pending.plist",recovery,error)) return nil;
+        resetting = YES;
+        NSDictionary *result = reset(context[@"target"],error); if (!result) { if(error&&!*error)Fail(error,@"Reset returned no verified result."); return nil; }
+        if (![result[@"verified"] boolValue] || ![self guard:context directory:directory refresh:YES error:error]) { if (error && !*error) Fail(error,@"Reset verification did not pass."); return nil; }
+        NSDictionary *fingerprint = [self fingerprint:context error:error]; if (!fingerprint) return nil;
+        NSString *updated = fingerprint[@"data"][@"VendorIdentifier"];
+        if (Same(updated,expected) || ![fingerprint[@"locked"] boolValue]) { Fail(error,@"The reset did not create a new locked fingerprint."); return nil; }
+        if (unlinkat(directory.fd,"pending.plist",0) || fsync(directory.fd)) { POSIXFail(error,@"Cannot finish the verified reset."); return nil; }
+        [self event:@"reset" stage:@"completed"];
+        return @{@"backup_id":[@"snapshot:" stringByAppendingString:expected],@"idfv":expected,@"previous_idfv":expected,@"current_idfv":updated,@"reset":@YES,@"verified":@YES};
+    } @catch (NSException *exception) { if (error && !*error) Fail(error,exception.reason ?: @"Backup and reset failed."); return nil; }
+    @finally {
+        if (error && *error) {
+            NSMutableDictionary *info = [(*error).userInfo mutableCopy]; info[@"step"] = info[@"step"] ?: stage;
+            if (saved) info[@"backupIDFV"] = saved[@"idfv"];
+            if (resetting) info[@"stateMayBePartial"] = @YES;
+            *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:info];
+        }
+        [directory releaseLock];
+    }
+}
 - (NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
@@ -592,7 +644,8 @@ static void CollectAbandonedSnapshots(int parent) {
                 }
                 BOOL source = Same(pending[@"idfv"], idfv);
                 item[@"restorePending"] = @(pending.count > 0); item[@"recoverySource"] = @(source);
-                item[@"finalizationPending"] = @(source && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]]);
+                item[@"resetPending"] = @(source && [pending[@"resetRecovery"] boolValue] && !Same(pending[@"phase"],@"identity-committed"));
+                item[@"finalizationPending"] = @(source && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]] && (![pending[@"resetRecovery"]boolValue] || Same(pending[@"phase"],@"identity-committed")));
                 [entries addObject:item];
             }
         } @finally { closedir(stream); }
@@ -821,8 +874,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
             NSString *currentIDFV = [self.backend currentVendorIdentifierForTarget:target error:error];
             if (![currentIDFV isKindOfClass:NSString.class]) { if (error && !*error) Fail(error, @"Cannot read the current application IDFV."); return nil; }
             BOOL sameIdentity = Same(UUIDValue(currentIDFV), canonical);
-            BOOL finalizing = sameIdentity && pending.count && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]];
-            if (sameIdentity && !finalizing) { FailCode(error,@"active_environment", @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
+            BOOL resettingRecovery = pending.count && [pending[@"resetRecovery"] boolValue];
+            BOOL finalizing = sameIdentity && pending.count && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]] && (!resettingRecovery || Same(pending[@"phase"],@"identity-committed"));
+            if (sameIdentity && !finalizing && !resettingRecovery) { FailCode(error,@"active_environment", @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
             NSMutableDictionary *roots = [NSMutableDictionary new]; NSMutableSet *ids = [NSMutableSet new];
             for (NSString *prefix in manifest[@"roots"]) {
                 NSString *identifier = manifest[@"roots"][prefix][@"containerID"];
@@ -848,8 +902,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                     if (![self backup:bundleID metadata:nil directory:directory error:error]) return nil;
                 }
                 if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
-                NSMutableDictionary *source = [@{ @"format": manifest[@"format"], @"bundleID": bundleID, @"idfv": canonical, @"archiveSHA": manifest[@"archiveInfo"][@"sha256"], @"date": NSDate.date, @"phase":@"restoring" } mutableCopy];
+                NSMutableDictionary *source = [@{ @"format": manifest[@"format"], @"bundleID": bundleID, @"idfv": canonical, @"archiveSHA": manifest[@"archiveInfo"][@"sha256"], @"date": NSDate.date, @"phase":resettingRecovery?@"resetting":@"restoring" } mutableCopy];
                 source[@"stateArchiveSHA"] = manifest[@"stateArchiveInfo"][@"sha256"];
+                if(resettingRecovery)source[@"resetRecovery"]=@YES;
                 recovery = source;
                 if (!WritePlistAt(directory.fd, @"pending.plist", recovery, error)) return nil;
                 SHDWStateProgress progress = [self archiveProgressForPhase:@"restore"];
