@@ -1,7 +1,7 @@
 Package: me.jjolano.shadow
 Name: Shadow
 Pre-Depends: dpkg
-Depends: firmware (>= 15.0), ldid, com.opa334.altlist, com.opa334.libsandy, me.jjolano.fmwk.hookkit (= 3.0.6-1)
+Depends: firmware (>= 15.0), ldid, com.opa334.altlist, com.opa334.libsandy, me.jjolano.fmwk.hookkit (= 3.0.5-1)
 Suggests: com.ps.injectionfoundation
 Recommends: mobilesubstrate, preferenceloader
 Provides: me.jjolano.shadow.beta
@@ -12,13 +12,13 @@ Maintainer: jjolano
 Author: jjolano
 Section: System
 Architecture: iphoneos-arm64
-Version: 4.0.6
+Version: 4.0.6-1
 Installed-Size: 5840
-Filename: https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.6_iphoneos-arm64.deb
-Size: 1181618
-MD5sum: 6ced09d215612c66b1e7db954c5ee30c
-SHA1: d76b4f2d785467015705e1809b44194aed445479
-SHA256: 2ad37d6630718747a6756615154a8bcaab887241448d5adad01e2b2de2090ebd
+Filename: https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.6-1_iphoneos-arm64.deb
+Size: 1181692
+MD5sum: 9202b86fb19e2e5f731f6e3c421f2854
+SHA1: 43a1bd34118438447efe27a190643f976cc311c7
+SHA256: fb3cd52c30bf841b1814dc65bcc804913fd240cedb5c5c1ac951344fb9c3aa6d
 Homepage: https://gitssie.github.io/shadow/
 Depiction: https://gitssie.github.io/shadow/
 SileoDepiction: https://gitssie.github.io/shadow/depiction.json
@@ -34,11 +34,11 @@ Author: jjolano <jjolano@me.com>
 Section: Development
 Tag: role::developer
 Architecture: iphoneos-arm64
-Version: 3.0.6-1
+Version: 3.0.5-1
 Installed-Size: 964
-Filename: https://gitssie.github.io/shadow/pool/me.jjolano.fmwk.hookkit_3.0.6-1_iphoneos-arm64.deb
-Size: 131464
-MD5sum: 855631b397d3e72ca855306b98c53244
-SHA1: e2019df0daa822b463b60460737bb596b9498e25
-SHA256: 2c5848166b5fe32bc25e481b02e5a3e1d2a498ff03d47224800f62ded5ad7c24
+Filename: https://gitssie.github.io/shadow/pool/me.jjolano.fmwk.hookkit_3.0.5-1_iphoneos-arm64.deb
+Size: 131310
+MD5sum: 647e5b31dec145e9e79e15609913c731
+SHA1: bcc18f46952050f0977fce422910964a7e977b0f
+SHA256: 5b2b7c2c3d5c184fef8e3a5042ec679de326a466095b9be001f7c3622cdfe1ac
 

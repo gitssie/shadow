@@ -1,33 +1,33 @@
 {
-  "version": "4.0.6",
+  "version": "4.0.6-1",
   "lane": "rootless",
-  "tag": "70c7a9e7e4372418b3d7eb745ea81966813c9cb2",
-  "sha256": "2ad37d6630718747a6756615154a8bcaab887241448d5adad01e2b2de2090ebd",
-  "filename": "me.jjolano.shadow_4.0.6_iphoneos-arm64.deb",
-  "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.6_iphoneos-arm64.deb",
+  "tag": "c0c7469a8f89659110579066cad862150dbedc40",
+  "sha256": "fb3cd52c30bf841b1814dc65bcc804913fd240cedb5c5c1ac951344fb9c3aa6d",
+  "filename": "me.jjolano.shadow_4.0.6-1_iphoneos-arm64.deb",
+  "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.6-1_iphoneos-arm64.deb",
   "source_url": "https://gitssie.github.io/shadow/",
   "packages": [
     {
       "package": "me.jjolano.shadow",
-      "version": "4.0.6",
+      "version": "4.0.6-1",
       "architecture": "iphoneos-arm64",
-      "filename": "me.jjolano.shadow_4.0.6_iphoneos-arm64.deb",
-      "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.6_iphoneos-arm64.deb",
-      "size": 1181618,
-      "md5": "6ced09d215612c66b1e7db954c5ee30c",
-      "sha1": "d76b4f2d785467015705e1809b44194aed445479",
-      "sha256": "2ad37d6630718747a6756615154a8bcaab887241448d5adad01e2b2de2090ebd"
+      "filename": "me.jjolano.shadow_4.0.6-1_iphoneos-arm64.deb",
+      "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.shadow_4.0.6-1_iphoneos-arm64.deb",
+      "size": 1181692,
+      "md5": "9202b86fb19e2e5f731f6e3c421f2854",
+      "sha1": "43a1bd34118438447efe27a190643f976cc311c7",
+      "sha256": "fb3cd52c30bf841b1814dc65bcc804913fd240cedb5c5c1ac951344fb9c3aa6d"
     },
     {
       "package": "me.jjolano.fmwk.hookkit",
-      "version": "3.0.6-1",
+      "version": "3.0.5-1",
       "architecture": "iphoneos-arm64",
-      "filename": "me.jjolano.fmwk.hookkit_3.0.6-1_iphoneos-arm64.deb",
-      "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.fmwk.hookkit_3.0.6-1_iphoneos-arm64.deb",
-      "size": 131464,
-      "md5": "855631b397d3e72ca855306b98c53244",
-      "sha1": "e2019df0daa822b463b60460737bb596b9498e25",
-      "sha256": "2c5848166b5fe32bc25e481b02e5a3e1d2a498ff03d47224800f62ded5ad7c24"
+      "filename": "me.jjolano.fmwk.hookkit_3.0.5-1_iphoneos-arm64.deb",
+      "package_url": "https://gitssie.github.io/shadow/pool/me.jjolano.fmwk.hookkit_3.0.5-1_iphoneos-arm64.deb",
+      "size": 131310,
+      "md5": "647e5b31dec145e9e79e15609913c731",
+      "sha1": "bcc18f46952050f0977fce422910964a7e977b0f",
+      "sha256": "5b2b7c2c3d5c184fef8e3a5042ec679de326a466095b9be001f7c3622cdfe1ac"
     }
   ]
 }
