@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-hookkit-version-") as temporary:
     framework = base / "HookKit.framework"
     framework.mkdir()
     control = base / "control.in"
-    control.write_text("Depends: firmware (>= 15.0),\n me.jjolano.fmwk.hookkit (= 3.0.6-1)\n")
+    control.write_text("Depends: firmware (>= 15.0),\n me.jjolano.fmwk.hookkit (= 3.0.5-1)\n")
 
     def run(success, message=None):
         result = subprocess.run([sys.executable, str(script), str(control), str(framework)], capture_output=True, text=True)
@@ -28,15 +28,15 @@ with tempfile.TemporaryDirectory(prefix="shadow-hookkit-version-") as temporary:
 
     run(False, "Info.plist")
     metadata({"CFBundleShortVersionString": "3.0.4", "CFBundleVersion": "3.0.4"})
-    run(False, "expected '3.0.6'")
-    metadata({"CFBundleShortVersionString": "3.0.6", "CFBundleVersion": "3.0.6"})
-    run(True, "3.0.6-1")
-    metadata({"CFBundleShortVersionString": "3.0.6", "CFBundleVersion": "3.0.6"}, plistlib.FMT_XML)
+    run(False, "expected '3.0.5'")
+    metadata({"CFBundleShortVersionString": "3.0.5", "CFBundleVersion": "3.0.5"})
+    run(True, "3.0.5-1")
+    metadata({"CFBundleShortVersionString": "3.0.5", "CFBundleVersion": "3.0.5"}, plistlib.FMT_XML)
     run(True)
-    for value in ({}, {"CFBundleShortVersionString": "3.0.6"},
-                  {"CFBundleShortVersionString": "3.0.6", "CFBundleVersion": 306},
-                  {"CFBundleShortVersionString": "3.0.6", "CFBundleVersion": "3.0.4"},
-                  {"CFBundleShortVersionString": " 3.0.6", "CFBundleVersion": "3.0.6"}, []):
+    for value in ({}, {"CFBundleShortVersionString": "3.0.5"},
+                  {"CFBundleShortVersionString": "3.0.5", "CFBundleVersion": 305},
+                  {"CFBundleShortVersionString": "3.0.5", "CFBundleVersion": "3.0.4"},
+                  {"CFBundleShortVersionString": " 3.0.5", "CFBundleVersion": "3.0.5"}, []):
         metadata(value)
         run(False)
     (framework / "Info.plist").write_bytes(b"broken plist")
@@ -46,9 +46,9 @@ with tempfile.TemporaryDirectory(prefix="shadow-hookkit-version-") as temporary:
     for lane in ("rootful-legacy", "rootful-modern", "roothide"):
         control.write_bytes((root / "packaging/controls" / ("control." + lane + ".in")).read_bytes())
         run(True, "not exact")
-    control.write_text("Depends: me.jjolano.fmwk.hookkit (= 3.0.6-1)\n")
+    control.write_text("Depends: me.jjolano.fmwk.hookkit (= 3.0.5-1)\n")
     source = base / "source-control"
-    for version, success in (("3.0.4", False), ("3.0.6-1", True), ("3.0.6-2", False), (None, False)):
+    for version, success in (("3.0.4", False), ("3.0.5-1", True), ("3.0.5-2", False), (None, False)):
         source.write_text("Package: me.jjolano.fmwk.hookkit\n" + ("Version: " + version + "\n" if version else ""))
         result = subprocess.run([sys.executable, str(script), str(control), "--source-control", str(source)], capture_output=True, text=True)
         assert (result.returncode == 0) == success, result.stdout + result.stderr
@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-hookkit-version-") as temporary:
     control.write_text("Depends: me.jjolano.fmwk.hookkit (>= 3.0.4)\n")
     result = subprocess.run([sys.executable, str(script), str(control), "--source-control", str(base / "absent")], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    for requirement in ("=", "= invalid", "= 3.0.6) , me.jjolano.fmwk.hookkit (= 3.0.6"):
+    for requirement in ("=", "= invalid", "= 3.0.5) , me.jjolano.fmwk.hookkit (= 3.0.5"):
         control.write_text("Depends: me.jjolano.fmwk.hookkit (" + requirement + ")\n")
         run(False)
 
