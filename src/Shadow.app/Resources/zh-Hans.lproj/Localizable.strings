@@ -297,3 +297,7 @@
 "Controlled by phone" = "由手机控制";
 
 "Controlled by RV" = "由 RV 控制";
+
+"Search backups" = "搜索备份";
+"Search titles and notes" = "搜索标题、备注";
+"No matching backups" = "没有匹配的备份";

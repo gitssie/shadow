@@ -15,6 +15,18 @@ static inline NSArray<NSDictionary *> *SHDWBackupActiveFirst(NSArray<NSDictionar
     [active addObjectsFromArray:others];
     return [active copy];
 }
+static inline NSArray<NSDictionary *> *SHDWBackupMatching(NSArray<NSDictionary *> *catalog, NSString *query) {
+    NSString *text = [query stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!text.length) return [catalog copy];
+    return [catalog filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *snapshot, NSDictionary *bindings) {
+        (void)bindings;
+        for (NSString *key in @[@"title", @"note"]) {
+            NSString *value = snapshot[key];
+            if ([value isKindOfClass:NSString.class] && [value localizedCaseInsensitiveContainsString:text]) return YES;
+        }
+        return NO;
+    }]];
+}
 static inline BOOL SHDWBackupFinalizationOnly(NSDictionary *snapshot, BOOL sameIDFV) {
     return sameIDFV && ![snapshot[@"unavailable"] boolValue] &&
         [snapshot[@"recoverySource"] boolValue] && [snapshot[@"finalizationPending"] boolValue];
