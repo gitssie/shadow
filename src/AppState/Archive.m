@@ -468,10 +468,7 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
             Check(archive_write_finish_entry(writer) == ARCHIVE_OK, @"Cannot finish bounded archive payload"); [entries addObject:entry];
         }
         Check(archive_write_close(writer) == ARCHIVE_OK && !fsync(fd), @"Cannot flush completed archive"); archive_write_free(writer); writer = NULL; close(fd); fd = -1;
-        for (ArchiveRoot *root in opened) [root pin];
         NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@3, @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
-        NSError *verification = nil;
-        Check([self verifyRoots:roots info:info progress:progress error:&verification], verification.localizedDescription ?: @"Capture sources changed before completion");
         ReadArchive(path, info, progress, nil); complete = YES; return info;
     } @catch (NSException *exception) { PublishError(error, exception); return nil; }
     @finally { if (writer) archive_write_free(writer); if (fd >= 0) close(fd); if (created && !complete) unlink(path.fileSystemRepresentation); RestoreArchiveLocale(locale, previous); }

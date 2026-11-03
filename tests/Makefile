@@ -131,6 +131,7 @@ verify-cleanup:
 verify-app-state:
 	python3 verify-app-state.py
 	python3 verify-archive-links.py
+	python3 verify-archive-recovery.py
 	python3 verify-app-state-progress.py
 	python3 verify-state-durability.py
 

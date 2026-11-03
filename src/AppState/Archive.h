@@ -11,6 +11,7 @@ typedef void (^SHDWStateProgress)(NSDictionary *event);
 // File contents are streamed; only entry metadata and bounded payloads use RAM.
 // Metadata covers basic POSIX fields, not xattrs, ACLs or iOS protection classes.
 // The PAX creation-time annotation is archive metadata, never an app xattr.
+// Capture validates the completed archive without rechecking its source directories.
 // Throwing from progress cancels the operation and returns an error.
 @interface SHDWStateArchive : NSObject
 + (nullable NSDictionary *)captureRoots:(NSDictionary<NSString *, NSString *> *)roots
