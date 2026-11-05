@@ -1159,7 +1159,7 @@ static void* shdw_dlopen_completed(void* handle, const char* path, int mode) {
     if(handle && path && !(mode & RTLD_NOLOAD)) {
         SHADOW_INTERNAL_SCOPE {
             shdw_universal_fingerprint_identity_prepare(_shdw_dyld_rebind_session);
-            shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
+            shdw_universal_fingerprint_environment_dlopen_completed(_shdw_dyld_rebind_session);
         }
         [SHDWHookCoordinator shdw_requestPendingTargetDrain];
     }
@@ -1365,9 +1365,11 @@ void shdw_universal_dyld_updatelibs(const struct mach_header* mh, intptr_t vmadd
             shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
         }
     }
-    if(!_shdw_dyld_bulk_repair_available && shdw_detector_present && !_shdw_dyld_replay_in_progress) {
+    if(!_shdw_dyld_bulk_repair_available && !_shdw_dyld_replay_in_progress) {
         SHADOW_INTERNAL_SCOPE {
-            shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
+            if(shdw_detector_present) {
+                shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
+            }
             SHDWRebindRepairImage(_shdw_dyld_rebind_session, mh);
         }
     }
@@ -2224,9 +2226,11 @@ static void shdw_bulk_load_handler(unsigned imageCount, const struct mach_header
             shdw_universal_fingerprint_environment_prepare(_shdw_dyld_rebind_session);
         }
     }
-    if(shdw_detector_present && !_shdw_dyld_replay_in_progress) {
+    if(!_shdw_dyld_replay_in_progress) {
         SHADOW_INTERNAL_SCOPE {
-            shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
+            if(shdw_detector_present) {
+                shdw_universal_fingerprint_prepare(_shdw_dyld_rebind_session);
+            }
             SHDWRebindRepairImages(_shdw_dyld_rebind_session, mhs, imageCount);
         }
     }

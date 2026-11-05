@@ -354,6 +354,23 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
   assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 2);
+  for (NSString *product in @[@"iPhone10,3", @"iPhone10,6"]) {
+    managerProductType = product.UTF8String;
+    NSMutableDictionary *selected = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
+    assert([selected[@"System"][@"Mode"] isEqual:@"native"]);
+    assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 2);
+    for (NSDictionary *profile in SHDWFingerprintConfiguration.systemProfilesForCurrentDevice) {
+      selected[@"System"] = @{@"Mode":@"profile", @"ProfileID":profile[@"ID"]};
+      assert([SHDWFingerprintConfiguration configurationByValidating:selected error:NULL]);
+      NSDictionary *resolved = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:selected];
+      NSDictionary *expectedBuilds = @{@"16.7.12":@"20H364", @"16.7.16":@"20H392"};
+      assert(expectedBuilds[resolved[@"Version"]] && [resolved[@"Build"] isEqual:expectedBuilds[resolved[@"Version"]]]);
+      assert([resolved[@"Darwin"] isEqual:@"22.6.0"] && [resolved[@"Kernel"] containsString:@"xnu-8796.142.1.703.8~1/RELEASE_ARM64_T8015"]);
+      managerProductType = "iPhone9,2";
+      assert(![SHDWFingerprintConfiguration configurationByValidating:selected error:NULL]);
+      managerProductType = product.UTF8String;
+    }
+  }
   for (NSString *product in @[@"iPhone9,2", @"iPhone9,4", @"iPhone12,1", @"iPhone13,2", @"iPhone15,2", @"unknown"]) {
     managerProductType = product.UTF8String;
     assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"native"]);

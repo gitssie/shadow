@@ -54,6 +54,9 @@ static BOOL SHDWFingerprintBootOffsetBounds(double nativeBoot, double now,
   double upper =
       fmin(kSHDWBootOffsetLimit, floor(now - 3600 - nativeBoot) - 1);
   if (lower > upper) {
+    upper = fmin(kSHDWBootOffsetLimit, floor(now - nativeBoot) - 1);
+  }
+  if (lower > upper) {
     return NO;
   }
   *minimum = (NSInteger)lower;

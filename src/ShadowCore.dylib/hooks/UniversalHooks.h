@@ -28,6 +28,7 @@ BOOL shdw_fingerprint_app_caller(const void *caller);
 void shdw_universal_fingerprint_webkit_prepare(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_system_version_prepare(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_environment_prepare(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_environment_dlopen_completed(SHDWHookSession *hooks);
 void *shdw_sym_policy_lookup_system_version(const char *name);
 void shdw_universal_network_queries(SHDWHookSession *hooks);
 void shdw_universal_envvars_c(SHDWHookSession *hooks);

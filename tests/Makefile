@@ -69,6 +69,7 @@ verify-procargs-filter:
 
 # Pure-C check for the anti-fishhook journal/repair core (rebind_slots.h).
 verify-rebind-repair:
+	python3 verify-late-image-replay.py
 	$(CC) -std=c99 -Wall -Wextra -pthread -o /tmp/shadow-rebind-test \
 		verify-rebind-repair.c
 	/tmp/shadow-rebind-test
@@ -132,6 +133,7 @@ verify-app-state:
 	python3 verify-app-state.py
 	python3 verify-archive-links.py
 	python3 verify-archive-recovery.py
+	python3 verify-backup-capture-boundary.py
 	python3 verify-app-state-progress.py
 	python3 verify-state-durability.py
 

@@ -30,12 +30,13 @@ dyld = (root / "src/ShadowCore.dylib/hooks/Universal/dyld.x").read_text()
 for signature in ("static void* shdw_dlopen_completed(",
                   "void shdw_universal_dyld_updatelibs(", "static void shdw_bulk_load_handler("):
     callback = body(dyld, signature)
-    retry = callback.index("shdw_universal_fingerprint_environment_prepare(")
+    retry = callback.index("shdw_universal_fingerprint_environment_")
     if "shdw_detector_present" in callback:
         assert retry < callback.index("shdw_detector_present")
 
 
 production = environment[environment.index("static unsigned"):]
+production = production.replace("backtrace(", "test_backtrace(").replace("dladdr(", "test_dladdr(")
 production = production.replace('objc_getClass("UIScreen")', 'fixture_get_class("FixtureScreen")')
 production = production.replace('objc_getClass("UIDevice")', 'fixture_get_class("FixtureDevice")')
 production = production.replace("object_getClass(NSProcessInfo.processInfo)", 'fixture_get_class("FixtureProcessInfo")')
@@ -46,6 +47,7 @@ source = r'''
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#include <dlfcn.h>
 #import "FingerprintEnvironment.h"
 #include <assert.h>
 #include <math.h>
@@ -59,6 +61,16 @@ typedef NS_ENUM(NSInteger, UIDeviceBatteryState) {
     withReplacement:(void *)replacement outOldPtr:(void **)original;
 @end
 static BOOL enabled, appCaller=YES;
+static BOOL appMainFrame;
+static int test_backtrace(void **frames, int capacity) {
+    assert(capacity > 0); frames[0]=(void *)2; return 1;
+}
+static int test_dladdr(const void *address, Dl_info *info) {
+    assert(address==(void *)2);
+    info->dli_sname=appMainFrame ? "UIApplicationMain" : "initializer";
+    info->dli_fname="/System/Library/PrivateFrameworks/UIKitCore.framework/UIKitCore";
+    return 1;
+}
 static unsigned internalDepth, installations, nativeCalls;
 static const void *fakeCaller=(void *)1;
 static uint32_t brightnessDraw, batteryDraw;
@@ -112,7 +124,7 @@ static void deliver_pending(void) {
     delivering=YES;block();delivering=NO;
 }
 static Class fixture_get_class(const char *name) {
-    assert(delivering);classLookups++;return objc_getClass(name);
+    assert(delivering || directInstallation);classLookups++;return objc_getClass(name);
 }
 @implementation SHDWHookSession
 - (BOOL)hookMessageInClass:(Class)cls withSelector:(SEL)selector
@@ -151,7 +163,28 @@ static void verify_native(id screen,id device,id process) {
     assert(nativeCalls==before+5);
 }
 int main(int argc,char **argv) {@autoreleasepool {
-    assert(argc==3);brightnessDraw=(uint32_t)strtoul(argv[1],NULL,10);batteryDraw=(uint32_t)strtoul(argv[2],NULL,10);
+    assert(argc==3 || argc==4);brightnessDraw=(uint32_t)strtoul(argv[1],NULL,10);batteryDraw=(uint32_t)strtoul(argv[2],NULL,10);
+    if(argc==4) {
+        Class screenClass=register_class("FixtureScreen");
+        add_getter(screenClass,@selector(brightness),(IMP)value_brightness,@encode(CGFloat));
+        id screen=[screenClass new];
+        SHDWHookSession *session=[SHDWHookSession new];
+        enabled=YES;
+        shdw_universal_fingerprint_environment_prepare(session);
+        assert(pendingBlock && installations==0);
+        directInstallation=YES;
+        shdw_universal_fingerprint_environment_dlopen_completed(session);
+        assert(installations==0 && pendingBlock);
+        appMainFrame=YES;
+        shdw_universal_fingerprint_environment_dlopen_completed(session);
+        directInstallation=NO;
+        SHDWFingerprintEnvironment expected=SHDWFingerprintEnvironmentSample(brightnessDraw,batteryDraw);
+        assert(brightness(screen)==(CGFloat)expected.brightness && randomCalls==2);
+        deliver_pending();
+        for(unsigned i=0;i<100;i++) assert(brightness(screen)==(CGFloat)expected.brightness);
+        assert(randomCalls==2 && installations==1);
+        return 0;
+    }
     for(unsigned b=0;b<450001;b++) {
         unsigned p=b%81;
         SHDWFingerprintEnvironment sample=SHDWFingerprintEnvironmentSample(b,p);
@@ -267,5 +300,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-environment-") as tmp:
         brightness = struct.unpack("f", struct.pack("f", (350000 + draws[0] % 450001) / 1000000))[0]
         expected = f"{brightness:.9g} {10 + draws[1] % 81}"
         assert result.strip() == expected
+        subprocess.run([str(binary), *(str(value) for value in draws), "completion"], check=True)
 
 print("fingerprint environment: float32 brightness precision/ranges, 29/30 threshold, concurrent process snapshot, native scope, inherited methods, clean refusal retry, retained-failure terminal state, deferred coalescing, dirty reentrant availability, disabled delivery and late classes passed")

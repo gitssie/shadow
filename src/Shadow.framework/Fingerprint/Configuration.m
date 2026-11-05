@@ -59,7 +59,15 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
     @{@"ID":@"iphone14-5_ios18.7.8_22H352", @"Name":@"iOS 18.7.8", @"Version":@"18.7.8",
     @"Build":@"22H352", @"Darwin":@"24.6.0",
     @"Kernel":@"Darwin Kernel Version 24.6.0: Wed Mar 4 22:15:14 PST 2026; root:xnu-11417.140.69.706.9~1/RELEASE_ARM64_T8110",
-    @"ProductTypes":@[@"iPhone14,5"]}];
+    @"ProductTypes":@[@"iPhone14,5"]},
+    @{@"ID":@"iphonex_ios16.7.12_20H364", @"Name":@"iOS 16.7.12", @"Version":@"16.7.12",
+    @"Build":@"20H364", @"Darwin":@"22.6.0",
+    @"Kernel":@"Darwin Kernel Version 22.6.0: Tue Jul  2 20:47:35 PDT 2024; root:xnu-8796.142.1.703.8~1/RELEASE_ARM64_T8015",
+    @"ProductTypes":@[@"iPhone10,3",@"iPhone10,6"]},
+    @{@"ID":@"iphonex_ios16.7.16_20H392", @"Name":@"iOS 16.7.16", @"Version":@"16.7.16",
+    @"Build":@"20H392", @"Darwin":@"22.6.0",
+    @"Kernel":@"Darwin Kernel Version 22.6.0: Tue Jul  2 20:47:35 PDT 2024; root:xnu-8796.142.1.703.8~1/RELEASE_ARM64_T8015",
+    @"ProductTypes":@[@"iPhone10,3",@"iPhone10,6"]}];
   });
   return profiles;
 }
