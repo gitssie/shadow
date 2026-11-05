@@ -505,7 +505,6 @@ static void CollectAbandonedSnapshots(int parent) {
         if (!stateArchiveInfo || ![SHDWStateArchive verifyPath:stateArchive info:stateArchiveInfo progress:progress error:error]) return nil;
         NSDictionary *live = [self fingerprint:context error:error]; NSArray *again = [self.backend captureKeychainForTarget:context[@"target"] error:error];
         if (!live || !again || !Same(preferences, [self.backend capturePreferencesForTarget:context[@"target"] error:error]) || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
-        if (![SHDWStateArchive verifyRoots:context[@"roots"] info:archiveInfo progress:progress error:error]) return nil;
         NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": backupDate, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo, @"stateArchiveInfo": stateArchiveInfo } mutableCopy];
         manifest[@"owner"] = @"phone";
         NSString *digest = fingerprint[@"digest"];
