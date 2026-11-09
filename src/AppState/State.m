@@ -574,6 +574,14 @@ static void CollectAbandonedSnapshots(int parent) {
 }
 - (NSDictionary *)backupAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
     reset:(NSDictionary *(^)(NSDictionary *, NSError **))reset error:(NSError **)error {
+    return [self resetBundle:bundleID expectedIDFV:idfv createBackup:YES reset:reset error:error];
+}
+- (NSDictionary *)discardAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
+    reset:(NSDictionary *(^)(NSDictionary *, NSError **))reset error:(NSError **)error {
+    return [self resetBundle:bundleID expectedIDFV:idfv createBackup:NO reset:reset error:error];
+}
+- (NSDictionary *)resetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv createBackup:(BOOL)createBackup
+    reset:(NSDictionary *(^)(NSDictionary *, NSError **))reset error:(NSError **)error {
     SHDWStateDirectory *directory = nil; NSDictionary *saved = nil; BOOL resetting = NO;
     NSString *stage = @"identity";
     @try {
@@ -592,25 +600,37 @@ static void CollectAbandonedSnapshots(int parent) {
         NSString *current = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);
         if (error && *error) return nil;
         if (!Same(current,expected)) { FailCode(error,@"idfv_mismatch",@"The current application IDFV does not match the requested environment."); return nil; }
-        stage = @"backup";
-        saved = [self backup:bundleID metadata:nil directory:directory error:error]; if (!saved) return nil;
-        if (!Same(saved[@"idfv"],expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed while its backup was created."); return nil; }
-        if (![self manifest:bundleID idfv:expected directory:directory verify:YES error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
+        if (self.requester && !Same(self.requester,@"phone")) { FailCode(error,@"ownership_conflict",@"Only the phone can reset its active environment."); return nil; }
+        if (createBackup) {
+            stage = @"backup";
+            saved = [self backup:bundleID metadata:nil directory:directory error:error]; if (!saved) return nil;
+            if (!Same(saved[@"idfv"],expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed while its backup was created."); return nil; }
+            if (![self manifest:bundleID idfv:expected directory:directory verify:YES error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
+        } else {
+            struct stat snapshot;
+            if (!fstatat(directory.snapshots, expected.fileSystemRepresentation, &snapshot, AT_SYMLINK_NOFOLLOW)) {
+                NSDictionary *existing = [self manifest:bundleID idfv:expected directory:directory verify:NO error:error];
+                if (!existing || ![self accessManifest:existing error:error]) return nil;
+            } else if (errno != ENOENT) { POSIXFail(error,@"Cannot inspect the active snapshot."); return nil; }
+        }
         current = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);
         if (error && *error) return nil;
         if (!Same(current,expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed before reset."); return nil; }
         stage = @"reset"; [self event:@"reset" stage:@"prepare"];
-        NSDictionary *recovery=@{@"format":saved[@"format"],@"bundleID":bundleID,@"idfv":expected,
-            @"archiveSHA":saved[@"archiveInfo"][@"sha256"],@"stateArchiveSHA":saved[@"stateArchiveInfo"][@"sha256"],@"date":NSDate.date,@"phase":@"resetting",@"resetRecovery":@YES};
-        if (!WritePlistAt(directory.fd,@"pending.plist",recovery,error)) return nil;
+        if (createBackup) {
+            NSDictionary *recovery=@{@"format":saved[@"format"],@"bundleID":bundleID,@"idfv":expected,
+                @"archiveSHA":saved[@"archiveInfo"][@"sha256"],@"stateArchiveSHA":saved[@"stateArchiveInfo"][@"sha256"],@"date":NSDate.date,@"phase":@"resetting",@"resetRecovery":@YES};
+            if (!WritePlistAt(directory.fd,@"pending.plist",recovery,error)) return nil;
+        }
         resetting = YES;
         NSDictionary *result = reset(context[@"target"],error); if (!result) { if(error&&!*error)Fail(error,@"Reset returned no verified result."); return nil; }
         if (![result[@"verified"] boolValue] || ![self guard:context directory:directory refresh:YES error:error]) { if (error && !*error) Fail(error,@"Reset verification did not pass."); return nil; }
         NSDictionary *fingerprint = [self fingerprint:context error:error]; if (!fingerprint) return nil;
         NSString *updated = fingerprint[@"data"][@"VendorIdentifier"];
         if (Same(updated,expected) || ![fingerprint[@"locked"] boolValue]) { Fail(error,@"The reset did not create a new locked fingerprint."); return nil; }
-        if (unlinkat(directory.fd,"pending.plist",0) || fsync(directory.fd)) { POSIXFail(error,@"Cannot finish the verified reset."); return nil; }
+        if (createBackup && (unlinkat(directory.fd,"pending.plist",0) || fsync(directory.fd))) { POSIXFail(error,@"Cannot finish the verified reset."); return nil; }
         [self event:@"reset" stage:@"completed"];
+        if (!createBackup) return @{@"previous_idfv":expected,@"current_idfv":updated,@"reset":@YES,@"verified":@YES,@"backup_created":@NO};
         return @{@"backup_id":[@"snapshot:" stringByAppendingString:expected],@"idfv":expected,@"previous_idfv":expected,@"current_idfv":updated,@"reset":@YES,@"verified":@YES};
     } @catch (NSException *exception) { if (error && !*error) Fail(error,exception.reason ?: @"Backup and reset failed."); return nil; }
     @finally {

@@ -344,6 +344,31 @@ static void StatePreferenceReplayTests(NSString *base) {
     puts("app-state preference replay: immutable data, updated state and fail-closed post-replay finalization passed");
 }
 
+static void DiscardResetTests(NSString *base) {
+    NSString *root=[base stringByAppendingPathComponent:@"discard-store"],*data=[base stringByAppendingPathComponent:@"discard-live"];
+    Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private discard store");Mk(data);Put(data,MCM,Bytes(@"metadata"));Put(data,@"Documents/account",Bytes(@"failed account"));
+    FakeBackend *backend=[FakeBackend new];backend.calls=[NSMutableArray new];backend.target=@{@"bundleID":BID,@"token":@"discard-install",@"version":@"1",@"build":@"1",@"containers":@{@"data":data},@"keychainGroups":@[]};backend.fingerprint=FP(A,@"failed",YES);backend.keychain=@[];backend.preferences=@{};backend.failCapture=YES;
+    NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];
+    __block NSUInteger resets=0;
+    NSDictionary *(^reset)(NSDictionary *,NSError **)=^NSDictionary *(NSDictionary *target,NSError **failure){
+        (void)target;(void)failure;resets++;
+        Check(![NSFileManager.defaultManager fileExistsAtPath:SnapshotPath(root,A,@"manifest.plist")],@"discard created backup");
+        NSError *busy=nil;Check(![store deleteBundle:BID idfv:A error:&busy]&&[busy.userInfo[@"errorCode"]isEqual:@"busy"],@"discard released exclusive lock before reset");
+        backend.fingerprint=FP(B,@"cleaned",YES);return @{@"verified":@YES};
+    };
+    Check(![store discardAndResetBundle:BID expectedIDFV:B reset:reset error:&error]&&resets==0&&[error.userInfo[@"errorCode"]isEqual:@"idfv_mismatch"],@"discard ignored identity mismatch");
+    NSDictionary *reply=[store discardAndResetBundle:BID expectedIDFV:A reset:reset error:&error];
+    Check(reply&&resets==1&&[reply[@"previous_idfv"]isEqual:A]&&[reply[@"current_idfv"]isEqual:B]&&[reply[@"verified"]boolValue]&&[reply[@"reset"]boolValue]&&[reply[@"backup_created"]isEqual:@NO]&&!reply[@"backup_id"],@"discard failed without backup capture");
+    Check([store catalogBundle:BID error:&error].count==0,@"discard published a snapshot");
+    Check(![store discardAndResetBundle:BID expectedIDFV:B reset:^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;*failure=Problem(@"discard reset failure");return nil;} error:&error]&&[error.userInfo[@"stateMayBePartial"]boolValue]&&!error.userInfo[@"backupIDFV"],@"discard failure lost partial-state semantics");
+    Check(![store discardAndResetBundle:BID expectedIDFV:B reset:^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;(void)failure;return @{@"verified":@YES};} error:&error],@"discard accepted unchanged fingerprint");
+    Check([store catalogBundle:BID error:&error].count==0,@"failed discard created backup");
+    backend.failCapture=NO;Check([store backupBundle:BID metadata:@{@"note":@"preserve"} error:&error]!=nil,@"discard existing archive fixture");
+    NSString *beforeSHA=Digest(SnapshotPath(root,B,@"data.tar.zst"));
+    reply=[store discardAndResetBundle:BID expectedIDFV:B reset:^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;(void)failure;backend.fingerprint=FP(A,@"new",YES);return @{@"verified":@YES};} error:&error];
+    Check(reply&&[beforeSHA isEqual:Digest(SnapshotPath(root,B,@"data.tar.zst"))]&&[store recheckBundle:BID idfv:B error:&error],@"discard altered existing backup");
+    puts("discard/reset: identity guard, exclusive lock, no capture/archive, verified identity and partial failure passed");
+}
 static void BackupResetTests(NSString *base) {
     NSString *root=[base stringByAppendingPathComponent:@"reset-store"],*data=[base stringByAppendingPathComponent:@"reset-live"];
     Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private reset store");Mk(data);Put(data,MCM,Bytes(@"metadata"));Put(data,@"Documents/account",Bytes(@"original account"));
@@ -369,6 +394,7 @@ static void BackupResetTests(NSString *base) {
     NSString *originalSHA=Digest(SnapshotPath(root,A,@"data.tar.zst"));
     NSUInteger oldResets=resets;
     Check(![store backupAndResetBundle:BID expectedIDFV:A reset:reset error:&error]&&resets==oldResets&&[error.userInfo[@"errorCode"]isEqual:@"restore_pending"],@"reset retry overwrote its recovery backup");
+    Check(![store discardAndResetBundle:BID expectedIDFV:A reset:reset error:&error]&&resets==oldResets&&[error.userInfo[@"errorCode"]isEqual:@"restore_pending"],@"discard ignored pending recovery");
     Check([originalSHA isEqual:Digest(SnapshotPath(root,A,@"data.tar.zst"))],@"reset retry changed its good archive");
     Put(data,@"Documents/partial",Bytes(@"partially cleaned state"));
     backend.failRestore=YES;Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"forced recovery failure succeeded");backend.failRestore=NO;
@@ -384,6 +410,7 @@ static void BackupResetTests(NSString *base) {
     Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,@"recover unchanged-fingerprint reset fixture");
     backend.fingerprint=FP(B,@"rv owner",YES);Check([store claimBundle:BID idfv:A error:&error]!=nil,@"claim reset fixture");backend.fingerprint=FP(A,@"owned current",YES);
     NSUInteger before=resets;Check(![store backupAndResetBundle:BID expectedIDFV:A reset:reset error:&error]&&resets==before&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"RV ownership bypassed mandatory backup");
+    Check(![store discardAndResetBundle:BID expectedIDFV:A reset:reset error:&error]&&resets==before&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"discard bypassed RV ownership");
     puts("backup/reset: IDFV mismatch, mandatory backup, full-operation lock, retained recovery backup, changed fingerprint and ownership passed");
 }
 static void StateTests(NSString *base) {
@@ -522,7 +549,7 @@ static void RecoveryAndCatalogTests(NSString *base) {
 static void Stress(NSString *base) {
     NSString *source=[base stringByAppendingPathComponent:@"stress-source"],*destination=[base stringByAppendingPathComponent:@"stress-destination"],*archive=[base stringByAppendingPathComponent:@"stress.tar.zst"];Mk(source);Mk(destination);for(NSUInteger i=0;i<2048;i++)Put(source,[NSString stringWithFormat:@"small/%04lu",(unsigned long)i],Bytes([NSString stringWithFormat:@"record-%lu",(unsigned long)i]));NSString *large=[source stringByAppendingPathComponent:@"large.bin"];int fd=open(large.fileSystemRepresentation,O_CREAT|O_WRONLY|O_TRUNC,0644);Check(fd>=0,@"open large fixture");unsigned char buffer[131072];uint32_t random=0x12345678;for(NSUInteger i=0;i<512;i++){for(NSUInteger j=0;j<sizeof(buffer);j++){random^=random<<13;random^=random>>17;random^=random<<5;buffer[j]=(unsigned char)random;}Check(write(fd,buffer,sizeof(buffer))==sizeof(buffer),@"write large fixture");}close(fd);struct rusage before,after;getrusage(RUSAGE_SELF,&before);__block NSUInteger events=0,chunkEvents=0;__block uint64_t greatest=0,largestChunk=0;NSMutableDictionary *phaseBytes=[NSMutableDictionary new];SHDWStateProgress progress=^(NSDictionary *event){events++;uint64_t current=[event[@"bytes"] unsignedLongLongValue];greatest=MAX(greatest,current);NSString *phase=event[@"phase"];uint64_t prior=[phaseBytes[phase] unsignedLongLongValue];if(current>=prior&&current>prior){largestChunk=MAX(largestChunk,current-prior);chunkEvents++;}phaseBytes[phase]=@(current);};NSError *error=nil;NSDictionary *info=[SHDWStateArchive captureRoots:@{@"containers/data":source} payloads:@{} toPath:archive progress:progress error:&error];Check(info!=nil,[NSString stringWithFormat:@"stress capture %@",error]);Check([SHDWStateArchive verifyPath:archive info:info progress:progress error:&error],@"stress archive verify");Check([SHDWStateArchive restorePath:archive info:info roots:@{@"containers/data":destination} progress:progress error:&error],@"stress restore");Check([SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:progress error:&error],@"stress all-file verify");getrusage(RUSAGE_SELF,&after);Check([Digest(large)isEqual:Digest([destination stringByAppendingPathComponent:@"large.bin"])],@"large binary digest mismatch");Check([NSFileManager.defaultManager contentsOfDirectoryAtPath:[destination stringByAppendingPathComponent:@"small"] error:NULL].count==2048,@"many small files lost");Check(events>512&&chunkEvents>=512&&greatest>=64ULL*1024*1024,@"streaming byte progress missing");Check(largestChunk<=131072,@"archive progress omitted bounded chunk records");Check(after.ru_maxrss-before.ru_maxrss<48LL*1024*1024,@"streaming exceeded 48MiB RSS growth for 64MiB file");printf("app-state streaming: 2048 files +64MiB, %lu progress events, RSS growth %.1fMiB passed\n",(unsigned long)events,(after.ru_maxrss-before.ru_maxrss)/1048576.0);
 }
-int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
+int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);DiscardResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
 '''
 
 

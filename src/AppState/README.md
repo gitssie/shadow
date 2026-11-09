@@ -257,3 +257,15 @@ Known reset errors retain `backupIDFV` and `step`; the shared SDK forwards these
 and HTTP maps the saved identity to `backup_id`. Timeouts remain unknown and are
 never replayed automatically. Device cleanup permissions and UI behavior still
 require separate live validation; host fixture results do not establish those.
+
+## Explicit discard and reset
+
+`discardAndResetBundle:expectedIDFV:reset:error:` is a separate opt-in operation
+for discarding the live environment. It shares stop/identity checks, the exclusive
+App directory lock, native cleanup callback and final changed/locked fingerprint
+verification with backup/reset. It never captures or publishes a snapshot; existing
+snapshots stay unchanged. Pending restoration and foreign snapshot ownership remain
+blocking conditions. With no captured source, no backup recovery record is created.
+Failures once reset begins report `stateMayBePartial`; a lost response does not
+authorize automatic replay. Success omits `backup_id` and returns `previous_idfv`,
+`current_idfv`, `reset=true`, `verified=true`, `backup_created=false`.

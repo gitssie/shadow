@@ -45,6 +45,9 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 // lock through identity validation, verified backup publication and reset.
 - (nullable NSDictionary *)backupAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
     reset:(NSDictionary * _Nullable (^)(NSDictionary *target, NSError **error))reset error:(NSError **)error;
+// Explicitly discards the expected live environment; creates no snapshot.
+- (nullable NSDictionary *)discardAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
+    reset:(NSDictionary * _Nullable (^)(NSDictionary *target, NSError **error))reset error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error;
 - (nullable NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(nullable NSString *)sha error:(NSError **)error;
 - (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)manifest state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error;

@@ -82,3 +82,16 @@ owns mandatory verified backup and full reset in one operation; callers must not
 compose independent cleanup commands or retry after transport loss. A helper
 capability check must include `backupAndReset` before invoking it. Known failures
 retain `backupIDFV` and `step`; interruption remains `outcomeUnknown`.
+
+### Explicit discard/reset
+
+`discardAndReset` accepts only the expected current `idfv`. It stops the selected
+App and uses the same full cleanup and changed-identity verification as
+`backupAndReset`, but creates no snapshot or backup recovery archive. The caller
+must explicitly choose to discard the live environment. Existing snapshots are
+retained; pending restoration and ownership conflicts are rejected. Success is
+`{previous_idfv, current_idfv, reset:true, verified:true, backup_created:false}`
+without a `backup_id`. Check the helper capabilities for `discardAndReset`;
+older installed helpers do not support it. Interrupted mutations are unknown,
+and failures after cleanup begins report possible partial live state. Do not
+replay the mutation after a lost response.
