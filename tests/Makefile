@@ -120,6 +120,8 @@ verify-fingerprint:
 .PHONY: verify-fingerprint
 
 verify-cleanup:
+	python3 verify-reset-baseline.py
+	python3 verify-documents-reset.py
 	python3 verify-process-stop.py
 	python3 verify-cleanup-engine.py
 	python3 verify-ownership-diagnostics.py
@@ -220,3 +222,21 @@ verify-toolchain:
 
 test: verify-toolchain
 .PHONY: verify-toolchain
+
+verify-reset-baseline:
+	python3 verify-reset-baseline.py
+
+test: verify-reset-baseline
+.PHONY: verify-reset-baseline
+
+verify-advertising:
+	python3 verify-advertising.py
+
+test: verify-advertising
+.PHONY: verify-advertising
+
+verify-fingerprint-diagnostics:
+	python3 verify-fingerprint-diagnostics.py
+
+test: verify-fingerprint-diagnostics
+.PHONY: verify-fingerprint-diagnostics

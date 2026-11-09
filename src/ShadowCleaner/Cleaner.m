@@ -864,6 +864,9 @@ static void SaveSession(NSString *identifier, NSDictionary *session) {
 // Shared by the Manager's selected-step flow and the atomic backup/reset action.
 static NSUInteger CleanupRunStep(NSDictionary *target, NSString *argument, NSArray *queries) {
     NSUInteger count = 0;
+#ifdef SHADOW_STATE_SUPPORT
+    if ([argument isEqual:@"files"]) ScopedWorker(target, @"state-fingerprint-reset-baseline", @{@"apply":@NO});
+#endif
     if ([argument isEqual:@"keychain"]) { mutated = YES; Keychain(target, YES, YES); }
     else {
         // Synchronize known domains around deletion. Cache invalidation is domain-wide;
@@ -875,6 +878,9 @@ static NSUInteger CleanupRunStep(NSDictionary *target, NSString *argument, NSArr
         if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
         if ([argument isEqual:@"receipts"]) BundleReceipts(target, YES, &count);
     }
+#ifdef SHADOW_STATE_SUPPORT
+    if ([argument isEqual:@"files"]) { mutated = YES; ScopedWorker(target, @"state-fingerprint-reset-baseline", @{@"apply":@YES}); }
+#endif
     return count;
 }
 static void CleanupFinalize(NSDictionary *target, NSArray *steps) {

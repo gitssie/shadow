@@ -1,4 +1,5 @@
 #import "State.h"
+#import "../Shadow.framework/Headers/Shadow/FingerprintResetBaseline.h"
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <fcntl.h>
@@ -369,6 +370,7 @@ static void CollectAbandonedSnapshots(int parent) {
 - (NSDictionary *)fingerprint:(NSDictionary *)context error:(NSError **)error {
     NSDictionary *value = [self.backend captureFingerprintForTarget:context[@"target"] error:error];
     if (![value isKindOfClass:NSDictionary.class] || ![value[@"data"] isKindOfClass:NSDictionary.class] || ![value[@"configuration"] isKindOfClass:NSDictionary.class] || ![value[@"locked"] isKindOfClass:NSNumber.class] || !UUIDValue(value[@"data"][@"VendorIdentifier"]) || !Same(value[@"data"][@"VendorIdentifier"], UUIDValue(value[@"data"][@"VendorIdentifier"]))) { if (error && !*error) Fail(error, @"The application has no valid fingerprint."); return nil; }
+    if (value[@"resetBaseline"] && !SHDWFingerprintResetBaselineValid(value[@"resetBaseline"])) { FailCode(error, @"invalid_archive", @"Directory reset baseline is invalid."); return nil; }
     return [self.backend validateFingerprint:value target:context[@"target"] error:error] ? value : nil;
 }
 - (BOOL)validateArchiveOwnership:(NSDictionary *)info error:(NSError **)error {
@@ -436,8 +438,9 @@ static void CollectAbandonedSnapshots(int parent) {
     NSDictionary *data = [SHDWStateArchive readPayloadsAtPath:path info:manifest[@"stateArchiveInfo"] names:@[IdentityPayload, KeychainPayload, PreferencesPayload] error:error]; if (!data) return nil;
     id identity = [NSPropertyListSerialization propertyListWithData:data[IdentityPayload] ?: [NSData data] options:NSPropertyListImmutable format:NULL error:error];
     id keychain = [NSPropertyListSerialization propertyListWithData:data[KeychainPayload] ?: [NSData data] options:NSPropertyListImmutable format:NULL error:error];
-    if (![identity isKindOfClass:NSDictionary.class] || [identity count] != 2 || ![identity[@"data"] isKindOfClass:NSDictionary.class] || ![identity[@"configuration"] isKindOfClass:NSDictionary.class] || !Same(identity[@"data"][@"VendorIdentifier"], manifest[@"idfv"]) || ![keychain isKindOfClass:NSArray.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot identity or credential payload is invalid."); return nil; }
+    if (![identity isKindOfClass:NSDictionary.class] || [identity count] != (identity[@"resetBaseline"] ? 3 : 2) || (identity[@"resetBaseline"] && !SHDWFingerprintResetBaselineValid(identity[@"resetBaseline"])) || ![identity[@"data"] isKindOfClass:NSDictionary.class] || ![identity[@"configuration"] isKindOfClass:NSDictionary.class] || !Same(identity[@"data"][@"VendorIdentifier"], manifest[@"idfv"]) || ![keychain isKindOfClass:NSArray.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot identity or credential payload is invalid."); return nil; }
     NSMutableDictionary *result = [@{ @"fingerprint": @{ @"data": identity[@"data"], @"configuration": identity[@"configuration"], @"locked": @YES }, @"keychain": keychain } mutableCopy];
+    if (identity[@"resetBaseline"]) { NSMutableDictionary *fingerprint = [result[@"fingerprint"] mutableCopy]; fingerprint[@"resetBaseline"] = identity[@"resetBaseline"]; result[@"fingerprint"] = fingerprint; }
     {
         id preferences = [NSPropertyListSerialization propertyListWithData:data[PreferencesPayload] ?: [NSData data] options:NSPropertyListImmutable format:NULL error:error];
         if (![preferences isKindOfClass:NSDictionary.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot preferences are invalid."); return nil; }
@@ -485,7 +488,8 @@ static void CollectAbandonedSnapshots(int parent) {
         NSMutableDictionary *merged=[@{@"title":previous[@"title"]?:[nameFormatter stringFromDate:backupDate],@"note":previous[@"note"]?:@""}mutableCopy];[merged addEntriesFromDictionary:metadata];resolvedMetadata=merged;
     }
     NSDictionary *display = Metadata(resolvedMetadata ?: (previous ? @{ @"title": previous[@"title"], @"note": previous[@"note"] } : nil), [nameFormatter stringFromDate:backupDate], error); if (!display) return nil;
-    NSDictionary *identity = @{ @"data": fingerprint[@"data"], @"configuration": fingerprint[@"configuration"] };
+    NSMutableDictionary *identity = [@{ @"data": fingerprint[@"data"], @"configuration": fingerprint[@"configuration"] } mutableCopy];
+    if (fingerprint[@"resetBaseline"]) identity[@"resetBaseline"] = fingerprint[@"resetBaseline"];
     NSData *identityData = Encode(identity, error), *keychainData = Encode(records, error), *preferencesData = Encode(preferences, error); if (!identityData || !keychainData || !preferencesData || identityData.length > MaximumPayloadSize || keychainData.length > MaximumPayloadSize || preferencesData.length > MaximumPayloadSize) { if (error && !*error) Fail(error, @"Snapshot identity or credentials are too large."); return nil; }
     NSString *stage = [@".capture-" stringByAppendingString:NSUUID.UUID.UUIDString];
     if (![self guard:context directory:directory refresh:YES error:error]) return nil;
@@ -504,7 +508,7 @@ static void CollectAbandonedSnapshots(int parent) {
         NSDictionary *stateArchiveInfo = [SHDWStateArchive captureRoots:@{} payloads:@{ IdentityPayload: identityData, KeychainPayload: keychainData, PreferencesPayload: preferencesData } toPath:stateArchive progress:progress error:error];
         if (!stateArchiveInfo || ![SHDWStateArchive verifyPath:stateArchive info:stateArchiveInfo progress:progress error:error]) return nil;
         NSDictionary *live = [self fingerprint:context error:error]; NSArray *again = [self.backend captureKeychainForTarget:context[@"target"] error:error];
-        if (!live || !again || !Same(preferences, [self.backend capturePreferencesForTarget:context[@"target"] error:error]) || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
+        if (!live || !again || !Same(preferences, [self.backend capturePreferencesForTarget:context[@"target"] error:error]) || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || !Same(live[@"resetBaseline"], identity[@"resetBaseline"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
         NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": backupDate, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo, @"stateArchiveInfo": stateArchiveInfo } mutableCopy];
         manifest[@"owner"] = @"phone";
         NSString *digest = fingerprint[@"digest"];
@@ -849,7 +853,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 }
 - (BOOL)verifyRestoredFingerprint:(NSDictionary *)expected context:(NSDictionary *)context error:(NSError **)error {
     NSDictionary *actual = [self fingerprint:context error:error];
-    if (actual && Same(actual[@"data"], expected[@"data"]) && Same(actual[@"configuration"], expected[@"configuration"]) && [actual[@"locked"] boolValue]) return YES;
+    if (actual && Same(actual[@"data"], expected[@"data"]) && Same(actual[@"configuration"], expected[@"configuration"]) && (!expected[@"resetBaseline"] || SHDWFingerprintResetBaselineTimesEqual(actual[@"resetBaseline"], expected[@"resetBaseline"])) && [actual[@"locked"] boolValue]) return YES;
     if (error && !*error) Fail(error, @"Restored fingerprint did not pass verification."); return NO;
 }
 - (NSDictionary *)restoreBundle:(NSString *)bundleID idfv:(NSString *)idfv saveCurrent:(BOOL)saveCurrent error:(NSError **)error {

@@ -1,6 +1,8 @@
 #import <Shadow/Settings.h>
 #import <Shadow/FingerprintState.h>
 #import <Shadow/FingerprintOwner.h>
+#import <Shadow/FingerprintVolumeTime.h>
+#import <Shadow/FingerprintAdvertising.h>
 
 #import "../common.h"
 #import "SettingsMigration.h"
@@ -75,6 +77,8 @@ static BOOL SHDWValidFingerprintData(id value) {
   id nativeBoot = value[@"NativeBootTimestamp"];
   id bootUUID = value[@"BootSessionUUID"];
   id nativeBootUUID = value[@"NativeBootSessionUUID"];
+  id advertisingIdentifier = value[@"AdvertisingIdentifier"];
+  if (advertisingIdentifier && (!SHDWFingerprintAdvertisingUUIDValid(advertisingIdentifier))) return NO;
   id vendorIdentifier = value[@"VendorIdentifier"];
   if (vendorIdentifier) {
     if (![vendorIdentifier isKindOfClass:[NSString class]]) {
@@ -205,6 +209,20 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
 }
 
 @implementation ShadowSettings
+- (NSDictionary *)storedFingerprintApplicationForIdentifier:(NSString *)identifier {
+  if (!identifier.length) return nil;
+  @synchronized(self) {
+    [self.userDefaults synchronize];
+    id app=[self.userDefaults objectForKey:identifier];
+    if ([app isKindOfClass:NSDictionary.class]) return [app copy];
+    for (NSString *path in @[JBPath(@SHADOW_PREFS_PLIST), @SHADOW_PREFS_PLIST]) {
+      id root=[NSDictionary dictionaryWithContentsOfFile:path];
+      id candidate=[root isKindOfClass:NSDictionary.class] ? root[identifier] : nil;
+      if ([candidate isKindOfClass:NSDictionary.class]) return [candidate copy];
+    }
+    return nil;
+  }
+}
 @synthesize defaultSettings, userDefaults;
 
 - (BOOL)isValidFingerprintData:(NSDictionary *)data {
@@ -507,6 +525,19 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
     if (!generated) {
       return NO;
     }
+    NSDate *generatedAt = NSDate.date;
+    NSTimeZone *generatedZone = NSTimeZone.localTimeZone;
+    int64_t first = 0;
+    uint32_t count = 0;
+    if (!SHDWFingerprintVolumeTimeRange(generatedAt, generatedZone,
+          generatedAt.timeIntervalSince1970, &first, &count)) return NO;
+    NSMutableDictionary *volumeData = [generated mutableCopy];
+    volumeData[@"AdvertisingIdentifier"] = [NSUUID UUID].UUIDString;
+    volumeData[@"HomeVolumeCreationTime"] = @(first + arc4random_uniform(count));
+    volumeData[@"HomeVolumeCreationTimeZone"] = generatedZone.name;
+    volumeData[@"HomeVolumeCreationTimeGeneratedAt"] = @(generatedAt.timeIntervalSince1970);
+    volumeData[@"HomeVolumeCreationTimeValidation"] = @"unverified";
+    generated = volumeData;
     id previousData = app[@"Fingerprint_Data"];
     NSNumber *previousMemory = [previousData isKindOfClass:NSDictionary.class]
         ? previousData[@"MemoryDelta"] : nil;

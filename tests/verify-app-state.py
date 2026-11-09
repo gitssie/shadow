@@ -286,6 +286,30 @@ static void ReinstallationTests(NSString *base) {
     store.progressHandler=nil;backend.fingerprint=FP(B,@"retry",NO);Reset(backend);Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil&&[ContentTree(group) count]==0,@"retry failed to clear additional-container residue");
     puts("app-state reinstall/update container mapping: passed");
 }
+static void ResetBaselineArchiveTests(NSString *base) {
+    NSString *root=[base stringByAppendingPathComponent:@"baseline-store"],*data=[base stringByAppendingPathComponent:@"baseline-live"];
+    Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private baseline store");Mk(data);Put(data,@"Documents/value",Bytes(@"saved"));
+    NSString *documents=[data stringByAppendingPathComponent:@"Documents"];
+    SetBirth(documents,1000000000,123456789);NSDictionary *savedDates=Times(documents);
+    NSDictionary *baseline=@{@"Version":@1,@"Containers":@{BID:@{@"Identity":[@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0],@"Seconds":@999000000,@"Nanoseconds":@123456789}}};
+    FakeBackend *backend=[FakeBackend new];backend.calls=[NSMutableArray new];backend.keychain=@[];backend.preferences=@{};
+    backend.target=@{@"bundleID":BID,@"token":@"baseline-install",@"version":@"1",@"build":@"1",@"containers":@{@"data":data},@"keychainGroups":@[]};
+    NSMutableDictionary *saved=[FP(A,@"saved-baseline",NO) mutableCopy];saved[@"resetBaseline"]=baseline;backend.fingerprint=saved;
+    NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];Check(store!=nil,@"create reset baseline store");
+    Check([store backupBundle:BID metadata:nil error:&error]!=nil,[NSString stringWithFormat:@"backup optional baseline: %@",error]);
+    NSString *statePath=SnapshotPath(root,A,@"state.tar.zst");NSData *oldState=[NSData dataWithContentsOfFile:statePath];
+    backend.fingerprint=FP(B,@"current",NO);SetBirth(documents,1700000000,0);Put(data,@"Documents/value",Bytes(@"live"));Reset(backend);
+    Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,[NSString stringWithFormat:@"restore optional baseline: %@",error]);
+    Check([backend.fingerprint[@"resetBaseline"]isEqual:baseline],@"backup did not restore original reset baseline");
+    Check(SameBirth(savedDates,Times(documents))&&[Get(data,@"Documents/value")isEqual:Bytes(@"saved")],@"baseline restore changed archived Documents time or content");
+    Check([oldState isEqual:[NSData dataWithContentsOfFile:statePath]],@"restore rewrote saved baseline archive");
+    backend.fingerprint=FP(C,@"legacy-without-baseline",NO);Reset(backend);
+    Check([store backupBundle:BID metadata:nil error:&error]!=nil,@"capture legacy identity without optional baseline");
+    NSDictionary *legacyDates=Times(documents);backend.fingerprint=FP(B,@"live",NO);SetBirth(documents,1700000100,0);Reset(backend);
+    Check([store restoreBundle:BID idfv:C saveCurrent:NO error:&error]!=nil,[NSString stringWithFormat:@"legacy backup baseline compatibility: %@",error]);
+    Check(SameBirth(legacyDates,Times(documents)),@"legacy restore randomized Documents creation time");
+    puts("app-state reset baseline: optional metadata roundtrip, old identity compatibility, preserved archive bytes and exact Documents creation time passed");
+}
 static void StatePreferenceReplayTests(NSString *base) {
     NSString *root=[base stringByAppendingPathComponent:@"replay-store"], *data=[base stringByAppendingPathComponent:@"replay-live"];
     Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private replay store");Mk(data);
@@ -498,7 +522,7 @@ static void RecoveryAndCatalogTests(NSString *base) {
 static void Stress(NSString *base) {
     NSString *source=[base stringByAppendingPathComponent:@"stress-source"],*destination=[base stringByAppendingPathComponent:@"stress-destination"],*archive=[base stringByAppendingPathComponent:@"stress.tar.zst"];Mk(source);Mk(destination);for(NSUInteger i=0;i<2048;i++)Put(source,[NSString stringWithFormat:@"small/%04lu",(unsigned long)i],Bytes([NSString stringWithFormat:@"record-%lu",(unsigned long)i]));NSString *large=[source stringByAppendingPathComponent:@"large.bin"];int fd=open(large.fileSystemRepresentation,O_CREAT|O_WRONLY|O_TRUNC,0644);Check(fd>=0,@"open large fixture");unsigned char buffer[131072];uint32_t random=0x12345678;for(NSUInteger i=0;i<512;i++){for(NSUInteger j=0;j<sizeof(buffer);j++){random^=random<<13;random^=random>>17;random^=random<<5;buffer[j]=(unsigned char)random;}Check(write(fd,buffer,sizeof(buffer))==sizeof(buffer),@"write large fixture");}close(fd);struct rusage before,after;getrusage(RUSAGE_SELF,&before);__block NSUInteger events=0,chunkEvents=0;__block uint64_t greatest=0,largestChunk=0;NSMutableDictionary *phaseBytes=[NSMutableDictionary new];SHDWStateProgress progress=^(NSDictionary *event){events++;uint64_t current=[event[@"bytes"] unsignedLongLongValue];greatest=MAX(greatest,current);NSString *phase=event[@"phase"];uint64_t prior=[phaseBytes[phase] unsignedLongLongValue];if(current>=prior&&current>prior){largestChunk=MAX(largestChunk,current-prior);chunkEvents++;}phaseBytes[phase]=@(current);};NSError *error=nil;NSDictionary *info=[SHDWStateArchive captureRoots:@{@"containers/data":source} payloads:@{} toPath:archive progress:progress error:&error];Check(info!=nil,[NSString stringWithFormat:@"stress capture %@",error]);Check([SHDWStateArchive verifyPath:archive info:info progress:progress error:&error],@"stress archive verify");Check([SHDWStateArchive restorePath:archive info:info roots:@{@"containers/data":destination} progress:progress error:&error],@"stress restore");Check([SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:progress error:&error],@"stress all-file verify");getrusage(RUSAGE_SELF,&after);Check([Digest(large)isEqual:Digest([destination stringByAppendingPathComponent:@"large.bin"])],@"large binary digest mismatch");Check([NSFileManager.defaultManager contentsOfDirectoryAtPath:[destination stringByAppendingPathComponent:@"small"] error:NULL].count==2048,@"many small files lost");Check(events>512&&chunkEvents>=512&&greatest>=64ULL*1024*1024,@"streaming byte progress missing");Check(largestChunk<=131072,@"archive progress omitted bounded chunk records");Check(after.ru_maxrss-before.ru_maxrss<48LL*1024*1024,@"streaming exceeded 48MiB RSS growth for 64MiB file");printf("app-state streaming: 2048 files +64MiB, %lu progress events, RSS growth %.1fMiB passed\n",(unsigned long)events,(after.ru_maxrss-before.ru_maxrss)/1048576.0);
 }
-int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);BackupResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
+int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
 '''
 
 
