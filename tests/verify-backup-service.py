@@ -229,6 +229,11 @@ Check(SHDWBackupPhoneOwned(@{})&&!SHDWBackupPhoneOwned(@{@"owner":@"rv"})&&!SHDW
 NSString *active=@"11111111-2222-3333-4444-555555555555";
 NSDictionary *first=@{@"idfv":@"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},*current=@{@"idfv":active},*last=@{@"idfv":@"99999999-8888-7777-6666-555555555555"};
 NSArray *input=@[first,current,last];
+Check(!SHDWBackupCanDiscard(input,active),@"backed-up current identity allowed direct cleanup");
+Check(!SHDWBackupCanDiscard(@[first],[first[@"idfv"] lowercaseString]),@"current backup comparison ignored canonical UUID case");
+Check(!SHDWBackupCanDiscard(@[@{@"idfv":active.lowercaseString,@"unavailable":@YES}],active),@"unavailable current backup allowed direct cleanup");
+Check(SHDWBackupCanDiscard(@[first,last],active)&&SHDWBackupCanDiscard(@[],active),@"unrelated or absent backups blocked direct cleanup");
+Check(!SHDWBackupCanDiscard(nil,active)&&!SHDWBackupCanDiscard(input,nil)&&!SHDWBackupCanDiscard(input,@"invalid"),@"unknown backup or identity state allowed direct cleanup");
 Check([SHDWBackupActiveFirst(input,active)isEqual:@[current,first,last]],@"active backup was not pinned while preserving other order");
 Check([SHDWBackupActiveFirst(input,nil)isEqual:input]&&[SHDWBackupActiveFirst(input,@"absent")isEqual:input],@"unknown active identity reordered backups");
 Check([SHDWBackupActiveFirst(@[first,last],active)isEqual:@[first,last]],@"missing active backup created or reordered an entry");

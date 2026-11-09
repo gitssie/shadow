@@ -2,7 +2,9 @@
 #import "Services/BackupService.h"
 #import "Services/InstalledApplications.h"
 #import "Services/OperationCoordinator.h"
+#import "Services/BackupPolicy.h"
 #import "Appearance/Theme.h"
+#import <Shadow/Fingerprint.h>
 
 @interface SHDWBackupPromptViewController ()
 @property(nonatomic, strong) SHDWInstalledApplication *application;
@@ -15,6 +17,8 @@
 @property(nonatomic, strong) UIActivityIndicatorView *spinner;
 @property(nonatomic) BOOL working;
 @property(nonatomic) BOOL finishing;
+@property(nonatomic) BOOL checkingCatalog;
+@property(nonatomic) BOOL canDiscard;
 @end
 
 @implementation SHDWBackupPromptViewController
@@ -41,15 +45,41 @@
     [self.contentStack setCustomSpacing:16 afterView:self.message]; [self.contentStack setCustomSpacing:6 afterView:self.action];
     actionContent.translatesAutoresizingMaskIntoConstraints = NO; [self.action addSubview:actionContent];
     [NSLayoutConstraint activateConstraints:@[[self.action.heightAnchor constraintGreaterThanOrEqualToConstant:48], [actionContent.centerXAnchor constraintEqualToAnchor:self.action.centerXAnchor], [actionContent.centerYAnchor constraintEqualToAnchor:self.action.centerYAnchor], [actionContent.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.action.leadingAnchor constant:16], [actionContent.trailingAnchor constraintLessThanOrEqualToAnchor:self.action.trailingAnchor constant:-16], [actionContent.topAnchor constraintGreaterThanOrEqualToAnchor:self.action.topAnchor constant:12], [actionContent.bottomAnchor constraintLessThanOrEqualToAnchor:self.action.bottomAnchor constant:-12], [self.direct.heightAnchor constraintGreaterThanOrEqualToConstant:44]]];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshCatalog) name:UIApplicationWillEnterForegroundNotification object:nil];
+    [self refreshCatalog];
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)updateControls {
+    self.action.enabled = !self.working && !self.finishing && !self.checkingCatalog;
+    self.direct.enabled = self.action.enabled && self.canDiscard;
+    self.action.alpha = self.action.enabled ? 1 : 0.7;
+    self.direct.alpha = self.direct.enabled ? 1 : 0.35;
+}
+- (void)refreshCatalog {
+    if (self.working || self.finishing || self.checkingCatalog) return;
+    self.checkingCatalog = YES; self.canDiscard = NO; [self updateControls];
+    __weak typeof(self) weakSelf = self;
+    [self.service loadCatalog:^(NSArray *catalog, NSError *error) {
+        typeof(self) self = weakSelf; if (!self) return;
+        self.checkingCatalog = NO;
+        NSString *current = [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier][@"VendorIdentifier"];
+        self.canDiscard = !error && SHDWBackupCanDiscard(catalog, current);
+        if (error) { self.message.textColor = UIColor.systemRedColor; self.message.text = error.localizedDescription; }
+        else {
+            BOOL backedUp = [current isKindOfClass:NSString.class] && [[NSUUID alloc] initWithUUIDString:current] && !self.canDiscard;
+            self.message.textColor = UIColor.secondaryLabelColor; self.message.text = SHDWText(backedUp ? @"This IDFV already has a backup. Back up current data before cleaning." : @"Cleaning removes current app data. Back up first to keep it.");
+        }
+        [self updateControls]; [self.presentationController.containerView setNeedsLayout];
+    }];
 }
 - (void)setWorking:(BOOL)working {
-    _working = working; self.modalInPresentation = working; self.action.enabled = !working; self.direct.enabled = !working; self.closeButton.enabled = !working;
-    self.action.alpha = working ? 0.7 : 1; self.direct.alpha = working ? 0.45 : 1; self.closeButton.alpha = working ? 0.45 : 1;
+    _working = working; self.modalInPresentation = working; self.closeButton.enabled = !working; [self updateControls];
+    self.closeButton.alpha = working ? 0.45 : 1;
     self.actionIcon.hidden = working; self.spinner.hidden = !working; if (working) [self.spinner startAnimating]; else [self.spinner stopAnimating];
     self.actionTitle.text = SHDWText(working ? @"Backing up data" : @"Backup and clean"); self.action.accessibilityLabel = self.actionTitle.text;
 }
 - (void)backup {
-    if (self.working || self.finishing || [SHDWOperationCoordinator isRunning]) return;
+    if (!self.action.enabled || self.working || self.finishing || [SHDWOperationCoordinator isRunning]) return;
     self.working = YES; self.message.textColor = UIColor.secondaryLabelColor; self.message.text = SHDWText(@"Backing up data");
     __weak typeof(self) weakSelf = self;
     [self.service performAction:@"backup" request:@{} progress:^(NSDictionary *event) {
@@ -57,11 +87,11 @@
         NSString *stage = event[@"stage"] ?: @""; self.message.text = SHDWText([stage containsString:@"verify"] || [stage isEqual:@"recheck"] ? @"Verifying backup" : @"Backing up data");
     } completion:^(id result, NSError *error) {
         (void)result; typeof(self) self = weakSelf; if (!self) return; self.working = NO;
-        if (error) { self.message.textColor = UIColor.systemRedColor; self.message.text = error.localizedDescription; [self.presentationController.containerView setNeedsLayout]; UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, error.localizedDescription); }
+        if (error) { [self refreshCatalog]; self.message.textColor = UIColor.systemRedColor; self.message.text = error.localizedDescription; [self.presentationController.containerView setNeedsLayout]; UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, error.localizedDescription); }
         else [self continueToCleanupAfterBackup:YES];
     }];
 }
-- (void)continueToCleanup { [self continueToCleanupAfterBackup:NO]; }
+- (void)continueToCleanup { if (self.direct.enabled) [self continueToCleanupAfterBackup:NO]; }
 - (void)continueToCleanupAfterBackup:(BOOL)backupCompleted {
     if (self.working || self.finishing || [SHDWOperationCoordinator isRunning]) return;
     self.finishing = YES; self.action.enabled = NO; self.direct.enabled = NO; self.closeButton.enabled = NO;

@@ -3,6 +3,15 @@
 static inline BOOL SHDWBackupPhoneOwned(NSDictionary *snapshot) {
     return [(snapshot[@"owner"] ?: @"phone") isEqual:@"phone"];
 }
+static inline BOOL SHDWBackupCanDiscard(NSArray<NSDictionary *> *catalog, NSString *currentIDFV) {
+    NSString *current = [currentIDFV isKindOfClass:NSString.class] ? [[NSUUID alloc] initWithUUIDString:currentIDFV].UUIDString : nil;
+    if (!catalog || !current) return NO;
+    for (NSDictionary *snapshot in catalog) {
+        NSString *identifier = [snapshot[@"idfv"] isKindOfClass:NSString.class] ? [[NSUUID alloc] initWithUUIDString:snapshot[@"idfv"]].UUIDString : nil;
+        if ([identifier isEqual:current]) return NO;
+    }
+    return YES;
+}
 static inline NSArray<NSDictionary *> *SHDWBackupActiveFirst(NSArray<NSDictionary *> *catalog, NSString *currentIDFV) {
     if (![currentIDFV isKindOfClass:NSString.class] || !currentIDFV.length) return [catalog copy];
     NSString *current = [[NSUUID alloc] initWithUUIDString:currentIDFV].UUIDString;

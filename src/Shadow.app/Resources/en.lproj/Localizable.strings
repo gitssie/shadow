@@ -125,6 +125,7 @@
 "Backup saved" = "Backup saved";
 "Backup and clean" = "Backup and clean";
 "Clean directly" = "Clean directly";
+"This IDFV already has a backup. Back up current data before cleaning." = "This IDFV already has a backup. Back up current data before cleaning.";
 "Please wait" = "Please wait";
 "Saving changes" = "Saving changes";
 "Deleting backup" = "Deleting backup";
