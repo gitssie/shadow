@@ -1,21 +1,28 @@
-# Shadow's build-lane matrix. The fields every project targeting a lane must
-# agree on -- ARCHS, TARGET, SCHEME, DEPLOY, DEPLOY_ARM64E, ABI -- come from
-# $THEOS/bin/lane.sh so Shadow and HookKit cannot drift apart. Only Shadow's own
-# packaging identity and firmware limits are defined here.
-#
-# Sourced by .github/scripts/build-deps.sh and build.sh; the root Makefile reads
-# the same fields via $(shell). Consumers must read these fields rather than
-# duplicate package limits.
+# Shadow build configuration for upstream Theos. All lane fields live here;
+# no additional scripts are required inside the Theos checkout.
 
-. "${THEOS:?THEOS must point to Theos}/bin/lane.sh"
+shadow_lanes() { echo "rootful-legacy rootful-modern rootless"; }
 
 shadow_lane_field() { # <lane> <field>
-    # Shared fields are Theos's; only Shadow-specific ones are answered here.
-    case "$2" in
-    FLOOR|CEILING|PACKAGE|PACKAGE_ARCH) ;;
-    *) theos_lane_field "$1" "$2"; return ;;
-    esac
     case "$1:$2" in
+    rootful-legacy:ARCHS)         echo "armv7 armv7s arm64 arm64e" ;;
+    rootful-legacy:TARGET)        echo "iphone:clang:13.7" ;;
+    rootful-legacy:SCHEME)        echo "" ;;
+    rootful-legacy:DEPLOY)        echo "9.0" ;;
+    rootful-legacy:DEPLOY_ARM64E) echo "12.0" ;;
+    rootful-legacy:ABI)           echo "old" ;;
+    rootful-modern:ARCHS)         echo "arm64 arm64e" ;;
+    rootful-modern:TARGET)        echo "iphone:clang:16.5:14.0" ;;
+    rootful-modern:SCHEME)        echo "" ;;
+    rootful-modern:DEPLOY)        echo "" ;;
+    rootful-modern:DEPLOY_ARM64E) echo "" ;;
+    rootful-modern:ABI)           echo "new" ;;
+    rootless:ARCHS)               echo "arm64 arm64e" ;;
+    rootless:TARGET)              echo "iphone:clang:16.5:15.0" ;;
+    rootless:SCHEME)              echo "rootless" ;;
+    rootless:DEPLOY)              echo "" ;;
+    rootless:DEPLOY_ARM64E)       echo "" ;;
+    rootless:ABI)                 echo "new" ;;
     rootful-legacy:FLOOR)         echo "9.0" ;;
     rootful-legacy:CEILING)       echo "14.0" ;;
     rootful-legacy:PACKAGE)       echo "me.jjolano.shadow.legacy" ;;
@@ -28,10 +35,6 @@ shadow_lane_field() { # <lane> <field>
     rootless:CEILING)             echo "" ;;
     rootless:PACKAGE)             echo "me.jjolano.shadow" ;;
     rootless:PACKAGE_ARCH)        echo "iphoneos-arm64" ;;
-    roothide:FLOOR)               echo "15.0" ;;
-    roothide:CEILING)             echo "18.0" ;;
-    roothide:PACKAGE)             echo "me.jjolano.shadow" ;;
-    roothide:PACKAGE_ARCH)        echo "iphoneos-arm64e" ;;
     *) echo "unknown lane '$1' or field '$2'" >&2; return 1 ;;
     esac
 }

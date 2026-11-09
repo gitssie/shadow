@@ -9,8 +9,8 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 # (build-support/lanes.sh) -- never duplicate the per-lane values here.
 . "$ROOT/build-support/lanes.sh"
 case "$PROFILE" in
-    rootful-legacy|rootful-modern|rootless|roothide) ;;
-    *) echo "usage: $0 <rootful-legacy|rootful-modern|rootless|roothide> MACH-O..." >&2; exit 2 ;;
+    rootful-legacy|rootful-modern|rootless) ;;
+    *) echo "usage: $0 <rootful-legacy|rootful-modern|rootless> MACH-O..." >&2; exit 2 ;;
 esac
 ARCHS=$(shadow_lane_field "$PROFILE" ARCHS)
 TARGET=$(shadow_lane_field "$PROFILE" TARGET)

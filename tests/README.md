@@ -3,8 +3,8 @@
 Public tests combine pure-C checks, static contract scripts, and a macOS-only
 Foundation image-registry check. They need make, Bash,
 a host C compiler, Python 3.7+, and standard shell tools; no device, Docker, iOS SDK, or engine
-build is required. The lane/package contract also requires `THEOS` to point to a
-directory containing `bin/lane.sh`; a full Theos installation is not required.
+build is required. Lane/package checks use the local `build-support/lanes.sh`
+and do not require Theos or the `THEOS` environment variable.
 
 | Check | Command |
 | --- | --- |
@@ -16,6 +16,7 @@ directory containing `bin/lane.sh`; a full Theos installation is not required.
 | rebind journal/repair (pure C) | `make -C tests verify-rebind-repair` |
 | KERN_PROCARGS2 payload filter (kernel-shaped payloads) | `make -C tests verify-procargs-filter` |
 | exact HookKit package/framework version consistency | `make -C tests verify-hookkit-version` |
+| upstream Theos toolchain and HookKit adapter | `make -C tests verify-toolchain` |
 | lane/package contract | `sh tests/verify-lane-contract.sh` |
 | binary compatibility checker (synthetic tool output) | `make -C tests verify-binary-compat` |
 | hook→engine matrix drift | `sh tests/verify-hook-matrix.sh` |
@@ -110,10 +111,9 @@ snapshot matcher, including rule precedence and absence of refresh/resolution
 in the query. They do not execute Foundation predicates or test device locking;
 custom predicates that perform I/O are outside the mount-query contract.
 
-Binary compatibility checks exercise all four lanes with synthetic Mach-O tool
+Binary compatibility checks exercise the three supported lanes with synthetic Mach-O tool
 output, including both deployment-load-command formats. They accept matching
-architecture/deployment/ABI fixtures and reject mismatches, legacy lock imports,
-and invalid RootHide linking. These test the checker, not actual iOS execution.
+architecture/deployment/ABI fixtures and reject mismatches and legacy lock imports. These test the checker, not actual iOS execution.
 Packaged lane builds separately run the checker against their real binaries.
 
 The full engine/detector/adversary/fuzz/device harness is private and

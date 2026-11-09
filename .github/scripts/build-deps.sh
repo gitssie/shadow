@@ -2,7 +2,7 @@
 # Build pinned dependency packages and stage their exact packaged binaries.
 set -euo pipefail
 
-FLAVOR=${1:?usage: build-deps.sh <rootful-legacy|rootful-modern|rootless|roothide>}
+FLAVOR=${1:?usage: build-deps.sh <rootful-legacy|rootful-modern|rootless>}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export THEOS=${THEOS:-/opt/theos}
 PB=${PREBUILT_ROOT:-$ROOT/../prebuilt}
@@ -118,19 +118,15 @@ common_make_args() {
 }
 
 legacy_make_args() {
-    local toolchain=${OLDABI_TOOLCHAIN:-$THEOS/toolchain/oldabi/linux/iphone}
-    local sdks=${OLDABI_SDKS:-$THEOS/sdks}
-    [ -x "$toolchain/bin/clang" ] || { echo "missing old-ABI clang: $toolchain/bin/clang" >&2; exit 1; }
-    [ -d "$sdks/iPhoneOS13.7.sdk" ] || { echo "missing iPhoneOS13.7.sdk under $sdks" >&2; exit 1; }
-    local major
-    major=$("$toolchain/bin/clang" -dumpversion)
-    major=${major%%.*}
-    [ "$major" -lt 12 ] || { echo "old-ABI lane requires Clang older than 12" >&2; exit 1; }
-    export OLDABI_TOOLCHAIN=$toolchain OLDABI_SDKS=$sdks
+    . "$ROOT/build-support/toolchain.sh"
+    shadow_abi_require old "$FLAVOR"
+    if [ "$(uname -s)" = Darwin ]; then
+        export DEVELOPER_DIR=$OLDABI_DEVELOPER_DIR
+    fi
+    local arg
+    while IFS= read -r arg; do MAKE_ARGS+=("$arg"); done < <(shadow_abi_args old)
 
     MAKE_ARGS+=(
-        "SDKBINPATH=$toolchain/bin"
-        "THEOS_SDKS_PATH=$sdks"
         "TARGET_OS_DEPLOYMENT_VERSION=$(shadow_lane_field "$FLAVOR" DEPLOY)"
         "TARGET_OS_DEPLOYMENT_VERSION_arm64e=$(shadow_lane_field "$FLAVOR" DEPLOY_ARM64E)"
         "ADDITIONAL_CFLAGS=-I$RUN/include -fmodules-cache-path=$RUN/module-cache"
@@ -158,9 +154,6 @@ build_altlist() {
 build_sandy() {
     clone_pin opa334/libSandy "$LIBSANDY" libsandy
     local source=$RUN/libsandy control deb
-    if [ "$FLAVOR" = roothide ]; then
-        git -C "$source" apply "$ROOT/.github/patches/libsandy-roothide.patch"
-    fi
     if [ "$FLAVOR" = rootful-legacy ]; then
         control=$ROOT/.github/controls/libsandy-legacy
     else

@@ -30,10 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential fakeroot rsync curl perl xz-utils git libxml2 libtinfo6
-          # jjolano/theos is upstream Theos plus RootHide support, and carries
-          # provision.lock -- the pinned source for the SDKs below. This lane is
-          # rootful, so the RootHide additions are inert here.
-          sudo git clone --recursive --quiet https://github.com/jjolano/theos.git "$THEOS"
+          sudo git clone --recursive --quiet https://github.com/theos/theos.git "$THEOS"
 
           mkdir -p "$RUNNER_TEMP/oldabi/toolchain" "$RUNNER_TEMP/oldabi/sdks" "$THEOS/sdks"
           curl -fL -o "$RUNNER_TEMP/oldabi/toolchain.tar.xz" \
@@ -47,12 +44,10 @@ jobs:
           tar -xJf "$RUNNER_TEMP/oldabi/iPhoneOS13.7.sdk.tar.xz" -C "$RUNNER_TEMP/oldabi/sdks"
 
           # AltList/libSandy build against 14.5 (see their Makefiles).
-          sudo -E "$THEOS/bin/provision.sh" --downloads sdks/iPhoneOS14.5.sdk
-
-          # The old-ABI toolchain and 13.7 SDK stay in RUNNER_TEMP rather than
-          # $THEOS: build.sh overrides THEOS_SDKS_PATH with OLDABI_SDKS for this
-          # lane, and the cross ld must stay off the host test path. Their pins
-          # are therefore still inline above rather than read from provision.lock.
+          curl -fL -o "$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS14.5.sdk.tar.xz
+          echo '1c998a5ee7eb8c29e39f0d8c83add9cad1a954342ca0d86204d1b4fe08a921b9  '"$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" | sha256sum -c -
+          sudo tar -xJf "$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" -C "$THEOS/sdks"
 
           # install-hookkit-theos.sh writes the HookKit framework into $THEOS/lib;
           # the tree was cloned with sudo, so hand it to the runner user.
@@ -86,14 +81,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [rootful-modern, rootless, roothide]
+        flavor: [rootful-modern, rootless]
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Theos
         run: |
           brew install dpkg ldid cmake
-          sudo git clone --recursive --quiet https://github.com/jjolano/theos.git "$THEOS"
+          sudo git clone --recursive --quiet https://github.com/theos/theos.git "$THEOS"
           # Xcode 16's iOS SDK dropped private-framework tbds (Preferences et
           # al); stage the pinned 16.5 SDK so dependency framework links
           # (AltList -> Preferences) resolve.
@@ -103,10 +98,7 @@ jobs:
           sudo mkdir -p "$THEOS/sdks"
           sudo tar -xJf "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" -C "$THEOS/sdks"
 
-          # The detector-harness runners pin the 14.5 SDK (see their TARGET
-          # lines and the FreeRASP compat-framework symlinks). jjolano/theos
-          # carries it in provision.lock, so fetch it the same way the legacy
-          # job does (URL+sha pinned there, not here).
+          # AltList/libSandy use the pinned 14.5 SDK.
           curl -fL -o "$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" \
             https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS14.5.sdk.tar.xz
           echo '1c998a5ee7eb8c29e39f0d8c83add9cad1a954342ca0d86204d1b4fe08a921b9  '"$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" | shasum -a 256 -c -

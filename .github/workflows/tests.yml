@@ -21,28 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Provision Theos lane matrix
-        run: |
-          # verify-lane-contract.sh reads shared lane fields (TARGET etc.)
-          # from $THEOS/bin/lane.sh (build-support/lanes.sh); only that file
-          # is needed, so sparse-checkout it from jjolano/theos rather than
-          # cloning all of Theos.
-          sudo mkdir -p /opt/theos/bin
-          rm -rf "$RUNNER_TEMP/lane-theos"
-          git clone --quiet --depth 1 --filter=blob:none --sparse \
-            https://github.com/jjolano/theos.git "$RUNNER_TEMP/lane-theos"
-          git -C "$RUNNER_TEMP/lane-theos" sparse-checkout set --skip-checks bin/lane.sh
-          sudo cp "$RUNNER_TEMP/lane-theos/bin/lane.sh" /opt/theos/bin/lane.sh
-          test -f /opt/theos/bin/lane.sh
-
       - name: Build lane and package metadata contract
-        env:
-          THEOS: /opt/theos
         run: sh tests/verify-lane-contract.sh
 
+      - name: Upstream Theos toolchain and HookKit adapter regression
+        run: make -C tests verify-toolchain
+
       - name: Binary compatibility checker regression
-        env:
-          THEOS: /opt/theos
         run: make -C tests verify-binary-compat
 
       # Static source checks: no device, no toolchain, no docker — pure
