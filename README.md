@@ -21,12 +21,11 @@ Settings app → Shadow → global defaults or per-app config. `shdw -d` keeps t
 | Rootful legacy (`iphoneos-arm`) | 9–13 |
 | Rootful modern (`iphoneos-arm`) | 14+ |
 | Rootless (`iphoneos-arm64`) | 15+ |
-| RootHide (`iphoneos-arm64e`) | 15–17 |
 
 No guarantee every app/detection SDK works everywhere.
 
 These are declared package ranges, not a device-tested version matrix. CI builds
-all four lanes and checks package metadata and Mach-O compatibility; public host
+the three supported lanes and checks package metadata and Mach-O compatibility; public host
 tests do not verify hook installation or behavior on each iOS version. An open-ended
 range does not establish compatibility with future releases.
 
@@ -38,7 +37,23 @@ range does not establish compatibility with future releases.
 
 ## Building
 
-Requires [Theos](https://theos.dev). One lane at a time:
+Requires upstream [Theos](https://github.com/theos/theos) and the SDKs selected in
+`build-support/lanes.sh`. Set `THEOS` to that checkout; no Theos fork or extra
+scripts in its `bin/` directory are needed. Modern lanes require macOS/Xcode 12+;
+the legacy lane requires Xcode 11.7 (`OLDABI_DEVELOPER_DIR`) on macOS, or an
+old-ABI cross-toolchain (`OLDABI_TOOLCHAIN`) and iOS 13.7 SDK (`OLDABI_SDKS`) on Linux.
+
+Install the pinned HookKit into the same Theos before building dependencies:
+
+```sh
+export THEOS=/path/to/theos
+export HOOKKIT=e55a3c497d3112184e9d528092eb2b341c9e8029
+.github/scripts/install-hookkit-theos.sh rootful-modern
+```
+
+The installer applies a build-only adapter to the pinned HookKit checkout so
+both projects use Shadow's lane configuration. Local HookKit sources can be
+provided as `$DEPS_SOURCE_ROOT/HookKit`. One lane at a time:
 
 ```sh
 .github/scripts/build-deps.sh rootful-modern
@@ -47,12 +62,12 @@ Requires [Theos](https://theos.dev). One lane at a time:
 
 Rootless builds require the exact HookKit dependency declared in
 `packaging/controls/control.rootless.in`. From the matching maintained HookKit
-checkout, run `bash tools/release/install-theos.sh rootless` with the same
-`THEOS` used for Shadow and TrollVNC. Shadow checks the installed framework
+checkout, use `DEPS_SOURCE_ROOT` with the installer above and select `rootless`,
+using the same `THEOS` as Shadow. Shadow checks the installed framework
 version before compiling; the later ABI check remains a separate check.
 
 
-Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See `build-support/lanes.sh` for the matrix. Tests: `make -C tests test` ([details](tests/README.md)).
+Lanes: `rootful-legacy`, `rootful-modern`, `rootless`. RootHide builds are not supported on this branch. See `build-support/lanes.sh` for the matrix. Tests: `make -C tests test` ([details](tests/README.md)).
 
 ## Legal
 

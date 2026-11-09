@@ -44,7 +44,7 @@ check() {
     checks=$((checks + 1))
 }
 
-for TEST_LANE in rootful-legacy rootful-modern rootless roothide; do
+for TEST_LANE in $(shadow_lanes); do
     TEST_ARCHS=$(shadow_lane_field "$TEST_LANE" ARCHS)
     TEST_DEPLOY=$(shadow_lane_field "$TEST_LANE" DEPLOY)
     if [ -z "$TEST_DEPLOY" ]; then
@@ -75,9 +75,6 @@ for TEST_LANE in rootful-legacy rootful-modern rootless roothide; do
     check 1 "$TMP/binary [arm64e] ABI mismatch expected $TEST_LANE" TEST_ABI="$wrong_abi"
     if [ "$TEST_LANE" = rootful-legacy ]; then
         check 1 "$TMP/binary hard-imports os_unfair_lock on the iOS 9 lane" TEST_IMPORT=_os_unfair_lock_lock
-    elif [ "$TEST_LANE" = roothide ]; then
-        check 1 "$TMP/binary [arm64] contains a fixed /var/jb dependency" TEST_LINK=/var/jb/usr/lib/libExample.dylib
-        check 1 "$TMP/binary [arm64] lacks a RootHide loader-relative install name" TEST_INSTALL_NAME=/Library/Frameworks/Shadow.framework/Shadow
     fi
 done
 echo "PASS: $checks binary compatibility checks"

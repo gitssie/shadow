@@ -21,10 +21,16 @@ MAKE_PATHS=(
 )
 trap 'rm -rf "$STAGE"' EXIT
 
+case ${1:-all} in
+    all|rootful|rootful-legacy|rootful-modern|rootless|quick) ;;
+    deps) shadow_lane_field "${2:-rootful-modern}" ARCHS >/dev/null || exit 2 ;;
+    *) echo "unsupported build target: $1 (use rootful-legacy, rootful-modern, rootless, rootful, all, quick, or deps PROFILE)" >&2; exit 2 ;;
+esac
+
 rm -rf "$ROOT/build"
 mkdir -p "$ROOT/build"
 
-stage_deps() { # rootful-legacy|rootful-modern|rootless|roothide
+stage_deps() { # rootful-legacy|rootful-modern|rootless
     local profile=$1 scheme= target sdk
     scheme=$(shadow_lane_field "$profile" SCHEME 2>/dev/null) || { echo "unknown dependency profile: $profile" >&2; return 2; }
 
@@ -86,40 +92,30 @@ stage_deps() { # rootful-legacy|rootful-modern|rootless|roothide
         cp -R "$altlist" "$LIBRARY_PATH/iphone/$scheme/AltList.framework"
         cp "$sandy" "$LIBRARY_PATH/iphone/$scheme/libsandy.dylib"
     fi
-
-    if [ "$profile" = roothide ]; then
-        # -lroothide resolves from Theos' vendor/lib, which our
-        # THEOS_LIBRARY_PATH override hides; stage the stub locally.
-        local roothide_tbd="$THEOS/vendor/lib/iphone/roothide/libroothide.tbd"
-        [ -f "$roothide_tbd" ] || { echo "missing libroothide.tbd under $THEOS/vendor/lib" >&2; return 1; }
-        cp "$roothide_tbd" "$LIBRARY_PATH/iphone/roothide/libroothide.tbd"
-    fi
-
 }
 
-# Both ABIs' toolchain selection and validation live in $THEOS/bin/lane.sh
-# (sourced via lanes.sh) so Shadow and HookKit cannot disagree about which
-# compiler a lane needs. macOS/Xcode compiles either ABI itself, so
-# theos_abi_args emits nothing there; on Linux it emits SDKBINPATH plus
-# IS_NEW_ABI=1, which wins on stock and roothide Theos alike.
+. "$ROOT/build-support/toolchain.sh"
+
 legacy_args() {
-    theos_abi_require old rootful-legacy
-    mapfile -t LEGACY_ARGS < <(theos_abi_args old)
+    shadow_abi_require old rootful-legacy
+    LEGACY_ENV=()
+    if [ "$(uname -s)" = Darwin ]; then
+        LEGACY_ENV=("DEVELOPER_DIR=$OLDABI_DEVELOPER_DIR")
+    fi
+    LEGACY_ARGS=()
+    while IFS= read -r arg; do LEGACY_ARGS+=("$arg"); done < <(shadow_abi_args old)
 }
 
-modern_args() { # sets MODERN_ARGS for the new arm64e ABI
+modern_args() {
     MODERN_ARGS=()
-    [ "$(uname -s)" = Linux ] || return 0
-    theos_abi_require new "${1:-modern lane}"
-    mapfile -t MODERN_ARGS < <(theos_abi_args new)
+    shadow_abi_require new "${1:-modern lane}"
 }
 
-prepare_scheme_framework() { # rootless|roothide
+prepare_scheme_framework() { # rootless
     local lane=$1
     # src/Shadow.framework/Makefile includes build-support/build-lanes.mk, which
     # derives ARCHS/TARGET/THEOS_PACKAGE_SCHEME from SHADOW_LANE -- so the scheme
-    # matches the main build (a mismatch would leave stale caller objects compiled
-    # without -DSHADOW_ROOTHIDE while JBPath.m recompiles empty).
+    # matches the main build.
     make -C src/Shadow.framework "SHADOW_LANE=$lane" "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
     rm -rf "$LIBRARY_PATH/iphone/$lane/Shadow.framework"
     mkdir -p "$LIBRARY_PATH/iphone/$lane"
@@ -153,12 +149,12 @@ build_lane() { # profile
     case "$lane" in
         rootful-legacy)
             legacy_args
-            make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" "${LEGACY_ARGS[@]}"
+            env ${LEGACY_ENV[@]+"${LEGACY_ENV[@]}"} make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" ${LEGACY_ARGS[@]+"${LEGACY_ARGS[@]}"}
             ;;
         rootful-modern)
             make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
             ;;
-        rootless|roothide)
+        rootless)
             prepare_scheme_framework "$lane"
             make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
             ;;
@@ -196,9 +192,8 @@ case ${1:-all} in
     rootful-modern) build_lane rootful-modern ;;
     rootful) build_lane rootful-legacy; build_lane rootful-modern ;;
     rootless) build_lane rootless ;;
-    roothide) build_lane roothide ;;
     quick) build_quick ;;
     deps) stage_deps "${2:-rootful-modern}" ;;
-    all) build_lane rootless; build_lane rootful-legacy; build_lane rootful-modern; build_lane roothide ;;
-    *) echo "usage: $0 [all|rootful|rootful-legacy|rootful-modern|rootless|roothide|quick|deps PROFILE]" >&2; exit 2 ;;
+    all) build_lane rootless; build_lane rootful-legacy; build_lane rootful-modern ;;
+    *) echo "usage: $0 [all|rootful|rootful-legacy|rootful-modern|rootless|quick|deps PROFILE]" >&2; exit 2 ;;
 esac

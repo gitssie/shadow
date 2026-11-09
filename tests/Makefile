@@ -214,3 +214,9 @@ verify-hookkit-version:
 
 .PHONY: verify-hookkit-version
 test: verify-hookkit-version
+
+verify-toolchain:
+	bash ToolchainTests.sh
+
+test: verify-toolchain
+.PHONY: verify-toolchain

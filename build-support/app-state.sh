@@ -2,11 +2,11 @@
 # Standalone AppState builds consume the same lane and SDK definitions as Shadow.
 app_state_initialize() {
     AS_ROOT=$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-    : "${THEOS:?Set THEOS to the lane-aware Theos checkout}"
+    : "${THEOS:?Set THEOS to the upstream Theos checkout}"
     . "$AS_ROOT/build-support/lanes.sh"
     AS_LANE=$1
     case "$AS_LANE" in
-        rootful-modern|rootless|roothide) ;;
+        rootful-modern|rootless) ;;
         *) echo "AppState requires a modern lane" >&2; return 1 ;;
     esac
     AS_ARCHS=$(shadow_lane_field "$AS_LANE" ARCHS)
