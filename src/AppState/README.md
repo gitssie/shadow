@@ -264,7 +264,9 @@ require separate live validation; host fixture results do not establish those.
 for discarding the live environment. It shares stop/identity checks, the exclusive
 App directory lock, native cleanup callback and final changed/locked fingerprint
 verification with backup/reset. It never captures or publishes a snapshot; existing
-snapshots stay unchanged. Pending restoration and foreign snapshot ownership remain
+snapshots stay unchanged. If the current IDFV already has a snapshot, discard is
+rejected with `backup_required`; use `backupAndReset` to save current changes first.
+Pending restoration and foreign snapshot ownership remain
 blocking conditions. With no captured source, no backup recovery record is created.
 Failures once reset begins report `stateMayBePartial`; a lost response does not
 authorize automatic replay. Success omits `backup_id` and returns `previous_idfv`,

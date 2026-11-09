@@ -365,9 +365,16 @@ static void DiscardResetTests(NSString *base) {
     Check([store catalogBundle:BID error:&error].count==0,@"failed discard created backup");
     backend.failCapture=NO;Check([store backupBundle:BID metadata:@{@"note":@"preserve"} error:&error]!=nil,@"discard existing archive fixture");
     NSString *beforeSHA=Digest(SnapshotPath(root,B,@"data.tar.zst"));
-    reply=[store discardAndResetBundle:BID expectedIDFV:B reset:^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;(void)failure;backend.fingerprint=FP(A,@"new",YES);return @{@"verified":@YES};} error:&error];
-    Check(reply&&[beforeSHA isEqual:Digest(SnapshotPath(root,B,@"data.tar.zst"))]&&[store recheckBundle:BID idfv:B error:&error],@"discard altered existing backup");
-    puts("discard/reset: identity guard, exclusive lock, no capture/archive, verified identity and partial failure passed");
+    NSString *beforeStateSHA=Digest(SnapshotPath(root,B,@"state.tar.zst")),*beforeManifestSHA=Digest(SnapshotPath(root,B,@"manifest.plist"));
+    NSUInteger beforeResets=resets;
+    NSDictionary *(^existingReset)(NSDictionary *,NSError **)=^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;(void)failure;resets++;backend.fingerprint=FP(A,@"new",YES);return @{@"verified":@YES};};
+    reply=[store discardAndResetBundle:BID expectedIDFV:B reset:existingReset error:&error];
+    Check(!reply&&[error.userInfo[@"errorCode"]isEqual:@"backup_required"]&&![error.userInfo[@"stateMayBePartial"]boolValue]&&resets==beforeResets,@"discard accepted backed-up current IDFV");
+    Check([backend.fingerprint[@"data"][@"VendorIdentifier"]isEqual:B]&&[beforeSHA isEqual:Digest(SnapshotPath(root,B,@"data.tar.zst"))]&&[beforeStateSHA isEqual:Digest(SnapshotPath(root,B,@"state.tar.zst"))]&&[beforeManifestSHA isEqual:Digest(SnapshotPath(root,B,@"manifest.plist"))],@"rejected discard altered identity or existing backup");
+    backend.fingerprint=FP(A,@"unsaved",YES);
+    reply=[store discardAndResetBundle:BID expectedIDFV:A reset:reset error:&error];
+    Check(reply&&resets==beforeResets+1&&[beforeSHA isEqual:Digest(SnapshotPath(root,B,@"data.tar.zst"))]&&[store recheckBundle:BID idfv:B error:&error],@"unrelated snapshot blocked discard or was altered");
+    puts("discard/reset: identity guard, exclusive lock, existing-current rejection, unrelated snapshot preservation, no capture/archive, verified identity and partial failure passed");
 }
 static void BackupResetTests(NSString *base) {
     NSString *root=[base stringByAppendingPathComponent:@"reset-store"],*data=[base stringByAppendingPathComponent:@"reset-live"];

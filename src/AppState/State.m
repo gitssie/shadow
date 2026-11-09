@@ -611,6 +611,8 @@ static void CollectAbandonedSnapshots(int parent) {
             if (!fstatat(directory.snapshots, expected.fileSystemRepresentation, &snapshot, AT_SYMLINK_NOFOLLOW)) {
                 NSDictionary *existing = [self manifest:bundleID idfv:expected directory:directory verify:NO error:error];
                 if (!existing || ![self accessManifest:existing error:error]) return nil;
+                FailCode(error,@"backup_required",@"The current IDFV already has a backup. Use backupAndReset to save the current environment before resetting.");
+                return nil;
             } else if (errno != ENOENT) { POSIXFail(error,@"Cannot inspect the active snapshot."); return nil; }
         }
         current = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);

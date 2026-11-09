@@ -89,7 +89,9 @@ retain `backupIDFV` and `step`; interruption remains `outcomeUnknown`.
 App and uses the same full cleanup and changed-identity verification as
 `backupAndReset`, but creates no snapshot or backup recovery archive. The caller
 must explicitly choose to discard the live environment. Existing snapshots are
-retained; pending restoration and ownership conflicts are rejected. Success is
+retained. An existing snapshot for the current IDFV rejects discard with
+`backup_required`; callers must explicitly use `backupAndReset` instead.
+Pending restoration and ownership conflicts are rejected. Success is
 `{previous_idfv, current_idfv, reset:true, verified:true, backup_created:false}`
 without a `backup_id`. Check the helper capabilities for `discardAndReset`;
 older installed helpers do not support it. Interrupted mutations are unknown,
