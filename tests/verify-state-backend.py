@@ -261,6 +261,40 @@ static void FingerprintTests(void){
 }
 
 
+static void ResetBaselineFingerprintTests(NSString *base) {
+    NSString *bundle=@"local.fixture.app",*root=[base stringByAppendingPathComponent:@"documents-baseline"];
+    NSString *documents=[root stringByAppendingPathComponent:@"Documents"];
+    Check([NSFileManager.defaultManager createDirectoryAtPath:documents withIntermediateDirectories:YES attributes:nil error:NULL],@"baseline documents fixture");
+    struct attrlist attrs={.bitmapcount=ATTR_BIT_MAP_COUNT,.commonattr=ATTR_CMN_CRTIME};struct timespec original={.tv_sec=1000000000,.tv_nsec=123456789};
+    Check(!setattrlist(documents.fileSystemRepresentation,&attrs,&original,sizeof(original),FSOPT_NOFOLLOW),@"historical baseline fixture");
+    struct stat st;Check(!stat(root.fileSystemRepresentation,&st),@"baseline container identity");
+    NSDictionary *target=@{@"bundleID":bundle,@"bundlePath":@"/nonexistent/shadow-state-fixture.app",@"containers":@[@{@"identifier":bundle,@"path":root,@"device":@((uint64_t)st.st_dev),@"inode":@(st.st_ino)}]};
+    NSDictionary *data=@{@"VendorIdentifier":@"11111111-1111-4111-8111-111111111111"};
+    preferences=[FixtureDefaults new];preferences.values=[@{bundle:@{@"Fingerprint_Managed":@YES,@"Fingerprint_Enabled":@YES,@"Fingerprint_Locked":@YES,@"Fingerprint_Data":data,@"Fingerprint_Config":@{@"valid":@YES},@"unrelated":@"keep"}}mutableCopy];keychainParent=getppid();
+    StateMobileFingerprint(@"state-fingerprint-reset-baseline",target,@{@"apply":@NO});
+    NSDictionary *baseline=preferences.values[bundle][@"Fingerprint_ResetBaseline"];
+    Check(SHDWFingerprintResetBaselineValid(baseline),@"baseline not stored in Shadow profile");
+    NSDictionary *captured=StateMobileFingerprint(@"state-fingerprint-capture",target,@{});
+    Check([captured[@"resetBaseline"]isEqual:baseline],@"fingerprint capture omitted baseline");
+    StateMobileFingerprint(@"state-fingerprint-reset-baseline",target,@{@"apply":@YES});
+    StateMobileFingerprint(@"state-fingerprint-reset",target,@{@"idfv":data[@"VendorIdentifier"]});
+    Check([preferences.values[bundle][@"Fingerprint_ResetBaseline"]isEqual:baseline],@"fingerprint refresh overwrote original baseline");
+    Check([preferences.values[bundle][@"unrelated"]isEqual:@"keep"],@"baseline reset lost unrelated profile fields");
+    struct stat before,after;Check(!stat(documents.fileSystemRepresentation,&before),@"read post-reset metadata");
+    StateMobileFingerprint(@"state-fingerprint-restore",target,@{@"fingerprint":captured});
+    Check(!stat(documents.fileSystemRepresentation,&after)&&before.st_birthtimespec.tv_sec==after.st_birthtimespec.tv_sec&&before.st_birthtimespec.tv_nsec==after.st_birthtimespec.tv_nsec,@"fingerprint restore randomized live Documents time");
+    Check(SHDWFingerprintResetBaselineTimesEqual(preferences.values[bundle][@"Fingerprint_ResetBaseline"],baseline),@"fingerprint restore lost original baseline");
+    NSMutableDictionary *legacy=[captured mutableCopy];[legacy removeObjectForKey:@"resetBaseline"];
+    StateMobileFingerprint(@"state-fingerprint-restore",target,@{@"fingerprint":legacy});
+    Check([preferences.values[bundle][@"Fingerprint_ResetBaseline"]isEqual:baseline],@"legacy fingerprint restore discarded cached original baseline");
+    NSUInteger writes=preferences.writes;NSMutableDictionary *bad=[captured mutableCopy];bad[@"resetBaseline"]=@{@"Version":@YES,@"Containers":@{}};
+    Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-validate",target,@{@"fingerprint":bad});})&&writes==preferences.writes,@"malformed baseline passed readonly preflight");
+    NSMutableDictionary *outOfScope=[captured mutableCopy];
+    NSDictionary *record=[baseline[@"Containers"] allValues].firstObject;
+    outOfScope[@"resetBaseline"]=@{@"Version":@1,@"Containers":@{@"other.container":record}};
+    Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-validate",target,@{@"fingerprint":outOfScope});})&&writes==preferences.writes,@"out-of-scope baseline passed readonly restore preflight");
+    puts("native reset baseline: mobile profile persistence, fingerprint refresh preservation, capture/restore roundtrip and legacy compatibility passed");
+}
 static NSDictionary *RequiredWorker(NSString *mode,NSDictionary *target,NSString *directory){@try{return StateWorker(mode,target,directory);}@catch(NSException *exception){Check(NO,[NSString stringWithFormat:@"%@ failed: %@",mode,exception.reason]);return nil;}}
 static void WorkerReplacementTests(NSString *root){
     fixtureRoot=root;
@@ -335,7 +369,7 @@ static void CatalogProjectionTests(void) {
     Check(catalog.count==2&&[catalog[0][@"unavailable"]boolValue]&&[catalog[0][@"error"]isEqual:@"corrupt"]&&[catalog[0][@"size"]isEqual:@0],@"corrupt snapshot status lost in catalog transport");
     Check([catalog[1][@"finalizationPending"]boolValue]&&[catalog[1][@"size"]isEqual:@50],@"pending finalization status lost in catalog transport");
 }
-int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");ExternalTests([NSString stringWithUTF8String:argv[1]]);KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
+int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");ExternalTests([NSString stringWithUTF8String:argv[1]]);KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();ResetBaselineFingerprintTests([NSString stringWithUTF8String:argv[1]]);WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
 '''
 
 

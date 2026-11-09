@@ -46,7 +46,7 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
   }
   return @{@"Version":@1, @"System":system,
     @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},
-    @"Receipts":@{@"InterceptEnabled":@YES}};
+    @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"perApp"}};
 }
 + (NSArray<NSDictionary *> *)allSystemProfiles {
   static NSArray<NSDictionary *> *profiles;
@@ -105,7 +105,7 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
 }
 
 + (NSDictionary *)configurationByValidating:(id)value error:(NSError **)error {
-  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts"], @[@"UpdatedAt"]))
+  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts"], @[@"UpdatedAt",@"Advertising"]))
     return SHDWConfigurationInvalid(error);
   NSNumber *version = value[@"Version"], *updated = value[@"UpdatedAt"];
   if (![version isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)version) == CFBooleanGetTypeID() ||
@@ -122,6 +122,9 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
              ![self.systemProfilesForCurrentDevice containsObject:[self systemProfileForConfiguration:value] ?: @{}]) {
     return SHDWConfigurationInvalid(error);
   }
+  id advertising=value[@"Advertising"];
+  if (advertising && (!SHDWConfigurationKeys(advertising,@[@"Mode"],@[]) ||
+      ![@[@"system",@"zero",@"perApp"] containsObject:advertising[@"Mode"]])) return SHDWConfigurationInvalid(error);
   NSArray *radios=network[@"RadioTechnologies"];
   if (![radios isKindOfClass:NSArray.class] || radios.count > 2)
     return SHDWConfigurationInvalid(error);

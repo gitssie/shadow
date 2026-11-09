@@ -7,6 +7,7 @@
 #include <math.h>
 #import "StateKeychain.inc"
 #import "StatePreferences.inc"
+#import "DocumentsReset.inc"
 
 static NSString *const StateStorage = @"/private/var/mobile/Library/ShadowBackups";
 static pid_t stateInitiatingParent;
@@ -39,6 +40,11 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
     Require(getuid() == 501 && geteuid() == 501, @"Fingerprint preferences require the mobile user");
     NSString *identifier = target[@"bundleID"]; ShadowSettings *settings = ShadowSettings.sharedInstance; NSUserDefaults *defaults = settings.userDefaults;
     Require([defaults synchronize], @"Cannot read current fingerprint preferences"); NSDictionary *app = [defaults dictionaryForKey:identifier];
+    if ([mode isEqual:@"state-fingerprint-reset-baseline"]) {
+        Require(getppid() == keychainParent && TargetStopped(target), @"The application must remain stopped while directory metadata is reset");
+        Require(!request[@"apply"] || [@[@NO, @YES] containsObject:request[@"apply"]], @"Invalid directory reset phase");
+        return StateResetDocuments(target, defaults, app ?: @{}, [request[@"apply"] boolValue]);
+    }
     Require(SHDWFingerprintApplicationIsRegistered(app), @"The selected application is not registered in Shadow");
     if ([mode isEqual:@"state-registration"]) return @{@"registered":@YES};
     if ([mode isEqual:@"state-fingerprint-identity"]) {
@@ -74,6 +80,10 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
         Require([data isKindOfClass:NSDictionary.class] && [configuration isKindOfClass:NSDictionary.class] &&
             [NSPropertyListSerialization propertyList:@[data, configuration] isValidForFormat:NSPropertyListBinaryFormat_v1_0], @"Fingerprint preferences cannot be archived");
         NSMutableDictionary *result = [@{@"data":data, @"configuration":configuration, @"locked":@(SHDWFingerprintApplicationLocked(app))} mutableCopy];
+        if (app[@"Fingerprint_ResetBaseline"]) {
+            Require(SHDWFingerprintResetBaselineValid(app[@"Fingerprint_ResetBaseline"]), @"Invalid directory reset baseline");
+            result[@"resetBaseline"] = StateCaptureDocumentsBaseline(target, app[@"Fingerprint_ResetBaseline"]);
+        }
         NSString *digest = [SHDWFingerprintStore deviceFingerprintForData:data]; if (digest) result[@"digest"] = digest;
         return result;
     }
@@ -81,14 +91,22 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
     Require([fingerprint isKindOfClass:NSDictionary.class] && [fingerprint[@"data"] isKindOfClass:NSDictionary.class] &&
         [fingerprint[@"configuration"] isKindOfClass:NSDictionary.class] &&
         [NSPropertyListSerialization propertyList:@[fingerprint[@"data"], fingerprint[@"configuration"]] isValidForFormat:NSPropertyListBinaryFormat_v1_0], @"Archived fingerprint preferences cannot be imported");
+    Require(!fingerprint[@"resetBaseline"] || SHDWFingerprintResetBaselineValid(fingerprint[@"resetBaseline"]), @"Archived directory reset baseline is invalid");
+    if (fingerprint[@"resetBaseline"]) {
+        NSMutableSet *identifiers = [NSMutableSet new];
+        for (NSDictionary *container in target[@"containers"]) if (container[@"identifier"]) [identifiers addObject:container[@"identifier"]];
+        for (NSString *identifier in fingerprint[@"resetBaseline"][@"Containers"])
+            Require([identifiers containsObject:identifier], @"Archived Documents baseline is outside the application scope");
+    }
     if ([mode isEqual:@"state-fingerprint-validate"]) return @{@"validated":@YES};
     Require([mode isEqual:@"state-fingerprint-restore"] && getppid() == keychainParent && TargetStopped(target), @"The application must remain stopped before restoring its fingerprint");
     NSMutableDictionary *updated = [app mutableCopy]; updated[@"Fingerprint_Data"] = fingerprint[@"data"]; updated[@"Fingerprint_Config"] = fingerprint[@"configuration"]; updated[@"Fingerprint_Locked"] = @YES;
+    if (fingerprint[@"resetBaseline"]) updated[@"Fingerprint_ResetBaseline"] = StateRebindDocumentsBaseline(target, fingerprint[@"resetBaseline"]);
     [defaults setObject:updated forKey:identifier]; Require([defaults synchronize], @"Cannot persist the restored fingerprint");
     Require([[defaults dictionaryForKey:identifier] isEqual:updated], @"Restored fingerprint preferences failed readback"); return @{@"restored":@YES, @"locked":@YES};
 }
 static NSDictionary *StateWorker(NSString *mode, NSDictionary *target, NSString *directory) {
-    Require([@[@"state-export", @"state-validate", @"state-restore", @"state-registration", @"state-fingerprint-reset", @"state-fingerprint-reset-check", @"state-fingerprint-capture", @"state-fingerprint-identity", @"state-fingerprint-validate", @"state-fingerprint-restore", @"state-preferences-capture", @"state-preferences-validate", @"state-preferences-restore"] containsObject:mode], @"Unknown scoped application state worker");
+    Require([@[@"state-export", @"state-validate", @"state-restore", @"state-registration", @"state-fingerprint-reset", @"state-fingerprint-reset-check", @"state-fingerprint-reset-baseline", @"state-fingerprint-capture", @"state-fingerprint-identity", @"state-fingerprint-validate", @"state-fingerprint-restore", @"state-preferences-capture", @"state-preferences-validate", @"state-preferences-restore"] containsObject:mode], @"Unknown scoped application state worker");
     NSDictionary *request = @{}; NSString *path = [directory stringByAppendingPathComponent:@"request.plist"]; struct stat st;
     if (!lstat(path.fileSystemRepresentation, &st)) {
         Require(S_ISREG(st.st_mode) && st.st_uid == 0 && st.st_nlink == 1 && (st.st_mode & 0777) == 0600 && st.st_size > 0 && st.st_size <= (off_t)StateFrameLimit, @"Unsafe scoped application state request");
