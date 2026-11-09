@@ -73,6 +73,8 @@ Backup and restore execute the same existing helper actions used by Manager.
 Omitted backup metadata retains the normal Shadow defaults; individual title
 or note updates preserve the other value for the same IDFV. Restoration retains
 Shadow's same-IDFV and pending recovery behavior and never launches the app.
+If the current IDFV already has a snapshot, a new restore requires `saveCurrent=true`;
+otherwise the helper returns `backup_required` before stopping or mutating the App.
 The HTTP adapter defaults saveCurrent to true; an explicit pending retry uses
 false. External deletion and full verification operate on saved storage without
 resolving live application containers or launching device workers.

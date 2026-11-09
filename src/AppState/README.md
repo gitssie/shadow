@@ -121,7 +121,10 @@ backend. If it equals the selected snapshot's IDFV, restoration is rejected
 regardless of `saveCurrent`, including an ordinary pending retry. A matching IDFV denotes
 the active environment, whose subsequently generated data must be retained.
 This comparison uses IDFV, not the displayed fingerprint digest. Optional saving
-of a different current environment runs before restore mutations.
+of a different current environment runs before restore mutations. If that current
+IDFV already has a snapshot, saving is mandatory for a new restoration; requesting
+`saveCurrent=NO` returns `backup_required` before stopping or mutating the App.
+An existing pending recovery still retries without capturing partial live data.
 
 Restoration matches archived container identities to the currently authorized
 containers, so changed container UUID paths and app version/build values do not

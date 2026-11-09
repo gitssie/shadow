@@ -47,6 +47,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
 @property(nonatomic, copy) void (^completion)(void);
 @property(nonatomic) BOOL completed;
 @property(nonatomic) BOOL requiresRecovery;
+@property(nonatomic) BOOL requiresCurrentBackup;
 @end
 @implementation SHDWRestoreViewController
 - (void)viewDidLoad {
@@ -59,13 +60,16 @@ static NSString *ProgressTitle(NSDictionary *event) {
     UILabel *save = [UILabel new]; save.text = SHDWText(@"Back up current data first"); save.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:[UIFont systemFontOfSize:15]]; save.adjustsFontForContentSizeCategory = YES; save.textColor = SHDWInk(); save.numberOfLines = 0;
     BOOL recovery = [self.snapshot[@"restorePending"] boolValue]; self.requiresRecovery = recovery;
     self.saveCurrent = [UISwitch new]; self.saveCurrent.onTintColor = SHDWAccent(); self.saveCurrent.on = !self.sameIDFV && !recovery; self.saveCurrent.accessibilityIdentifier = @"backup.restore.save-current"; [self.saveCurrent addTarget:self action:@selector(updateTitle) forControlEvents:UIControlEventValueChanged];
+    self.saveCurrent.enabled = !self.requiresCurrentBackup && !self.sameIDFV && !recovery;
     self.saveRow = [[UIStackView alloc] initWithArrangedSubviews:@[save, self.saveCurrent]]; self.saveRow.spacing = 12; self.saveRow.alignment = UIStackViewAlignmentCenter; [self.saveCurrent setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal]; [card addArrangedSubview:self.saveRow]; self.saveRow.hidden = self.sameIDFV || recovery;
     self.hint = [UILabel new]; self.hint.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:12]]; self.hint.adjustsFontForContentSizeCategory = YES; self.hint.textColor = UIColor.secondaryLabelColor; self.hint.numberOfLines = 0; self.hint.text = SHDWText(SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV) ? @"Verify the restored data and finish the interrupted operation." : (self.sameIDFV && ![self.snapshot[@"resetPending"] boolValue] ? @"This backup belongs to the current IDFV and cannot be restored." : (recovery ? @"Retry the interrupted restore without backing up partial data." : @"The restored fingerprint stays locked.")));
     self.action = [SHDWBackupButton new]; self.action.symbol.image = SHDWSymbol(@"square.and.arrow.down", 20); [self.action.heightAnchor constraintGreaterThanOrEqualToConstant:48].active = YES; self.action.accessibilityIdentifier = @"backup.restore.confirm"; [self.action addTarget:self action:@selector(restore) forControlEvents:UIControlEventTouchUpInside];
     self.status = [UILabel new]; self.status.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:12]]; self.status.adjustsFontForContentSizeCategory = YES; self.status.numberOfLines = 0; self.status.hidden = YES; self.status.accessibilityIdentifier = @"backup.restore.status";
     for (UIView *view in @[card, self.hint, self.action, self.status]) [self.contentStack addArrangedSubview:view]; self.action.enabled = SHDWBackupCanRestore(self.snapshot, self.sameIDFV); [self updateTitle];
+    [self refreshRecoveryState];
 }
 - (void)updateTitle {
+    if (self.requiresCurrentBackup && !self.sameIDFV && !self.requiresRecovery) self.saveCurrent.on = YES;
     BOOL finalizing = SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV);
     [self.action setTitle:SHDWText(finalizing ? @"Finish verification" : (self.saveCurrent.on ? @"Back up and restore" : @"Restore backup")) forState:UIControlStateNormal];
     self.action.symbol.image = SHDWSymbol(finalizing ? @"checkmark.shield" : @"square.and.arrow.down", 20);
@@ -78,7 +82,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     if (!self.service.running) [self dismissViewControllerAnimated:YES completion:^{ [self notifyCompletion]; }];
 }
 - (void)refreshRecoveryState {
-    self.action.enabled = NO; [self.action setWorking:YES];
+    self.action.enabled = NO; self.saveCurrent.enabled = NO; [self.action setWorking:YES];
     __weak typeof(self) weakSelf = self;
     [self.service loadCatalog:^(NSArray *catalog, NSError *error) {
         typeof(self) self = weakSelf; if (!self) return;
@@ -90,6 +94,11 @@ static NSString *ProgressTitle(NSDictionary *event) {
         self.snapshot = updated;
         NSString *current = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier][@"VendorIdentifier"]);
         self.sameIDFV = [current isEqual:CanonicalIDFV(updated[@"idfv"])];
+        self.requiresRecovery = self.requiresRecovery || [updated[@"restorePending"] boolValue];
+        self.saveRow.hidden = self.sameIDFV || self.requiresRecovery;
+        if (self.requiresRecovery) self.saveCurrent.on = NO;
+        self.requiresCurrentBackup = !SHDWBackupCanDiscard(catalog, current);
+        self.saveCurrent.enabled = !self.completed && !self.sameIDFV && !self.requiresRecovery && !self.requiresCurrentBackup;
         self.action.enabled = SHDWBackupCanRestore(updated, self.sameIDFV);
         if (SHDWBackupFinalizationOnly(updated, self.sameIDFV)) self.hint.text = SHDWText(@"Verify the restored data and finish the interrupted operation.");
         [self updateTitle]; [self requestSheetLayout];
@@ -99,7 +108,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     if (!SHDWBackupCanRestore(self.snapshot, self.sameIDFV) || self.completed || self.service.running || [SHDWOperationCoordinator isRunning]) return;
     self.action.enabled = NO; self.saveCurrent.enabled = NO; self.closeButton.enabled = NO; self.modalInPresentation = YES;
     BOOL finalizing = SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV);
-    BOOL backupCurrent = !self.sameIDFV && !self.requiresRecovery && self.saveCurrent.on;
+    BOOL backupCurrent = !self.sameIDFV && !self.requiresRecovery && (self.requiresCurrentBackup || self.saveCurrent.on);
     [self.action setWorking:YES]; [self.action setTitle:SHDWText(finalizing ? @"Verifying backup" : (backupCurrent ? @"Backing up data" : @"Restoring data")) forState:UIControlStateNormal]; self.status.textColor = UIColor.secondaryLabelColor;
     __weak typeof(self) weakSelf = self;
     [self.service performAction:@"restore" request:@{@"idfv": self.snapshot[@"idfv"], @"saveCurrent": @(backupCurrent)} progress:^(NSDictionary *event) {
@@ -117,11 +126,11 @@ static NSString *ProgressTitle(NSDictionary *event) {
         self.requiresRecovery = self.requiresRecovery || [error.userInfo[@"stateMayBePartial"] boolValue];
         if (self.requiresRecovery) { self.saveCurrent.on = NO; self.saveRow.hidden = YES; self.hint.text = SHDWText(@"Retry the interrupted restore without backing up partial data."); }
         self.action.enabled = error && SHDWBackupCanRestore(self.snapshot, self.sameIDFV);
-        self.saveCurrent.enabled = !self.completed && !self.sameIDFV && !self.requiresRecovery;
+        self.saveCurrent.enabled = !self.completed && !self.sameIDFV && !self.requiresRecovery && !self.requiresCurrentBackup;
         self.status.textColor = error ? UIColor.systemRedColor : UIColor.secondaryLabelColor; self.status.hidden = NO;
         self.status.text = error ? error.localizedDescription : SHDWText(@"Restore completed");
         [self requestSheetLayout]; UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, self.status.text);
-        if (error) { [self updateTitle]; if (self.requiresRecovery) [self refreshRecoveryState]; }
+        if (error) { [self updateTitle]; [self refreshRecoveryState]; }
         else { [self.action setTitle:SHDWText(@"Restore completed") forState:UIControlStateNormal]; [self notifyCompletion]; }
     }];
 }
@@ -308,7 +317,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     NSString *currentIDFV = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]);
     BOOL sameIDFV = [currentIDFV isEqual:CanonicalIDFV(snapshot[@"idfv"])];
     if (!SHDWBackupCanRestore(snapshot, sameIDFV)) { self.status.text = SHDWText(!SHDWBackupPhoneOwned(snapshot) ? @"Controlled by RV" : @"This backup belongs to the current IDFV and cannot be restored."); self.status.textColor = UIColor.secondaryLabelColor; return; }
-    SHDWRestoreViewController *controller = [SHDWRestoreViewController new]; controller.application = self.selected; controller.snapshot = snapshot; controller.sameIDFV = sameIDFV; controller.service = self.service; __weak typeof(self) weakSelf = self; controller.completion = ^{ [weakSelf reloadApplications]; }; [self presentViewController:controller animated:YES completion:nil]; }
+    SHDWRestoreViewController *controller = [SHDWRestoreViewController new]; controller.application = self.selected; controller.snapshot = snapshot; controller.sameIDFV = sameIDFV; controller.requiresCurrentBackup = !SHDWBackupCanDiscard(self.catalog, currentIDFV); controller.service = self.service; __weak typeof(self) weakSelf = self; controller.completion = ^{ [weakSelf reloadApplications]; }; [self presentViewController:controller animated:YES completion:nil]; }
 - (void)perform:(NSString *)action request:(NSDictionary *)request {
     if (self.working || [SHDWOperationCoordinator isRunning] || !self.service) return;
     self.working = YES; self.status.textColor = UIColor.secondaryLabelColor; self.status.text = SHDWText([action isEqual:@"recheck"] ? @"Verifying backup" : ([action isEqual:@"edit"] ? @"Saving changes" : ([action isEqual:@"delete"] ? @"Deleting backup" : @"Backing up data"))); [self.action setTitle:self.status.text forState:UIControlStateNormal]; [self.action setWorking:YES]; [self collapseSelector]; [self updateControls];

@@ -65,10 +65,7 @@
         NSString *current = [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier][@"VendorIdentifier"];
         self.canDiscard = !error && SHDWBackupCanDiscard(catalog, current);
         if (error) { self.message.textColor = UIColor.systemRedColor; self.message.text = error.localizedDescription; }
-        else {
-            BOOL backedUp = [current isKindOfClass:NSString.class] && [[NSUUID alloc] initWithUUIDString:current] && !self.canDiscard;
-            self.message.textColor = UIColor.secondaryLabelColor; self.message.text = SHDWText(backedUp ? @"This IDFV already has a backup. Back up current data before cleaning." : @"Cleaning removes current app data. Back up first to keep it.");
-        }
+        else { self.message.textColor = UIColor.secondaryLabelColor; self.message.text = SHDWText(@"Cleaning removes current app data. Back up first to keep it."); }
         [self updateControls]; [self.presentationController.containerView setNeedsLayout];
     }];
 }

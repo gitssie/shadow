@@ -902,6 +902,16 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
             BOOL resettingRecovery = pending.count && [pending[@"resetRecovery"] boolValue];
             BOOL finalizing = sameIdentity && pending.count && [@[@"identity-pending", @"identity-committed"] containsObject:pending[@"phase"]] && (!resettingRecovery || Same(pending[@"phase"],@"identity-committed"));
             if (sameIdentity && !finalizing && !resettingRecovery) { FailCode(error,@"active_environment", @"This backup belongs to the current IDFV and cannot be restored."); return nil; }
+            if (!pending.count && !saveCurrent) {
+                NSString *current = UUIDValue(currentIDFV);
+                if (current) {
+                    struct stat snapshot;
+                    if (!fstatat(directory.snapshots, current.fileSystemRepresentation, &snapshot, AT_SYMLINK_NOFOLLOW)) {
+                        FailCode(error,@"backup_required",@"Back up the current environment before restoring another backup."); return nil;
+                    }
+                    if (errno != ENOENT) { POSIXFail(error,@"Cannot inspect the active snapshot."); return nil; }
+                }
+            }
             NSMutableDictionary *roots = [NSMutableDictionary new]; NSMutableSet *ids = [NSMutableSet new];
             for (NSString *prefix in manifest[@"roots"]) {
                 NSString *identifier = manifest[@"roots"][prefix][@"containerID"];

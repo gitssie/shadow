@@ -125,7 +125,6 @@
 "Backup saved" = "备份已保存";
 "Backup and clean" = "备份并清理";
 "Clean directly" = "直接清理";
-"This IDFV already has a backup. Back up current data before cleaning." = "当前 IDFV 已有备份，请先备份当前数据再清理。";
 "Please wait" = "请稍候";
 "Saving changes" = "正在保存";
 "Deleting backup" = "正在删除备份";
