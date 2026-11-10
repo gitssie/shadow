@@ -122,6 +122,9 @@ must report failures through `NSError`; progress callbacks should not mutate
 the store or application state.
 
 Restore verifies both complete archives and all payloads before clearing target files.
+The native stop barrier requires all selected App, extension and owned WebKit
+processes to remain absent for one continuous second before proceeding. Any
+reappearance restarts that quiet window within the existing overall deadline.
 Before stopping or mutating the target, restore reads its current IDFV from the
 backend. If it equals the selected snapshot's IDFV, restoration is rejected
 regardless of `saveCurrent`, including an ordinary pending retry. A matching IDFV denotes

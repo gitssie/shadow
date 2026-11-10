@@ -18,6 +18,7 @@ static NSMutableDictionary *processes;
 static NSMutableArray *signals;
 static BOOL stuck, reused, lateWrite, unreadable, recycleEnvironment, hideTerminatingMain, reuseOwnedWebKit;
 static BOOL exitIdentityGap, persistentIdentityGap, webIdentityGap, reuseDuringIdentityGap;
+static BOOL respawnDuringQuiet;
 static NSUInteger unresolvedReads;
 static NSUInteger registryQueries, changeRegistryAt;
 static NSMutableArray *pathReads, *identityReads, *environmentReads;
@@ -80,6 +81,9 @@ static void Tick(void) {
         NSDictionary *p=processes[pid];
         if (p[@"exit"] && [p[@"exit"] doubleValue] <= now) [processes removeObjectForKey:pid];
     }
+    if(respawnDuringQuiet && now>=0.7) {
+        respawnDuringQuiet=NO;processes[@100]=[@{@"path":@"/bundle/Target.app/main",@"home":@"/data/target",@"start":@3}mutableCopy];
+    }
     if (reused && now >= 0.2 && processes[@200]) {
         processes[@200]=[@{@"path":@"/other/tool",@"home":@"/other",@"start":@2} mutableCopy];
     }
@@ -138,6 +142,7 @@ static int Kill(pid_t pid,int signal) { Tick();if(!processes[@(pid)]){errno=ESRC
 static int Sleep(useconds_t delay) { now+=delay/1000000.0;Tick();return 0; }
 static char *Realpath(const char *path,char *out) { for(NSDictionary *p in processes.allValues)if([p[@"badCanonical"] boolValue]&&[p[@"path"] isEqual:@(path)]){errno=ENOENT;return NULL;}strlcpy(out,path,PATH_MAX);return out; }
 static NSDictionary *Fixture(BOOL natural) {
+    respawnDuringQuiet=NO;
     now=0;stuck=NO;reused=NO;lateWrite=NO;unreadable=NO;recycleEnvironment=NO;hideTerminatingMain=NO;reuseOwnedWebKit=NO;exitIdentityGap=NO;persistentIdentityGap=NO;webIdentityGap=NO;reuseDuringIdentityGap=NO;unresolvedReads=0;registryQueries=0;changeRegistryAt=0;pathReads=[NSMutableArray new];identityReads=[NSMutableArray new];environmentReads=[NSMutableArray new];signals=[NSMutableArray new];processes=[NSMutableDictionary new];
     NSString *prefix=@"/System/Library/Frameworks/WebKit.framework/XPCServices";
     NSString *(^service)(NSString*)=^NSString*(NSString *name){NSString *s=[@"com.apple.WebKit." stringByAppendingString:name];return [[prefix stringByAppendingPathComponent:[s stringByAppendingString:@".xpc"]] stringByAppendingPathComponent:s];};
@@ -150,6 +155,10 @@ static NSDictionary *Fixture(BOOL natural) {
 }
 static void Unrelated(void) { Require(processes[@201]&&processes[@202],@"unrelated WebKit terminated");Require(![signals containsObject:@201]&&![signals containsObject:@202],@"signal escaped target"); }
 int main(void) { @autoreleasepool {
+    NSDictionary *quietTarget=Fixture(YES);[processes removeObjectForKey:@200];NSDictionary *quietResult=Stop(quietTarget);
+    Require(now>=1.2&&[quietResult[@"waitSeconds"]doubleValue]>=1.2,@"stop did not wait one quiet second after exit");Unrelated();
+    quietTarget=Fixture(YES);[processes removeObjectForKey:@200];respawnDuringQuiet=YES;Stop(quietTarget);
+    Require(!respawnDuringQuiet&&[signals isEqual:@[@100,@100]]&&now>=1.9,@"reappearing target did not restart one-second quiet window");Unrelated();
     NSDictionary *target=Fixture(YES);Require(!TargetStopped(target),@"live target accepted");NSDictionary *result=Stop(target);Require(TargetStopped(target),@"stopped target rejected");
     Require(lateWrite&&now>=1.3&&[result[@"webKitProcesses"] intValue]==1,@"did not wait for late writer");
     Require([signals isEqual:@[@100]],@"natural WebKit exit interrupted");Unrelated();
@@ -188,7 +197,7 @@ int main(void) { @autoreleasepool {
     target=Fixture(YES);processes[@300]=[@{@"path":@"/other/main",@"home":@"/other",@"start":@1} mutableCopy];Stop(target);Require(processes[@300]&&![signals containsObject:@300]&&![identityReads containsObject:@300],@"same-name unrelated process signalled");
     target=Fixture(YES);processes[@300]=[@{@"path":@"/bundle/Target.app/main",@"name":@"main",@"home":@"/data/target",@"start":@1,@"unreadable":@YES} mutableCopy];failed=NO;@try{Stop(target);}@catch(NSException *e){failed=YES;}Require(failed&&!signals.count,@"unreadable additional target ignored");
     target=Fixture(YES);processes[@201][@"unreadable"]=@YES;processes[@201][@"environmentUnreadable"]=@YES;Stop(target);Require(![pathReads containsObject:@201]&&![identityReads containsObject:@201]&&![environmentReads containsObject:@201],@"unrelated owned WebKit inspected");Unrelated();
-    target=Fixture(YES);processes[@200][@"changeOwner"]=@YES;Stop(target);Require(processes[@200]&&![signals containsObject:@200],@"changed WebKit owner signalled");
+    target=Fixture(YES);[processes[@200]removeObjectForKey:@"exit"];processes[@200][@"changeOwner"]=@YES;Stop(target);Require(processes[@200]&&![signals containsObject:@200],@"changed WebKit owner signalled");
     target=Fixture(NO);reuseOwnedWebKit=YES;Stop(target);Require([signals isEqual:@[@100,@200,@200]]&&!processes[@200],@"recycled owned WebKit retained old signal marker");Unrelated();
     target=Fixture(NO);hideTerminatingMain=YES;processes[@200][@"hostGoneWhenMainExit"]=@YES;Stop(target);Require([signals isEqual:@[@100,@200]]&&![environmentReads containsObject:@200],@"host disappearance lost identity ownership");Unrelated();
     target=Fixture(YES);processes[@200][@"identityOwnerUnavailable"]=@YES;Stop(target);Require(![environmentReads containsObject:@200],@"live host ownership fallback ignored");Unrelated();

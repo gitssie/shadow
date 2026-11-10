@@ -290,7 +290,7 @@ static NSDictionary *Stop(NSDictionary *target) {
         }
         if (!alive && !current.count) {
             if (!quietSince) quietSince = MonotonicSeconds();
-            if (MonotonicSeconds() - quietSince >= 0.3)
+            if (MonotonicSeconds() - quietSince >= 1.0)
                 return @{@"applicationProcesses":@(apps), @"webKitProcesses":@(web), @"waitSeconds":@(MonotonicSeconds() - started)};
         } else quietSince = 0;
         usleep(100000);
