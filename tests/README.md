@@ -137,3 +137,10 @@ flags. Core fixtures check busy locks, active/pending protection, damaged and
 missing snapshots, and partial metadata updates. Native helper fixtures verify
 that saved-snapshot deletion and full verification dispatch without live target
 resolution. These checks do not establish live device permissions.
+
+The optional AppState check also runs verify-state-transition-wait.py. It extracts
+the production native wait method and uses real monotonic time to confirm the
+three-second and one-second minimum waits, with controlled process/authority
+loss during waiting. The storage fixture separately traces real archive
+capture/restore/synchronization/hash calls and injects interrupted waits, restarted
+targets and data reappearing after clear. No installed app or phone is touched.
