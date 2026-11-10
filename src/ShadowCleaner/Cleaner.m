@@ -239,8 +239,10 @@ static NSString *ValidateBundleIdentity(NSDictionary *info, NSDictionary *entitl
     NSString *suffix = [@"." stringByAppendingString:identifier];
     Require([applicationID isKindOfClass:NSString.class] && [applicationID hasSuffix:suffix] && applicationID.length > suffix.length, @"Application identifier does not match its signed identity");
     NSString *prefix = [applicationID substringToIndex:applicationID.length - suffix.length];
-    Require(Identifier(prefix) && ![prefix containsString:@"."] && (!team || [team isEqual:prefix]), @"Extension signing team does not match the selected application");
-    return prefix;
+    Require(Identifier(prefix) && ![prefix containsString:@"."], @"Invalid signed application identifier prefix");
+    id signingTeam = entitlements[@"com.apple.developer.team-identifier"] ?: prefix;
+    Require(Identifier(signingTeam) && ![signingTeam containsString:@"."] && (!team || [team isEqual:signingTeam]), @"Extension signing team does not match the selected application");
+    return signingTeam;
 }
 static id RegisteredProxy(NSString *identifier, BOOL extension) {
     Class cls = NSClassFromString(extension ? @"LSPlugInKitProxy" : @"LSApplicationProxy");
@@ -276,6 +278,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     NSMutableSet *groups = [NSMutableSet new], *keychain = [NSMutableSet new];
     NSMutableArray *identifiers = [NSMutableArray new], *containers = [NSMutableArray new], *shared = [NSMutableArray new], *executables = [NSMutableArray new];
     NSMutableDictionary *groupURLs = [NSMutableDictionary new];
+    NSMutableSet *keychainPrefixes = [NSMutableSet new];
     NSString *team = nil;
     for (NSString *bundle in Bundles(app)) {
         NSDictionary *info = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"]);
@@ -283,6 +286,8 @@ static NSDictionary *Resolve(NSString *identifier) {
         Require(BundleIdentifier(bid) && ![identifiers containsObject:bid], @"Invalid or duplicate extension identifier"); [identifiers addObject:bid];
         NSDictionary *entitlements = Entitlements(bundle);
         team = ValidateBundleIdentity(info, entitlements, identifier, team);
+        NSString *applicationID = entitlements[@"application-identifier"];
+        [keychainPrefixes addObject:[applicationID substringToIndex:applicationID.length - bid.length - 1]];
         struct stat executableStat;
         NSString *executable = [bundle stringByAppendingPathComponent:info[@"CFBundleExecutable"]];
         Require(!stat(executable.fileSystemRepresentation, &executableStat) && S_ISREG(executableStat.st_mode), @"Invalid executable identity");
@@ -361,6 +366,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     }
     struct stat bundleStat; Require(!stat(app.fileSystemRepresentation, &bundleStat), @"Unreadable installed application");
     NSDictionary *target = @{@"bundleID":identifier, @"bundlePath":app, @"identifiers":identifiers, @"team":team,
+        @"keychainPrefixes":[[keychainPrefixes allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"containers":containers, @"executables":executables, @"appGroups":[[groups allObjects] sortedArrayUsingSelector:@selector(compare:)], @"keychainGroups":[[keychain allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"preservedSharedGroups":shared, @"sharedAppGroups":[[sharedGroups allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"sharedGroupOwners":sharedGroupOwners, @"broadAppGroupAccess":broadGroupAccess, @"sharedKeychainGroups":[[sharedKeys allObjects] sortedArrayUsingSelector:@selector(compare:)],
@@ -754,12 +760,18 @@ static NSDictionary *ExactEntitlements(NSDictionary *base, NSArray *groups) {
 static NSArray *ValidatedKeychainScope(NSDictionary *target) {
     NSString *team = target[@"team"];
     Require(Identifier(team) && ![team containsString:@"."], @"Keychain signing team is unavailable");
-    NSString *prefix = [team stringByAppendingString:@"."];
+    NSArray *prefixes = target[@"keychainPrefixes"] ?: @[team];
+    Require([prefixes isKindOfClass:NSArray.class] && prefixes.count > 0 && [NSSet setWithArray:prefixes].count == prefixes.count, @"Invalid signed keychain prefixes");
+    for (id prefix in prefixes) Require(Identifier(prefix) && ![prefix containsString:@"."], @"Invalid signed keychain prefix");
     NSArray *groups = StringList(target[@"keychainGroups"]);
     NSArray *appGroups = StringList(target[@"appGroups"]);
     for (NSString *group in groups) {
         NSString *lower = group.lowercaseString;
-        BOOL teamGroup = [group hasPrefix:prefix] && group.length > prefix.length;
+        BOOL teamGroup = NO;
+        for (NSString *value in prefixes) {
+            NSString *prefix = [value stringByAppendingString:@"."];
+            if ([group hasPrefix:prefix] && group.length > prefix.length) { teamGroup = YES; break; }
+        }
         BOOL appGroup = [appGroups containsObject:group];
         Require((teamGroup || appGroup) && ![lower hasPrefix:@"com.apple."] && ![lower hasPrefix:@"apple."] && ![lower isEqual:@"apple"] && ![lower hasPrefix:@"group.com.apple."] && ![lower hasPrefix:@"systemgroup."], @"Keychain group is outside the selected application's signing team");
     }
