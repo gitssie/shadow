@@ -169,6 +169,36 @@ static void ArchiveTests(NSString *base) {
     puts("app-state archive: real zstd, full hashes, nanosecond creation/modification dates, corruption and no-follow traversal passed");
 }
 
+static void RestoredMtimeTests(NSString *base) {
+    NSString *source=[base stringByAppendingPathComponent:@"mtime-source"],*destination=[base stringByAppendingPathComponent:@"mtime-destination"],*archive=[base stringByAppendingPathComponent:@"mtime.tar.zst"];
+    Mk(source);Mk(destination);Put(source,@"Documents/value",Bytes(@"value"));Put(source,@"Library/Caches/test.app/Cache.db-shm",Bytes(@"cache"));
+    Check(!symlink("Documents/value",[source stringByAppendingPathComponent:@"alias"].fileSystemRepresentation),@"mtime symlink fixture");
+    Check(!link([source stringByAppendingPathComponent:@"Documents/value"].fileSystemRepresentation,[source stringByAppendingPathComponent:@"hardlink"].fileSystemRepresentation),@"mtime hardlink fixture");
+    NSError *error=nil;NSDictionary *roots=@{@"containers/data":destination};
+    NSDictionary *info=[SHDWStateArchive captureRoots:@{@"containers/data":source} payloads:@{} toPath:archive progress:nil error:&error];
+    Check(info&&[SHDWStateArchive restorePath:archive info:info roots:roots progress:nil error:&error],@"restore mtime fixture");
+    NSString *archiveSHA=Digest(archive);
+    for(NSNumber *nsec in @[@0,@987654321]) {
+        for(NSString *name in @[@"Documents/value",@"Library/Caches/test.app/Cache.db-shm",@"Documents",@"Library/Caches/test.app",@"alias",@"hardlink"]) {
+            NSString *path=[destination stringByAppendingPathComponent:name];struct timespec dates[2]={{.tv_nsec=UTIME_OMIT},{.tv_sec=2000000000,.tv_nsec=nsec.longValue}};
+            Check(!utimensat(AT_FDCWD,path.fileSystemRepresentation,dates,AT_SYMLINK_NOFOLLOW),@"change restored modification time only");
+        }
+        NSDictionary *before=Tree(destination);
+        Check([SHDWStateArchive verifyRoots:roots info:info progress:nil error:&error],[NSString stringWithFormat:@"mtime-only differences blocked verification: %@",error]);
+        Check([before isEqual:Tree(destination)]&&[archiveSHA isEqual:Digest(archive)],@"mtime verification rewrote destination or archive");
+    }
+    NSString *file=[destination stringByAppendingPathComponent:@"Documents/value"];struct stat original;Check(!lstat(file.fileSystemRepresentation,&original),@"mtime safety fixture stat");
+    Check(!chmod(file.fileSystemRepresentation,(original.st_mode&07777)^S_IXUSR),@"change permission fixture");
+    Check(![SHDWStateArchive verifyRoots:roots info:info progress:nil error:&error],@"mtime tolerance ignored permission mismatch");
+    Check(!chmod(file.fileSystemRepresentation,original.st_mode&07777),@"restore permission fixture");
+    NSDictionary *dates=Times(file);SetBirth(file,[dates[@"birthtime"]longLongValue]+1,[dates[@"birthtimeNsec"]longValue]);
+    Check(![SHDWStateArchive verifyRoots:roots info:info progress:nil error:&error],@"mtime tolerance ignored creation mismatch");
+    SetBirth(file,[dates[@"birthtime"]longLongValue],[dates[@"birthtimeNsec"]longValue]);
+    Put(destination,@"Documents/value",Bytes(@"other"));
+    Check(![SHDWStateArchive verifyRoots:roots info:info progress:nil error:&error],@"mtime tolerance ignored same-size content corruption");
+    Check([SHDWStateArchive verifyPath:archive info:info progress:nil error:&error],@"mtime tolerance changed archive integrity");
+    puts("restored mtime: seconds/nanoseconds tolerated for all entry types; no writes; permissions, creation dates and content remain strict passed");
+}
 static void HardlinkTests(NSString *base) {
     NSString *source=[base stringByAppendingPathComponent:@"hardlink-source"],*destination=[base stringByAppendingPathComponent:@"hardlink-destination"],*outside=[base stringByAppendingPathComponent:@"hardlink-outside"],*archive=[base stringByAppendingPathComponent:@"hardlinks.tar.zst"];
     Mk(source);Mk(destination);Mk(outside);Put(source,@"a",Bytes(@"linked content"));Mk([source stringByAppendingPathComponent:@"nested"]);
@@ -574,7 +604,7 @@ static void RecoveryAndCatalogTests(NSString *base) {
 static void Stress(NSString *base) {
     NSString *source=[base stringByAppendingPathComponent:@"stress-source"],*destination=[base stringByAppendingPathComponent:@"stress-destination"],*archive=[base stringByAppendingPathComponent:@"stress.tar.zst"];Mk(source);Mk(destination);for(NSUInteger i=0;i<2048;i++)Put(source,[NSString stringWithFormat:@"small/%04lu",(unsigned long)i],Bytes([NSString stringWithFormat:@"record-%lu",(unsigned long)i]));NSString *large=[source stringByAppendingPathComponent:@"large.bin"];int fd=open(large.fileSystemRepresentation,O_CREAT|O_WRONLY|O_TRUNC,0644);Check(fd>=0,@"open large fixture");unsigned char buffer[131072];uint32_t random=0x12345678;for(NSUInteger i=0;i<512;i++){for(NSUInteger j=0;j<sizeof(buffer);j++){random^=random<<13;random^=random>>17;random^=random<<5;buffer[j]=(unsigned char)random;}Check(write(fd,buffer,sizeof(buffer))==sizeof(buffer),@"write large fixture");}close(fd);struct rusage before,after;getrusage(RUSAGE_SELF,&before);__block NSUInteger events=0,chunkEvents=0;__block uint64_t greatest=0,largestChunk=0;NSMutableDictionary *phaseBytes=[NSMutableDictionary new];SHDWStateProgress progress=^(NSDictionary *event){events++;uint64_t current=[event[@"bytes"] unsignedLongLongValue];greatest=MAX(greatest,current);NSString *phase=event[@"phase"];uint64_t prior=[phaseBytes[phase] unsignedLongLongValue];if(current>=prior&&current>prior){largestChunk=MAX(largestChunk,current-prior);chunkEvents++;}phaseBytes[phase]=@(current);};NSError *error=nil;NSDictionary *info=[SHDWStateArchive captureRoots:@{@"containers/data":source} payloads:@{} toPath:archive progress:progress error:&error];Check(info!=nil,[NSString stringWithFormat:@"stress capture %@",error]);Check([SHDWStateArchive verifyPath:archive info:info progress:progress error:&error],@"stress archive verify");Check([SHDWStateArchive restorePath:archive info:info roots:@{@"containers/data":destination} progress:progress error:&error],@"stress restore");Check([SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:progress error:&error],@"stress all-file verify");getrusage(RUSAGE_SELF,&after);Check([Digest(large)isEqual:Digest([destination stringByAppendingPathComponent:@"large.bin"])],@"large binary digest mismatch");Check([NSFileManager.defaultManager contentsOfDirectoryAtPath:[destination stringByAppendingPathComponent:@"small"] error:NULL].count==2048,@"many small files lost");Check(events>512&&chunkEvents>=512&&greatest>=64ULL*1024*1024,@"streaming byte progress missing");Check(largestChunk<=131072,@"archive progress omitted bounded chunk records");Check(after.ru_maxrss-before.ru_maxrss<48LL*1024*1024,@"streaming exceeded 48MiB RSS growth for 64MiB file");printf("app-state streaming: 2048 files +64MiB, %lu progress events, RSS growth %.1fMiB passed\n",(unsigned long)events,(after.ru_maxrss-before.ru_maxrss)/1048576.0);
 }
-int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);RestoreCurrentBackupTests(base);DiscardResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
+int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);RestoredMtimeTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);RestoreCurrentBackupTests(base);DiscardResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
 '''
 
 

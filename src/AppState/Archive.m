@@ -570,8 +570,8 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
             Check(st.st_dev == root.device, @"Restored root crosses a filesystem boundary");
             NSString *path = relative.length ? [root.prefix stringByAppendingPathComponent:relative] : root.prefix; NSDictionary *entry = expected[path], *actual = StatEntry(path, st);
             Check(entry && ![seen containsObject:path], @"Restored root contains an extra entry"); [seen addObject:path];
-            for (NSString *key in @[@"type", @"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"]) {
-                if (!relative.length && [@[@"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"] containsObject:key]) continue;
+            for (NSString *key in @[@"type", @"mode", @"uid", @"gid", @"birthtime", @"birthtimeNsec"]) {
+                if (!relative.length && [@[@"birthtime", @"birthtimeNsec"] containsObject:key]) continue;
                 Check([actual[key] isEqual:entry[key]], @"Restored entry metadata differs");
             }
             if (S_ISDIR(st.st_mode)) {

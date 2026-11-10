@@ -90,6 +90,12 @@ creation/modification times. Container content operations can naturally change
 its modification time. An internal PAX annotation preserves creation times that
 libarchive's standard creation-time field omits (including equal/later creation
 times); it is archive metadata and is never installed as an app extended attribute.
+Restored-root verification does not require modification times to match the
+archive, for any entry type. It still checks content hashes, sizes, types,
+permissions, ownership, creation times and link identities. Archive integrity and
+source-capture consistency checks retain their timestamp checks; detecting a
+concurrent change while reading is distinct from comparing a restored timestamp
+with the archived value. Verification itself does not rewrite timestamps.
 The module does **not** preserve extended
 attributes, filesystem ACLs, or iOS file protection classes. It is not a complete
 filesystem image. Regular-file hard links within captured roots share one archived
