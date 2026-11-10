@@ -178,6 +178,19 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
 - (BOOL)stopTarget:(NSDictionary *)target error:(NSError **)error {
     @try { StateParent(); Stop(target[@"authority"]); return [self assertStopped:target error:error]; } @catch (NSException *exception) { return StateFailure(error, exception); }
 }
+- (BOOL)waitForStoppedTarget:(NSDictionary *)target duration:(NSTimeInterval)duration error:(NSError **)error {
+    @try {
+        StateParent();
+        NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + duration;
+        for (;;) {
+            StateParent();
+            if (![self assertStopped:target error:error]) return NO;
+            NSTimeInterval remaining = deadline - NSProcessInfo.processInfo.systemUptime;
+            if (remaining <= 0) return YES;
+            [NSThread sleepForTimeInterval:MIN(0.25, remaining)];
+        }
+    } @catch (NSException *exception) { return StateFailure(error, exception); }
+}
 - (BOOL)flushPreferencesForTarget:(NSDictionary *)target error:(NSError **)error {
     @try {
         StateParent();

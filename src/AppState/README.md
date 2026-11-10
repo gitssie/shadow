@@ -135,6 +135,20 @@ IDFV already has a snapshot, saving is mandatory for a new restoration; requesti
 `saveCurrent=NO` returns `backup_required` before stopping or mutating the App.
 An existing pending recovery still retries without capturing partial live data.
 
+
+The storage transition barrier is independent of UI progress pacing. After a
+confirmed stop, capture and non-saving restore wait at least three seconds while
+the backend continuously checks process and container authority. A saving restore
+uses the capture barrier, then waits one second after the verified current backup.
+Backup-and-reset also waits one second between verified backup and reset.
+After clearing all containers, restore synchronizes their directory trees, waits
+one second, and verifies that no application data reappeared before extraction.
+After extraction, it synchronizes all current roots and waits another second
+before the unchanged complete content/metadata verification. Any interrupted
+wait, restarted target, changed container, or late data stops the operation;
+mutation retains the pinned pending recovery source. Waiting never substitutes
+for checksum verification or retries a destructive step.
+
 Restoration matches archived container identities to the currently authorized
 containers, so changed container UUID paths and app version/build values do not
 by themselves block a reinstall or update. Every archived container must have an

@@ -201,6 +201,23 @@ static BOOL RemoveChild(int parent, const char *name, SHDWStateProgress progress
     } @finally { close(child); }
     return success;
 }
+static BOOL VerifyClearedDirectory(int fd, NSError **error) {
+    int scan = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (scan < 0) return POSIXFail(error, @"Cannot inspect the cleared application container.");
+    DIR *directory = fdopendir(scan);
+    if (!directory) { close(scan); return POSIXFail(error, @"Cannot enumerate the cleared application container."); }
+    BOOL success = YES;
+    @try {
+        for (;;) {
+            errno = 0; struct dirent *entry = readdir(directory);
+            if (!entry) { if (errno) success = POSIXFail(error, @"Cannot finish checking the cleared application container."); break; }
+            if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..") || MetadataName(entry->d_name)) continue;
+            success = Fail(error, @"Application data reappeared after cleanup; restoration stopped."); break;
+        }
+    } @finally { closedir(directory); }
+    return success;
+}
+
 static BOOL ClearDirectory(int fd, BOOL preserveMetadata, SHDWStateProgress progress, NSError **error) {
     DIR *directory = fdopendir(dup(fd)); if (!directory) return POSIXFail(error, @"Cannot enumerate stored data.");
     BOOL success = YES;
@@ -467,7 +484,9 @@ static void CollectAbandonedSnapshots(int parent) {
         if (!owned || ![self accessManifest:owned error:error]) return nil;
     }
     [self event:@"backup" stage:@"stop"];
-    if (![self.backend stopTarget:context[@"target"] error:error] || ![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:context[@"target"] error:error]) return nil;
+    if (![self.backend stopTarget:context[@"target"] error:error] ||
+        ![self.backend waitForStoppedTarget:context[@"target"] duration:3.0 error:error] ||
+        ![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:context[@"target"] error:error]) return nil;
     if (![self guard:context directory:directory refresh:YES error:error]) return nil;
     NSDictionary *fingerprint = [self fingerprint:context error:error]; if (!fingerprint) return nil;
     NSArray *records = [self.backend captureKeychainForTarget:context[@"target"] error:error];
@@ -605,7 +624,9 @@ static void CollectAbandonedSnapshots(int parent) {
             stage = @"backup";
             saved = [self backup:bundleID metadata:nil directory:directory error:error]; if (!saved) return nil;
             if (!Same(saved[@"idfv"],expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed while its backup was created."); return nil; }
-            if (![self manifest:bundleID idfv:expected directory:directory verify:YES error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
+            if (![self manifest:bundleID idfv:expected directory:directory verify:YES error:error] ||
+                ![self.backend waitForStoppedTarget:context[@"target"] duration:1.0 error:error] ||
+                ![self guard:context directory:directory refresh:YES error:error]) return nil;
         } else {
             struct stat snapshot;
             if (!fstatat(directory.snapshots, expected.fileSystemRepresentation, &snapshot, AT_SYMLINK_NOFOLLOW)) {
@@ -922,6 +943,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
             }
             [self event:@"restore" stage:@"stop"];
             if (![self.backend stopTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error] || ![self.backend validateKeychain:payloads[@"keychain"] target:target error:error] || ![self.backend validateFingerprint:payloads[@"fingerprint"] target:target error:error] || ![self.backend validatePreferences:payloads[@"preferences"] target:target error:error]) return nil;
+            if ((!saveCurrent || finalizing) &&
+                (![self.backend waitForStoppedTarget:target duration:3.0 error:error] ||
+                 ![self guard:context directory:directory refresh:YES error:error])) return nil;
             CollectAbandonedSnapshots(directory.fd);
             if (finalizing) {
                 // This path never clears or restores application state. It only
@@ -934,7 +958,8 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 if (saveCurrent) {
                     NSDictionary *live = [self fingerprint:context error:error]; if (!live) return nil;
                     if (Same(live[@"data"][@"VendorIdentifier"], canonical)) { Fail(error, @"Saving the current state would overwrite the selected restoration source. Restore without saving it instead."); return nil; }
-                    if (![self backup:bundleID metadata:nil directory:directory error:error]) return nil;
+                    if (![self backup:bundleID metadata:nil directory:directory error:error] ||
+                        ![self.backend waitForStoppedTarget:target duration:1.0 error:error]) return nil;
                 }
                 if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend flushPreferencesForTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error]) return nil;
                 NSMutableDictionary *source = [@{ @"format": manifest[@"format"], @"bundleID": bundleID, @"idfv": canonical, @"archiveSHA": manifest[@"archiveInfo"][@"sha256"], @"date": NSDate.date, @"phase":resettingRecovery?@"resetting":@"restoring" } mutableCopy];
@@ -952,9 +977,24 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                     int fd = open([target[@"containers"][identifier] fileSystemRepresentation], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) { POSIXFail(error, @"Cannot open the restoration container."); return nil; }
                     BOOL cleared = NO; @try { cleared = ClearDirectory(fd, YES, progress, error); } @finally { close(fd); } if (!cleared) return nil;
                 }
+                // Persist removals and allow delayed writers to drain before
+                // creating the target's files. Never delete newly appearing data.
+                if (![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:progress error:error] ||
+                    ![self.backend waitForStoppedTarget:target duration:1.0 error:error] ||
+                    ![self guard:context directory:directory refresh:YES error:error]) return nil;
+                for (NSString *identifier in target[@"containers"]) {
+                    int fd = open([target[@"containers"][identifier] fileSystemRepresentation], O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                    if (fd < 0) { POSIXFail(error, @"Cannot inspect the cleared restoration container."); return nil; }
+                    BOOL empty = NO; @try { empty = VerifyClearedDirectory(fd, error); } @finally { close(fd); } if (!empty) return nil;
+                }
                 NSString *archive = [[directory.path stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[canonical stringByAppendingPathComponent:@"data.tar.zst"]];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive restorePath:archive info:manifest[@"archiveInfo"] roots:roots progress:progress error:error]) return nil;
-                if (![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:progress error:error]) return nil;
+                // Make restored bytes durable before the settling interval and
+                // the unchanged complete metadata/content verification.
+                if (![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:progress error:error] ||
+                    ![self.backend waitForStoppedTarget:target duration:1.0 error:error] ||
+                    ![self guard:context directory:directory refresh:YES error:error] ||
+                    ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:progress error:error]) return nil;
                 [self event:@"restore" stage:@"preferences"];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restorePreferences:payloads[@"preferences"] target:target error:error] || ![self.backend flushPreferencesForTarget:target error:error]) return nil;
                 if (![self verifyRestoredPayloads:payloads context:context directory:directory identifiers:ids error:error]) return nil;

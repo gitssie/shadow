@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HARNESS = r'''
 #import "State.h"
 #include <sys/file.h>
+#include <objc/runtime.h>
 #import <CommonCrypto/CommonDigest.h>
 #include <archive.h>
 #include <archive_entry.h>
@@ -104,6 +105,10 @@ static NSError *Problem(NSString *message) { return [NSError errorWithDomain:@"f
 @property(nonatomic) BOOL failCurrentIdentifier;
 @property(nonatomic,strong) NSMutableArray *calls;
 @property(nonatomic) BOOL stopped;
+@property(nonatomic) NSUInteger waitCount;
+@property(nonatomic) NSUInteger failWait;
+@property(nonatomic) NSUInteger restartWait;
+@property(nonatomic) NSUInteger reappearWait;
 @property(nonatomic) BOOL restarted;
 @property(nonatomic) BOOL failCapture;
 @property(nonatomic) BOOL failRestore;
@@ -120,6 +125,15 @@ static NSError *Problem(NSString *message) { return [NSError errorWithDomain:@"f
 - (NSString *)currentVendorIdentifierForTarget:(NSDictionary *)target error:(NSError **)error { (void)target;[self.calls addObject:@"current-vendor"];if(self.failCurrentIdentifier){if(error)*error=Problem(@"Cannot read current vendor identifier");return nil;}return self.fingerprint[@"data"][@"VendorIdentifier"] ?: @""; }
 - (BOOL)stopTarget:(NSDictionary *)target error:(NSError **)error { (void)target;(void)error;[self.calls addObject:@"stop"];self.stopped=YES;return YES; }
 - (BOOL)assertStopped:(NSDictionary *)target error:(NSError **)error { (void)target;[self.calls addObject:@"assert"];Check(self.stopped,@"assert before stop");if(self.restarted){if(error)*error=Problem(@"target restarted");return NO;}return YES; }
+- (BOOL)waitForStoppedTarget:(NSDictionary *)target duration:(NSTimeInterval)duration error:(NSError **)error {
+    Check(duration==1 || duration==3,@"unexpected settle duration");
+    [self.calls addObject:[NSString stringWithFormat:@"wait:%.0f",duration]];
+    self.waitCount++;
+    if(self.reappearWait==self.waitCount)Put(target[@"containers"][@"data"],@"Documents/reappeared",Bytes(@"late system write"));
+    if(self.restartWait==self.waitCount)self.restarted=YES;
+    if(self.failWait==self.waitCount){if(error)*error=Problem(@"settle wait interrupted");return NO;}
+    return [self assertStopped:target error:error];
+}
 - (BOOL)flushPreferencesForTarget:(NSDictionary *)target error:(NSError **)error { (void)target;Check(self.stopped,@"flush before stop");[self.calls addObject:@"flush"];if(self.failFlush){if(error)*error=Problem(@"flush failed");return NO;}return YES; }
 - (NSArray *)captureKeychainForTarget:(NSDictionary *)target error:(NSError **)error { (void)target;Check(self.stopped,@"keychain capture before stop");[self.calls addObject:@"capture-keychain"];if(self.failCapture){if(error)*error=Problem(@"capture failed");return nil;}return self.keychain; }
 - (BOOL)validateKeychain:(NSArray *)records target:(NSDictionary *)target error:(NSError **)error { if (![records isKindOfClass:NSArray.class]) return NO;for(NSDictionary *record in records)if(record[@"group"]&&![target[@"keychainGroups"] containsObject:record[@"group"]]){if(error)*error=Problem(@"Archived credential is outside current authorization");return NO;}return YES; }
@@ -232,7 +246,7 @@ static void HardlinkTests(NSString *base) {
 }
 
 static NSString *SnapshotPath(NSString *root,NSString *idfv,NSString *name){return [[[[root stringByAppendingPathComponent:BID] stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:idfv] stringByAppendingPathComponent:name];}
-static void Reset(FakeBackend *backend){backend.stopped=NO;[backend.calls removeAllObjects];}
+static void Reset(FakeBackend *backend){backend.stopped=NO;backend.waitCount=0;[backend.calls removeAllObjects];}
 static void CheckStorageOwner(NSString *root) {
     NSArray *paths = [@[@""] arrayByAddingObjectsFromArray:[NSFileManager.defaultManager subpathsOfDirectoryAtPath:root error:NULL]];
     for (NSString *name in paths) {
@@ -468,6 +482,113 @@ static void BackupResetTests(NSString *base) {
     Check(![store discardAndResetBundle:BID expectedIDFV:A reset:reset error:&error]&&resets==before&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"discard bypassed RV ownership");
     puts("backup/reset: IDFV mismatch, mandatory backup, full-operation lock, retained recovery backup, changed fingerprint and ownership passed");
 }
+
+// Instrument real archive boundaries, never substitute fake capture/restore/hash work.
+static NSMutableArray *TimingCalls;
+@interface SHDWStateArchive (TimingFixture)
++ (NSDictionary *)timingCapture:(NSDictionary *)roots payloads:(NSDictionary *)payloads toPath:(NSString *)path progress:(SHDWStateProgress)progress error:(NSError **)error;
++ (BOOL)timingRestore:(NSString *)path info:(NSDictionary *)info roots:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error;
++ (BOOL)timingSync:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error;
++ (BOOL)timingVerify:(NSDictionary *)roots info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error;
+@end
+@implementation SHDWStateArchive (TimingFixture)
++ (NSDictionary *)timingCapture:(NSDictionary *)roots payloads:(NSDictionary *)payloads toPath:(NSString *)path progress:(SHDWStateProgress)progress error:(NSError **)error {
+    [TimingCalls addObject:@"archive:capture"];
+    NSDictionary *result=[self timingCapture:roots payloads:payloads toPath:path progress:progress error:error];
+    [TimingCalls addObject:@"archive:captured"];return result;
+}
++ (BOOL)timingRestore:(NSString *)path info:(NSDictionary *)info roots:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error {
+    [TimingCalls addObject:@"archive:restore"];
+    BOOL result=[self timingRestore:path info:info roots:roots progress:progress error:error];
+    [TimingCalls addObject:@"archive:restored"];return result;
+}
++ (BOOL)timingSync:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error {
+    [TimingCalls addObject:@"archive:sync"];
+    BOOL result=[self timingSync:roots progress:progress error:error];
+    [TimingCalls addObject:@"archive:synced"];return result;
+}
++ (BOOL)timingVerify:(NSDictionary *)roots info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error {
+    [TimingCalls addObject:@"archive:verify"];
+    return [self timingVerify:roots info:info progress:progress error:error];
+}
+@end
+static void TimingHooks(void) {
+    static dispatch_once_t once;dispatch_once(&once, ^{
+        Class cls=SHDWStateArchive.class;
+        method_exchangeImplementations(class_getClassMethod(cls,@selector(captureRoots:payloads:toPath:progress:error:)),class_getClassMethod(cls,@selector(timingCapture:payloads:toPath:progress:error:)));
+        method_exchangeImplementations(class_getClassMethod(cls,@selector(restorePath:info:roots:progress:error:)),class_getClassMethod(cls,@selector(timingRestore:info:roots:progress:error:)));
+        method_exchangeImplementations(class_getClassMethod(cls,@selector(synchronizeRoots:progress:error:)),class_getClassMethod(cls,@selector(timingSync:progress:error:)));
+        method_exchangeImplementations(class_getClassMethod(cls,@selector(verifyRoots:info:progress:error:)),class_getClassMethod(cls,@selector(timingVerify:info:progress:error:)));
+    });
+}
+static void OrderedCalls(NSArray *calls,NSArray *expected) {
+    NSUInteger cursor=0;
+    for(NSString *call in calls)if(cursor<expected.count && [call isEqual:expected[cursor]])cursor++;
+    Check(cursor==expected.count,[NSString stringWithFormat:@"settle ordering %@ missing %@",calls,expected]);
+}
+static FakeBackend *TimingBackend(NSString *data) {
+    FakeBackend *backend=[FakeBackend new];backend.calls=[NSMutableArray new];
+    backend.target=@{@"bundleID":BID,@"token":@"timing-install",@"version":@"1",@"build":@"1",@"containers":@{@"data":data},@"keychainGroups":@[]};
+    backend.fingerprint=FP(A,@"source",YES);backend.keychain=@[];backend.preferences=@{};return backend;
+}
+static void SettleTimingTests(NSString *base) {
+    TimingHooks();
+    for(NSUInteger scenario=0;scenario<9;scenario++) {
+        NSString *fixture=[base stringByAppendingPathComponent:[NSString stringWithFormat:@"settle-%lu",(unsigned long)scenario]],*root=[fixture stringByAppendingPathComponent:@"store"],*data=[fixture stringByAppendingPathComponent:@"live"];
+        Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private timing store");Mk(data);Put(data,MCM,Bytes(@"metadata"));Put(data,@"Documents/value",Bytes(@"source"));
+        FakeBackend *backend=TimingBackend(data);NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];Check(store!=nil,@"timing store");
+        TimingCalls=backend.calls;Check([store backupBundle:BID metadata:nil error:&error]!=nil,@"timing source backup");
+        OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"flush",@"capture-keychain",@"archive:capture",@"archive:captured"]);
+        TimingCalls=nil;backend.fingerprint=FP(B,@"current",YES);Put(data,@"Documents/value",Bytes(@"current"));Reset(backend);
+        if(scenario==8)backend.reappearWait=2;
+        else if(scenario>=2){if(scenario<5)backend.failWait=scenario-1;else backend.restartWait=scenario-4;}
+        BOOL save=scenario==1;TimingCalls=backend.calls;
+        store.progressHandler=^(NSDictionary *event){if([event[@"stage"]isEqual:@"clear"])[backend.calls addObject:@"stage:clear"];};
+        NSDictionary *reply=[store restoreBundle:BID idfv:A saveCurrent:save error:&error];TimingCalls=nil;store.progressHandler=nil;
+        if(scenario<2) {
+            Check(reply!=nil,[NSString stringWithFormat:@"settled restore %@",error]);
+            if(save)OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:captured",@"wait:1",@"stage:clear"]);
+            else OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"stage:clear"]);
+            OrderedCalls(backend.calls,@[@"stage:clear",@"archive:synced",@"wait:1",@"archive:restore",@"archive:restored",@"archive:synced",@"wait:1",@"archive:verify",@"restore-preferences"]);
+            Check([Get(data,@"Documents/value")isEqual:Bytes(@"source")],@"settled restore contents");
+            if(!save) {
+                NSDictionary *manifest=[NSDictionary dictionaryWithContentsOfFile:SnapshotPath(root,A,@"manifest.plist")];
+                NSString *pending=[[root stringByAppendingPathComponent:BID]stringByAppendingPathComponent:@"pending.plist"];
+                NSDictionary *continuation=@{@"format":manifest[@"format"],@"bundleID":BID,@"idfv":A,@"archiveSHA":manifest[@"archiveInfo"][@"sha256"],@"stateArchiveSHA":manifest[@"stateArchiveInfo"][@"sha256"],@"date":NSDate.date,@"phase":@"identity-committed"};
+                Check([continuation writeToFile:pending atomically:NO]&&!chmod(pending.fileSystemRepresentation,0600),@"timing finalization fixture");
+                Reset(backend);TimingCalls=backend.calls;
+                Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,@"settled verify-only finalization");TimingCalls=nil;
+                OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:verify"]);
+                Check(![backend.calls containsObject:@"archive:restore"]&&![backend.calls containsObject:@"archive:capture"],@"finalization replayed capture or restore");
+            }
+
+        } else {
+            NSUInteger failed=scenario==8?2:(scenario<5?scenario-1:scenario-4);
+            Check(!reply&&error!=nil,@"settle failure/restart continued restoration");
+            Check(![backend.calls containsObject:@"restore-preferences"]&&! [backend.calls containsObject:@"restore-fingerprint"],@"settle failure reached preference/identity commit");
+            if(failed<=2)Check(![backend.calls containsObject:@"archive:restore"],@"failed settle reached archive restore");
+            else Check([backend.calls containsObject:@"archive:restored"]&&![backend.calls containsObject:@"archive:verify"],@"post-restore wait failure reached hash verification");
+            NSString *pending=[[root stringByAppendingPathComponent:BID]stringByAppendingPathComponent:@"pending.plist"];
+            if(failed==1)Check([Get(data,@"Documents/value")isEqual:Bytes(@"current")]&&![NSFileManager.defaultManager fileExistsAtPath:pending],@"pre-mutation settle failure changed current data");
+            else Check([NSFileManager.defaultManager fileExistsAtPath:pending]&&[error.userInfo[@"stateMayBePartial"]boolValue],@"mutated settle failure dropped recovery pending");
+            if(scenario==8)Check([Get(data,@"Documents/reappeared")isEqual:Bytes(@"late system write")],@"late clear-window data was silently cleared again");
+            Check([store recheckBundle:BID idfv:A error:&error],@"settle failure damaged recovery archive");
+        }
+    }
+    NSString *root=[base stringByAppendingPathComponent:@"settle-reset-store"],*data=[base stringByAppendingPathComponent:@"settle-reset-live"];Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private reset timing store");Mk(data);Put(data,MCM,Bytes(@"metadata"));Put(data,@"Documents/value",Bytes(@"source"));
+    FakeBackend *backend=TimingBackend(data);NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];
+    TimingCalls=backend.calls;
+    NSDictionary *reply=[store backupAndResetBundle:BID expectedIDFV:A reset:^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;(void)failure;[backend.calls addObject:@"reset-callback"];backend.fingerprint=FP(B,@"reset",YES);return @{@"verified":@YES};} error:&error];TimingCalls=nil;
+    Check(reply!=nil,@"settled backup/reset");OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:captured",@"wait:1",@"reset-callback"]);
+    Reset(backend);backend.failWait=2;__block BOOL resetCalled=NO;TimingCalls=backend.calls;
+    reply=[store backupAndResetBundle:BID expectedIDFV:B reset:^NSDictionary *(NSDictionary *target,NSError **failure){(void)target;(void)failure;resetCalled=YES;return @{@"verified":@YES};} error:&error];TimingCalls=nil;
+    Check(!reply&&!resetCalled,@"failed post-backup settle still invoked reset callback");
+    OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:captured",@"wait:1"]);
+    Check([store recheckBundle:BID idfv:B error:&error],@"failed reset settle lost completed backup");
+
+    puts("settle timing: real capture/clear/sync/restore/hash boundaries, save-current/reset sequencing and interrupted/restarted waits retain recovery passed");
+}
+
 static void StateTests(NSString *base) {
     NSString *root=[base stringByAppendingPathComponent:@"store"],*data=[base stringByAppendingPathComponent:@"live"],*group=[base stringByAppendingPathComponent:@"live-group"],*other=[base stringByAppendingPathComponent:@"other-app"];Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private store fixture");Mk(data);Mk(group);Mk(other);Put(data,MCM,Bytes(@"MCM-original"));Put(data,@".com.apple.mobile_container_manager.acl.plist",Bytes(@"ACL-original"));Put(data,@"Documents/text",Bytes(@"alpha"));unsigned char raw[]={0,255,0,12,13};Put(data,@"Library/binary",[NSData dataWithBytes:raw length:sizeof(raw)]);Put(group,@"group-file",Bytes(@"group-alpha"));Put(other,@"untouched",Bytes(@"other application"));NSDictionary *otherBefore=Tree(other);
     FakeBackend *backend=[FakeBackend new];backend.calls=[NSMutableArray new];backend.preferences=@{@"example.state.fixture":@{@"theme":@"alpha",@"binary":Bytes(@"prefs")}};backend.target=@{@"bundleID":BID,@"token":@"stable-fixture-token",@"version":@"1.0",@"build":@"42",@"containers":@{@"data":data,@"group.example.state":group},@"keychainGroups":@[@"TEAM.example.state.fixture"]};backend.fingerprint=FP(A,@"alpha",NO);backend.keychain=@[@{@"class":@"genp",@"data":[NSData dataWithBytes:raw length:sizeof(raw)],@"account":@"alpha"}];NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];Check(store!=nil,[NSString stringWithFormat:@"create store: %@",error]);store.progressHandler=^(NSDictionary *event){NSString *phase=event[@"phase"];if([phase isEqual:@"capture"]||[phase isEqual:@"restore"])Check(backend.stopped,@"archive work before target stop");};
@@ -604,7 +725,7 @@ static void RecoveryAndCatalogTests(NSString *base) {
 static void Stress(NSString *base) {
     NSString *source=[base stringByAppendingPathComponent:@"stress-source"],*destination=[base stringByAppendingPathComponent:@"stress-destination"],*archive=[base stringByAppendingPathComponent:@"stress.tar.zst"];Mk(source);Mk(destination);for(NSUInteger i=0;i<2048;i++)Put(source,[NSString stringWithFormat:@"small/%04lu",(unsigned long)i],Bytes([NSString stringWithFormat:@"record-%lu",(unsigned long)i]));NSString *large=[source stringByAppendingPathComponent:@"large.bin"];int fd=open(large.fileSystemRepresentation,O_CREAT|O_WRONLY|O_TRUNC,0644);Check(fd>=0,@"open large fixture");unsigned char buffer[131072];uint32_t random=0x12345678;for(NSUInteger i=0;i<512;i++){for(NSUInteger j=0;j<sizeof(buffer);j++){random^=random<<13;random^=random>>17;random^=random<<5;buffer[j]=(unsigned char)random;}Check(write(fd,buffer,sizeof(buffer))==sizeof(buffer),@"write large fixture");}close(fd);struct rusage before,after;getrusage(RUSAGE_SELF,&before);__block NSUInteger events=0,chunkEvents=0;__block uint64_t greatest=0,largestChunk=0;NSMutableDictionary *phaseBytes=[NSMutableDictionary new];SHDWStateProgress progress=^(NSDictionary *event){events++;uint64_t current=[event[@"bytes"] unsignedLongLongValue];greatest=MAX(greatest,current);NSString *phase=event[@"phase"];uint64_t prior=[phaseBytes[phase] unsignedLongLongValue];if(current>=prior&&current>prior){largestChunk=MAX(largestChunk,current-prior);chunkEvents++;}phaseBytes[phase]=@(current);};NSError *error=nil;NSDictionary *info=[SHDWStateArchive captureRoots:@{@"containers/data":source} payloads:@{} toPath:archive progress:progress error:&error];Check(info!=nil,[NSString stringWithFormat:@"stress capture %@",error]);Check([SHDWStateArchive verifyPath:archive info:info progress:progress error:&error],@"stress archive verify");Check([SHDWStateArchive restorePath:archive info:info roots:@{@"containers/data":destination} progress:progress error:&error],@"stress restore");Check([SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:progress error:&error],@"stress all-file verify");getrusage(RUSAGE_SELF,&after);Check([Digest(large)isEqual:Digest([destination stringByAppendingPathComponent:@"large.bin"])],@"large binary digest mismatch");Check([NSFileManager.defaultManager contentsOfDirectoryAtPath:[destination stringByAppendingPathComponent:@"small"] error:NULL].count==2048,@"many small files lost");Check(events>512&&chunkEvents>=512&&greatest>=64ULL*1024*1024,@"streaming byte progress missing");Check(largestChunk<=131072,@"archive progress omitted bounded chunk records");Check(after.ru_maxrss-before.ru_maxrss<48LL*1024*1024,@"streaming exceeded 48MiB RSS growth for 64MiB file");printf("app-state streaming: 2048 files +64MiB, %lu progress events, RSS growth %.1fMiB passed\n",(unsigned long)events,(after.ru_maxrss-before.ru_maxrss)/1048576.0);
 }
-int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{ArchiveTests(base);RestoredMtimeTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);RestoreCurrentBackupTests(base);DiscardResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
+int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==3,@"fixture arguments");NSString *base=[NSString stringWithUTF8String:argv[1]];Mk(base);if(!strcmp(argv[2],"stress"))Stress(base);else{SettleTimingTests(base);ArchiveTests(base);RestoredMtimeTests(base);ResetBaselineArchiveTests(base);BackupResetTests(base);RestoreCurrentBackupTests(base);DiscardResetTests(base);StatePreferenceReplayTests(base);HardlinkTests(base);ReinstallationTests(base);StateTests(base);RecoveryAndCatalogTests(base);}return 0;}}
 '''
 
 
