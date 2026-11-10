@@ -266,7 +266,8 @@ static NSDictionary *StateErrorTerminal(NSError *error) {
     if([value[@"outcomeUnknown"]boolValue])value[@"errorCode"]=@"outcome_unknown";
     return value;
 }
-static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"] containsObject:action]; }
+#import "StateFingerprintQuery.inc"
+static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalActiveFingerprint",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"] containsObject:action]; }
 static NSDictionary *StateSavedAction(SHDWAppStateStore *store,NSString *bundle,NSString *action,NSDictionary *request,NSError **error) {
     if([action isEqual:@"externalClaim"])return [store claimBundle:bundle idfv:request[@"idfv"] error:error];
     if([action isEqual:@"externalRelease"])return [store releaseBundle:bundle idfv:request[@"idfv"] error:error];
@@ -280,7 +281,12 @@ static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action
     if(request[@"requester"])Require([@[@"phone",@"rv"]containsObject:request[@"requester"]],@"Invalid backup requester");
     stateFailureCode=@"invalid_request";for(id key in request)Require([allowed containsObject:key],@"Unknown external application state option");
     NSError *error=nil;id result=nil;
-    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"backupAndReset",@"discardAndReset",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
+    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalActiveFingerprint",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"backupAndReset",@"discardAndReset",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
+    else if([action isEqual:@"externalActiveFingerprint"]) {
+        stateFailureCode=@"permission_denied";Require(geteuid()==0,@"Cannot enter fingerprint settings context");
+        stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,NO);
+        @try { result=StateActiveFingerprint(identifier); } @finally { close(lock); }
+    }
     else {
         stateFailureCode=@"permission_denied";Require(geteuid()==0,@"Cannot enter backup storage context");
         stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,![@[@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action]);

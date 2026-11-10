@@ -16,6 +16,7 @@ External adapters first request `capabilities` and require API version 1, format
 | Action | Request | Result |
 | --- | --- | --- |
 | capabilities | empty dictionary | apiVersion, format, operations |
+| externalActiveFingerprint | empty dictionary | bundle_id, source, available, enabled, locked, current_idfv, fingerprint_config, fingerprint_data |
 | externalCatalog | empty dictionary | bundle_id, current_idfv, backups |
 | externalEdit | idfv, metadata containing title/note | edited |
 | backup | optional metadata containing title and/or note | concise snapshot metadata |
@@ -27,6 +28,17 @@ External adapters first request `capabilities` and require API version 1, format
 | externalRelease | idfv | idfv, owner=phone |
 | exportState | idfv, part (manifest/state), stateSHA for state | data (NSData), manifestSHA, stateSHA, dataSHA |
 | importState | idfv, manifest/state (NSData), expectedManifestSHA | imported |
+
+`externalActiveFingerprint` reads the selected Bundle ID's current saved settings,
+independently of backup storage and installed application containers. `source` is
+`stored_settings`: this is not evidence of the fingerprint loaded in another running
+process. It does not refresh, generate, lock or persist a fingerprint. `enabled`
+uses the existing application/global enable policy and fingerprint registration;
+disabled profiles still expose their saved data. Missing data yields
+`available=false` and an empty `current_idfv`. Absent raw data/configuration keys
+are omitted from the plist result; HTTP adapters represent them as null. Existing
+configuration/data keys are preserved, with dates encoded as Unix seconds and
+binary values as base64 strings. Invalid stored data/configuration is an error.
 
 Saved-state export/import/edit/delete/verify accept optional `requester` (`phone`
 or `rv`, default phone). It must match the manifest owner. This cooperative

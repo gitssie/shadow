@@ -226,6 +226,10 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
 @synthesize defaultSettings, userDefaults;
 
 - (BOOL)isValidFingerprintData:(NSDictionary *)data {
+  return [ShadowSettings isValidFingerprintData:data];
+}
+
++ (BOOL)isValidFingerprintData:(NSDictionary *)data {
   if (!SHDWValidFingerprintData(data)) return NO;
   NSString *identifier = data[@"VendorIdentifier"];
   return [identifier isKindOfClass:NSString.class] &&

@@ -274,3 +274,16 @@ blocking conditions. With no captured source, no backup recovery record is creat
 Failures once reset begins report `stateMayBePartial`; a lost response does not
 authorize automatic replay. Success omits `backup_id` and returns `previous_idfv`,
 `current_idfv`, `reset=true`, `verified=true`, `backup_created=false`.
+
+## Current saved fingerprint query
+
+The helper action `externalActiveFingerprint` returns only the requested Bundle
+ID's current `Fingerprint_Config` and `Fingerprint_Data`, availability, lock state
+and effective enable state. It uses a shared application session lock without
+opening the snapshot store, resolving application containers or running workers.
+It synchronizes the mobile preferences suite and reads one complete persisted
+settings domain, using the same domain's global switches. If no persisted domain
+exists, a scoped CFPreferences read supplies the selected application and enable
+switches. A persisted empty domain does not resurrect a cached deleted profile.
+No fingerprints are generated and no settings are written by this query. See the
+shared SDK contract for JSON representations and missing/invalid-data behavior.

@@ -36,8 +36,10 @@ static void FixturePreferencesFlush(CFStringRef,CFStringRef);
 #define dlsym FixtureSymbol
 static CFPropertyListRef FixtureExternalCopy(CFStringRef,CFStringRef,CFStringRef,CFStringRef);
 static Boolean FixtureExternalSync(CFStringRef,CFStringRef,CFStringRef);
+static CFDictionaryRef FixtureExternalMultiple(CFArrayRef,CFStringRef,CFStringRef,CFStringRef);
 #define CFPreferencesCopyValue FixtureExternalCopy
 #define CFPreferencesSynchronize FixtureExternalSync
+#define CFPreferencesCopyMultiple FixtureExternalMultiple
 static NSArray *FixtureExternalPaths(void);
 #define SHDW_STATE_IDENTITY_PATHS() FixtureExternalPaths()
 #define SHADOW_STATE_SUPPORT 1
@@ -166,10 +168,12 @@ static void NativePreferenceTests(NSString *root){
 @end
 static FixtureDefaults *preferences;
 static BOOL fingerprintRefreshFails;
+static NSUInteger settingsInitializations;
 @implementation ShadowSettings
-+ (instancetype)sharedInstance{static id value;if(!value)value=[self new];return value;}
++ (instancetype)sharedInstance{settingsInitializations++;static id value;if(!value)value=[self new];return value;}
 - (NSUserDefaults *)userDefaults{return (NSUserDefaults *)preferences;}
 - (BOOL)isValidFingerprintData:(NSDictionary *)data{return [data isKindOfClass:NSDictionary.class]&&[data[@"VendorIdentifier"] isKindOfClass:NSString.class];}
++ (BOOL)isValidFingerprintData:(NSDictionary *)data{return [data isKindOfClass:NSDictionary.class]&&[data[@"VendorIdentifier"] isKindOfClass:NSString.class];}
 @end
 @implementation SHDWFingerprintConfiguration
 + (NSDictionary *)configurationByValidating:(id)value error:(NSError **)error{(void)error;return [value isKindOfClass:NSDictionary.class]&&[value[@"valid"] boolValue]?value:nil;}
@@ -186,11 +190,13 @@ static BOOL fingerprintRefreshFails;
 static NSArray *externalPaths;
 static NSArray *FixtureExternalPaths(void){return externalPaths?:@[];}
 static id externalSettings;
+static NSDictionary *externalRoot;
 static BOOL externalSyncFailure;
 static NSUInteger externalReads;
 static void ExternalScope(CFStringRef domain,CFStringRef user,CFStringRef host){Check(CFEqual(domain,CFSTR(SHADOW_PREFS_PLIST))&&CFEqual(user,CFSTR("mobile"))&&CFEqual(host,kCFPreferencesAnyHost),@"external identity must read Shadow absolute suite in mobile context");}
 static Boolean FixtureExternalSync(CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);return !externalSyncFailure;}
 static CFPropertyListRef FixtureExternalCopy(CFStringRef key,CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);Check(CFEqual(key,CFSTR("local.fixture.app")),@"unexpected identity bundle");externalReads++;return externalSettings?CFBridgingRetain(externalSettings):NULL;}
+static CFDictionaryRef FixtureExternalMultiple(CFArrayRef keys,CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);Check([(__bridge NSArray *)keys count]==3,@"active query did not scope preference keys");return externalRoot?CFBridgingRetain(externalRoot):NULL;}
 @interface SavedOnlyFixture : NSObject
 @property(nonatomic)NSUInteger deletes,verifications;
 @end
@@ -235,6 +241,32 @@ Check(Reject(^{StateExternalCommand(bundle,@"capabilities",@{@"unexpected":@1});
     progress(@{@"phase":@"verify",@"stage":@"data",@"bytes":@1,@"secret":@"hidden"});progress(@{@"phase":@"verify",@"stage":@"data",@"bytes":@2});progress(@{@"phase":@"verify",@"stage":@"state",@"entries":@3});
     Check(frames.count==2&&[frames[0][@"event"]isEqual:@"progress"]&&[frames[0][@"progress"][@"bytes"]isEqual:@1]&&frames[0][@"progress"][@"secret"]==nil&&[frames[1][@"progress"][@"stage"]isEqual:@"state"],@"shared verify progress framing/throttling/filtering changed");
     puts("external helper: same mobile suite, token-independent identity, missing/malformed distinction and capabilities passed");
+}
+static void ActiveFingerprintTests(NSString *base){
+    NSUInteger initializations=settingsInitializations;
+    NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555",*path=[base stringByAppendingPathComponent:@"active-fingerprint.plist"];
+    externalPaths=@[path];externalSyncFailure=NO;externalRoot=@{};
+    NSDictionary *empty=StateActiveFingerprint(bundle);Check(![empty[@"available"]boolValue]&&![empty[@"enabled"]boolValue]&&[empty[@"current_idfv"]isEqual:@""],@"absent profile generated an identity");
+    NSDictionary *data=@{@"VendorIdentifier":uuid,@"AdvertisingIdentifier":@"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",@"nested":@{@"date":[NSDate dateWithTimeIntervalSince1970:123],@"bytes":[NSData dataWithBytes:"\0\xff" length:2]}};
+    NSMutableDictionary *app=[@{@"Fingerprint_Data":data,@"Fingerprint_Config":@{@"valid":@YES},@"Fingerprint_Locked":@YES,@"App_Enabled":@YES,@"privateField":@"must not escape"}mutableCopy];
+    NSMutableDictionary *root=[@{bundle:app,@"SingleToggleMigrated":@YES,@"other.app":@{@"secret":@"must not escape"}}mutableCopy];
+    Check([root writeToFile:path atomically:YES],@"active fixture write");NSData *before=[NSData dataWithContentsOfFile:path];
+    NSDictionary *reply=StateActiveFingerprint(bundle);
+    Check([reply[@"available"]boolValue]&&[reply[@"enabled"]boolValue]&&[reply[@"locked"]boolValue]&&[reply[@"current_idfv"]isEqual:uuid]&&[reply[@"source"]isEqual:@"stored_settings"],@"active profile state missing");
+    Check([reply[@"fingerprint_data"][@"nested"][@"date"]isEqual:@123]&&[reply[@"fingerprint_data"][@"nested"][@"bytes"]isEqual:@"AP8="]&&[NSJSONSerialization isValidJSONObject:reply],@"active profile is not JSON safe");
+    Check(!reply[@"privateField"]&&!reply[@"other.app"]&&[before isEqual:[NSData dataWithContentsOfFile:path]],@"active query leaked or wrote settings");
+    for(NSString *key in @[@"App_Disabled",@"Fingerprint_Enabled",@"App_Enabled"]){app[@"App_Enabled"]=@YES;app[key]=[key isEqual:@"App_Disabled"]?@YES:@NO;Check([root writeToFile:path atomically:YES],@"disable fixture");reply=StateActiveFingerprint(bundle);Check(![reply[@"enabled"]boolValue]&&[reply[@"available"]boolValue],@"disabled fingerprint lost saved data or stayed enabled");[app removeObjectForKey:key];}
+    root[@"Global_Enabled"]=@YES;root[@"SingleToggleMigrated"]=@NO;Check([root writeToFile:path atomically:YES],@"legacy global fixture");Check([StateActiveFingerprint(bundle)[@"enabled"]boolValue],@"legacy global enable ignored");
+    app[@"Fingerprint_Data"]=@{@"VendorIdentifier":@"invalid"};Check([root writeToFile:path atomically:YES],@"bad identity fixture");Check(Reject(^{StateActiveFingerprint(bundle);}),@"bad current identity treated as missing");
+    app[@"Fingerprint_Data"]=data;app[@"Fingerprint_Config"]=@{@"valid":@NO};Check([root writeToFile:path atomically:YES],@"bad config fixture");Check(Reject(^{StateActiveFingerprint(bundle);}),@"bad configuration accepted");
+    [app removeObjectForKey:@"Fingerprint_Config"];Check([root writeToFile:path atomically:YES],@"legacy config fixture");reply=StateActiveFingerprint(bundle);Check([reply[@"available"]boolValue]&&!reply[@"fingerprint_config"],@"legacy profile manufactured configuration");
+    externalSyncFailure=YES;Check(Reject(^{StateActiveFingerprint(bundle);}),@"failed sync returned active data");externalSyncFailure=NO;
+    Check([@{}writeToFile:path atomically:YES],@"deleted profile fixture");externalRoot=@{bundle:app};Check(![StateActiveFingerprint(bundle)[@"available"]boolValue],@"stale preference cache resurrected deleted profile");
+    Check(!unlink(path.fileSystemRepresentation),@"remove active fixture");Check([StateActiveFingerprint(bundle)[@"available"]boolValue],@"CF-only selected profile unavailable");
+    Check(StateExternalAction(@"externalActiveFingerprint")&&Reject(^{StateExternalCommand(bundle,@"externalActiveFingerprint",@{@"path":@"/tmp/other"});}),@"active query action or request boundary missing");
+    externalRoot=nil;externalPaths=@[];
+    Check(settingsInitializations==initializations,@"read-only active query initialized migrating settings singleton");
+    puts("active fingerprint: saved-only query, JSON conversion, effective switches, missing/legacy/invalid profiles, no writes and app isolation passed");
 }
 static void KeychainTests(void){
     NSDictionary *local=Record((__bridge id)kSecClassGenericPassword,Group,@"local",@"service",@"local-data",NO),*internet=Record((__bridge id)kSecClassInternetPassword,Group,@"web",@"example.test",@"web-data",NO),*synced=Record((__bridge id)kSecClassGenericPassword,Group,@"cloud",@"service",@"cloud-old",YES),*other=Record((__bridge id)kSecClassGenericPassword,Other,@"other",@"service",@"untouched",NO);
@@ -369,7 +401,7 @@ static void CatalogProjectionTests(void) {
     Check(catalog.count==2&&[catalog[0][@"unavailable"]boolValue]&&[catalog[0][@"error"]isEqual:@"corrupt"]&&[catalog[0][@"size"]isEqual:@0],@"corrupt snapshot status lost in catalog transport");
     Check([catalog[1][@"finalizationPending"]boolValue]&&[catalog[1][@"size"]isEqual:@50],@"pending finalization status lost in catalog transport");
 }
-int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");ExternalTests([NSString stringWithUTF8String:argv[1]]);KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();ResetBaselineFingerprintTests([NSString stringWithUTF8String:argv[1]]);WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
+int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");ExternalTests([NSString stringWithUTF8String:argv[1]]);ActiveFingerprintTests([NSString stringWithUTF8String:argv[1]]);KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();ResetBaselineFingerprintTests([NSString stringWithUTF8String:argv[1]]);WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
 '''
 
 
