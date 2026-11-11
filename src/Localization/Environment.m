@@ -53,9 +53,11 @@ BOOL SHDWLocalizationApplyEnvironment(NSDictionary *resolved) {
     typedef void (*SetZone)(const uint16_t *, int32_t *);
     SetLocale setLocale = (SetLocale)dlsym(RTLD_DEFAULT, "uloc_setDefault");
     SetZone setZone = (SetZone)dlsym(RTLD_DEFAULT, "ucal_setDefaultTimeZone");
+    BOOL icuApplied = setLocale && setZone;
     if(setLocale) {
         int32_t status = 0;
         setLocale(identifier.UTF8String, &status);
+        if(status > 0) icuApplied = NO;
     }
     if(setZone) {
         NSUInteger count = zoneName.length;
@@ -64,9 +66,10 @@ BOOL SHDWLocalizationApplyEnvironment(NSDictionary *resolved) {
             [zoneName getCharacters:characters range:NSMakeRange(0, count)];
             int32_t status = 0;
             setZone(characters, &status);
+            if(status > 0) icuApplied = NO;
             free(characters);
-        }
+        } else icuApplied = NO;
     }
     errno = saved;
-    return YES;
+    return icuApplied;
 }

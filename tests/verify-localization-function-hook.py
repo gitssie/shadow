@@ -48,6 +48,7 @@ hk_status_t hk_plan_create(hk_runtime_t *runtime, const hk_plan_config_t *config
 hk_status_t hk_plan_add_hook(hk_plan_t *plan, const hk_hook_spec_t *spec, hk_hook_t **hook) {
     assert(plan && spec->target_kind == HK_TARGET_FUNCTION_ADDRESS);
     assert(spec->target.address.address == (uintptr_t)&target && spec->replacement == (void *)&replacement);
+    assert(spec->target.address.may_strip_pac_or_thumb_state);
     assert(spec->required_reach == HK_REACH_ENTRYPOINT && spec->preferred_reach == HK_REACH_ENTRYPOINT);
     assert(spec->original_requirement == HK_ORIGINAL_CALLABLE_CONTINUATION && spec->continuation_policy == HK_CONTINUATION_ANY);
     assert(spec->role == HK_OPERATION_MANDATORY);

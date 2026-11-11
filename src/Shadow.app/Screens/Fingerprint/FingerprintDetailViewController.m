@@ -93,7 +93,7 @@
             UISwitch *toggle = [UISwitch new]; toggle.onTintColor = SHDWAccent(); toggle.on = [configuration[@"Receipts"][@"InterceptEnabled"] boolValue]; toggle.enabled = !locked;
             toggle.accessibilityIdentifier = @"fingerprint.receipts"; [toggle addTarget:self action:@selector(receiptsChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
-        if (indexPath.row <= 4 || indexPath.row == 6) {
+        if ((indexPath.row <= 4 && indexPath.row != 2) || indexPath.row == 6) {
             cell.accessoryType = locked ? UITableViewCellAccessoryNone : UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = locked ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
             cell.textLabel.textColor = locked ? UIColor.secondaryLabelColor : SHDWInk();
@@ -130,14 +130,14 @@
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section != 0 || indexPath.row == 5 || indexPath.row > 6) return;
+    if (indexPath.section != 0 || indexPath.row == 2 || indexPath.row == 5 || indexPath.row > 6) return;
     SHDWFingerprintStore *store = [SHDWFingerprintStore sharedStore];
     if ([store lockedForApplication:self.bundleIdentifier]) return;
     NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
     SHDWConfigurationSelectionController *controller = [[SHDWConfigurationSelectionController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     controller.multiple = indexPath.row == 4;
     controller.title = SHDWText(@[@"System version", @"Region", @"Time zone", @"Language", @"Network", @"Receipt interception", @"Advertising tracking"][indexPath.row]);
-    NSString *localizationKey = indexPath.row >= 1 && indexPath.row <= 3 ? @[@"Region", @"TimeZone", @"Language"][indexPath.row - 1] : nil;
+    NSString *localizationKey = indexPath.row == 1 ? @"Region" : indexPath.row == 3 ? @"Language" : nil;
     if (indexPath.row == 6) {
         controller.title=SHDWText(@"Advertising tracking");
         controller.options=@[@{@"ID":@"perApp",@"Name":SHDWText(@"Advertising fingerprint")},@{@"ID":@"zero",@"Name":SHDWText(@"Disable tracking")},@{@"ID":@"system",@"Name":SHDWText(@"Follow system")}];
@@ -146,31 +146,21 @@
         controller.options = @[@{@"ID": @"4g", @"Name": @"4G"}, @{@"ID": @"5g", @"Name": @"5G"}];
         controller.selection = [NSMutableSet setWithArray:configuration[@"Network"][@"RadioTechnologies"] ?: @[]];
     } else if (localizationKey) {
-        controller.searchable = YES;
+        controller.searchable = NO;
         NSMutableDictionary *nativeConfiguration = [configuration mutableCopy];
-        NSMutableDictionary *nativeLocalization = [configuration[@"Localization"] mutableCopy] ?: [NSMutableDictionary new];
-        nativeLocalization[localizationKey] = @"native"; nativeConfiguration[@"Localization"] = nativeLocalization;
+        nativeConfiguration[@"Localization"] = [SHDWFingerprintConfiguration localizationForRegion:@"native"];
         NSDictionary *native = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:nativeConfiguration];
         NSString *nativeValue = [localizationKey isEqual:@"Region"] ? native[@"CountryCode"] : [localizationKey isEqual:@"Language"] ? [native[@"Languages"] firstObject] : native[@"TimeZone"];
         NSMutableArray *options = [NSMutableArray arrayWithObject:@{@"ID": @"native", @"Name": SHDWText(@"Use device system"), @"Detail": nativeValue ?: @"—"}];
         NSLocale *displayLocale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US"];
-        NSMutableDictionary<NSString *, NSDictionary *> *catalog = [NSMutableDictionary new];
-        if ([localizationKey isEqual:@"Region"]) {
-            for (NSString *code in NSLocale.ISOCountryCodes) catalog[code] = @{@"ID": code, @"Name": code, @"Detail": [displayLocale displayNameForKey:NSLocaleCountryCode value:code] ?: code};
-        } else if ([localizationKey isEqual:@"TimeZone"]) {
-            for (NSString *name in NSTimeZone.knownTimeZoneNames) catalog[name] = @{@"ID": name, @"Name": name};
-            catalog[@"Etc/UTC"] = @{@"ID": @"Etc/UTC", @"Name": @"Etc/UTC"};
-        } else {
-            for (NSString *identifier in NSLocale.availableLocaleIdentifiers) {
-                NSDictionary *components = [NSLocale componentsFromLocaleIdentifier:identifier];
-                NSString *language = components[NSLocaleLanguageCode]; if (!language.length) continue;
-                NSMutableArray *parts = [NSMutableArray arrayWithObject:language];
-                for (NSString *key in @[NSLocaleScriptCode, NSLocaleCountryCode]) if ([components[key] length]) [parts addObject:components[key]];
-                NSString *tag = [parts componentsJoinedByString:@"-"];
-                catalog[tag] = @{@"ID": tag, @"Name": tag, @"Detail": [displayLocale displayNameForKey:NSLocaleIdentifier value:tag] ?: tag};
-            }
+        for (NSString *region in [SHDWFingerprintConfiguration supportedLocalizationRegions]) {
+            NSDictionary *preset = [SHDWFingerprintConfiguration localizationForRegion:region];
+            NSString *identifier = preset[localizationKey];
+            NSString *detail = [localizationKey isEqual:@"Region"] ?
+                [displayLocale displayNameForKey:NSLocaleCountryCode value:identifier] :
+                [displayLocale displayNameForKey:NSLocaleIdentifier value:identifier];
+            [options addObject:@{@"ID":identifier, @"Name":identifier, @"Detail":detail ?: identifier}];
         }
-        for (NSString *key in [[catalog allKeys] sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) [options addObject:catalog[key]];
         controller.options = options;
         controller.selection = [NSMutableSet setWithObject:configuration[@"Localization"][localizationKey] ?: @"native"];
     } else {
@@ -190,8 +180,12 @@
             for (NSString *value in @[@"4g", @"5g"]) if ([selection containsObject:value]) [technologies addObject:value];
             latest[@"Network"] = @{@"RadioTechnologies": technologies};
         } else if (localizationKey) {
-            NSMutableDictionary *localization = [latest[@"Localization"] mutableCopy] ?: [NSMutableDictionary new];
-            localization[localizationKey] = selection.anyObject ?: @"native"; latest[@"Localization"] = localization;
+            NSString *identifier = selection.anyObject ?: @"native";
+            NSDictionary *localization = [localizationKey isEqual:@"Region"] ?
+                [SHDWFingerprintConfiguration localizationForRegion:identifier] :
+                [SHDWFingerprintConfiguration localizationForLanguage:identifier];
+            if (!localization) return NO;
+            latest[@"Localization"] = localization;
         } else {
             NSString *identifier = selection.anyObject ?: @"native";
             latest[@"System"] = [identifier isEqual:@"native"] ? @{@"Mode": @"native"} : @{@"Mode": @"profile", @"ProfileID": identifier};

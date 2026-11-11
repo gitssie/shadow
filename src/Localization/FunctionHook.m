@@ -82,6 +82,7 @@ bool SHDWLocalizationHookFunction(const char *symbol, void *target,
     spec.target.address.struct_size = sizeof(spec.target.address);
     spec.target.address.struct_version = HK_ABI_VERSION_3_0;
     spec.target.address.address = (uintptr_t)target;
+    spec.target.address.may_strip_pac_or_thumb_state = true;
     spec.replacement = replacement;
     spec.required_reach = HK_REACH_ENTRYPOINT;
     spec.preferred_reach = HK_REACH_ENTRYPOINT;

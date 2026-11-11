@@ -15,7 +15,7 @@ env:
   # HookKit is consumed from the Theos install, not vendored. CI provisions the
   # pinned commit per lane (tools/release/install-theos.sh <lane> in the HookKit repo)
   # before building Shadow; local devs manage their own Theos HookKit.
-  HOOKKIT: e55a3c497d3112184e9d528092eb2b341c9e8029
+  HOOKKIT: 8690be67bed2c3711aada53e3f7244b30c70f67c
 
 jobs:
   legacy:

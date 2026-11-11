@@ -29,19 +29,61 @@ static NSDictionary *validate(NSDictionary *base, id localization) {
 int main(void) { @autoreleasepool {
   NSDictionary *base = SHDWFingerprintConfiguration.defaultConfiguration;
   assert([base[@"Localization"] isEqual:(@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"})]);
-  assert(!validate(base,nil));
+  NSArray *regions = [SHDWFingerprintConfiguration supportedLocalizationRegions];
+  assert([regions isEqual:(@[@"FR", @"GB", @"US"])] && ![regions isKindOfClass:NSMutableArray.class]);
+  NSArray *presets = @[
+    @{@"Region":@"FR", @"Language":@"fr-FR", @"TimeZone":@"Europe/Paris"},
+    @{@"Region":@"GB", @"Language":@"en-GB", @"TimeZone":@"Europe/London"},
+    @{@"Region":@"US", @"Language":@"en-US", @"TimeZone":@"America/New_York"},
+    @{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"}
+  ];
+  NSDictionary *baseBeforeSelections = [base copy];
+  for (NSDictionary *expected in presets) {
+    NSDictionary *byRegion = [SHDWFingerprintConfiguration localizationForRegion:expected[@"Region"]];
+    NSDictionary *byLanguage = [SHDWFingerprintConfiguration localizationForLanguage:expected[@"Language"]];
+    assert([byRegion isEqual:expected] && [byLanguage isEqual:expected]);
+    assert(![byRegion isKindOfClass:NSMutableDictionary.class] && ![byLanguage isKindOfClass:NSMutableDictionary.class]);
+    assert([[SHDWFingerprintConfiguration timeZoneForRegion:expected[@"Region"]] isEqual:expected[@"TimeZone"]]);
+    NSMutableDictionary *edited = [byRegion mutableCopy]; edited[@"Language"] = @"changed";
+    assert([[SHDWFingerprintConfiguration localizationForRegion:expected[@"Region"]] isEqual:expected]);
+  }
+  assert([[SHDWFingerprintConfiguration localizationForRegion:@"gb"] isEqual:presets[1]]);
+  assert([[SHDWFingerprintConfiguration localizationForLanguage:@"FR-fr"] isEqual:presets[0]]);
+  assert([[SHDWFingerprintConfiguration localizationForLanguage:@"EN-us"] isEqual:presets[2]]);
+  for (id unsupported in @[@"en", @"fr", @"en-AU", @"zh-Hant-TW", @"en-US-u-ca-buddhist", @"", @"Native", @1, NSNull.null])
+    assert(![SHDWFingerprintConfiguration localizationForLanguage:unsupported]);
+  for (id unsupported in @[@"DE", @"CA", @"", @"Native", @1, NSNull.null]) {
+    assert(![SHDWFingerprintConfiguration localizationForRegion:unsupported]);
+    assert(![SHDWFingerprintConfiguration timeZoneForRegion:unsupported]);
+  }
+  assert([base isEqual:baseBeforeSelections]);
+  NSMutableDictionary *historical = [base mutableCopy];
+  [historical removeObjectForKey:@"Localization"];
+  historical[@"System"] = @{@"Mode":@"native"};
+  historical[@"Network"] = @{@"RadioTechnologies":@[@"4g"]};
+  historical[@"Receipts"] = @{@"InterceptEnabled":@NO};
+  historical[@"Advertising"] = @{@"Mode":@"zero"};
+  NSDictionary *historicalBefore = [historical copy];
+  NSDictionary *normalized = [SHDWFingerprintConfiguration configurationByValidating:historical error:nil];
+  assert(normalized);
+  assert([normalized[@"Localization"] isEqual:base[@"Localization"]]);
+  for (NSString *key in @[@"System",@"Network",@"Receipts",@"Advertising"])
+    assert([normalized[key] isEqual:historical[key]]);
+  assert([historical isEqual:historicalBefore] && !historical[@"Localization"]);
   for (NSString *key in @[@"Region",@"Language",@"TimeZone"]) {
     NSMutableDictionary *incomplete = [base[@"Localization"] mutableCopy];
     [incomplete removeObjectForKey:key];
     assert(!validate(base,incomplete));
     assert(![SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:@{@"Localization":incomplete}]);
   }
-  assert(![SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:@{}]);
+
   NSDictionary *native = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:base];
   assert([native[@"LocaleIdentifier"] isEqual:@"fr_FR@calendar=buddhist"]);
   assert([native[@"Languages"] isEqual:(@[@"en-GB",@"fr-FR"])]);
   assert([native[@"CountryCode"] isEqual:@"FR"] && [native[@"TimeZone"] isEqual:@"Europe/Paris"]);
   assert(![native[@"OverridesSystem"] boolValue] && captures == 1);
+  assert([[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:historical] isEqual:native]);
+  assert([[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:@{}] isEqual:native]);
   NSDictionary *us = validate(base,@{@"Region":@"us", @"Language":@"en-us", @"TimeZone":@"America/New_York"});
   assert([us[@"Localization"][@"Region"] isEqual:@"US"]);
   assert([us[@"Localization"][@"Language"] isEqual:@"en-US"]);
@@ -54,6 +96,7 @@ int main(void) { @autoreleasepool {
   resolved = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:mixed];
   assert([resolved[@"LocaleIdentifier"] isEqual:@"fr_US"]);
   assert([resolved[@"Languages"] isEqual:native[@"Languages"]]);
+  assert([resolved[@"TimeZone"] isEqual:@"America/New_York"]);
   mixed = validate(base,@{@"Region":@"native", @"Language":@"zh-hant-tw", @"TimeZone":@"native"});
   resolved = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:mixed];
   assert([resolved[@"LocaleIdentifier"] isEqual:@"zh_Hant_FR"]);
@@ -62,7 +105,8 @@ int main(void) { @autoreleasepool {
   mixed = validate(base,@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"America/New_York"});
   resolved = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:mixed];
   assert([resolved[@"LocaleIdentifier"] isEqual:native[@"LocaleIdentifier"]]);
-  assert([resolved[@"OverridesSystem"] boolValue]);
+  assert(![resolved[@"OverridesSystem"] boolValue]);
+  assert([resolved[@"TimeZone"] isEqual:native[@"TimeZone"]]);
   NSDictionary *extended = validate(base,@{@"Region":@"GB",@"Language":@"en-US-u-nu-arab-ca-buddhist",@"TimeZone":@"native"});
   NSDictionary *extendedResolved = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:extended];
   NSLocale *extendedLocale = [[NSLocale alloc] initWithLocaleIdentifier:extendedResolved[@"LocaleIdentifier"]];
@@ -75,18 +119,29 @@ int main(void) { @autoreleasepool {
   NSDictionary *variantComponents = [NSLocale componentsFromLocaleIdentifier:variantResolved[@"LocaleIdentifier"]];
   assert([variantComponents[NSLocaleCountryCode] isEqual:@"US"]);
   assert([variantComponents[NSLocaleVariantCode] isEqual:@"1901"]);
-  for (NSString *zone in @[@"UTC",@"Etc/UTC"]) {
-    NSDictionary *utc = validate(base,@{@"Region":@"native",@"Language":@"native",@"TimeZone":zone});
-    assert([utc[@"Localization"][@"TimeZone"] isEqual:@"Etc/UTC"]);
-    assert([[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:utc][@"TimeZone"] isEqual:@"Etc/UTC"]);
+  NSDictionary *regionalZones = @{@"FR":@"Europe/Paris",@"GB":@"Europe/London",@"US":@"America/New_York"};
+  for (NSString *region in regionalZones) {
+    NSDictionary *automatic = validate(base,@{@"Region":region,@"Language":@"native",@"TimeZone":@"native"});
+    assert([automatic[@"Localization"][@"TimeZone"] isEqual:regionalZones[region]]);
+    assert([[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:automatic][@"TimeZone"] isEqual:regionalZones[region]]);
+    NSDictionary *mismatched = validate(base,@{@"Region":region,@"Language":@"native",@"TimeZone":@"Europe/Paris"});
+    assert([mismatched[@"Localization"][@"TimeZone"] isEqual:regionalZones[region]]);
   }
-  for (NSString *language in @[@"en-US-u-ca-buddhist",@"iw-IL",@"de-CH-1901"]) {
-    assert(validate(base,@{@"Region":@"native",@"Language":language,@"TimeZone":@"native"}));
+  NSDictionary *uk = validate(base,@{@"Region":@"gb",@"Language":@"native",@"TimeZone":@"native"});
+  NSTimeZone *london = [NSTimeZone timeZoneWithName:uk[@"Localization"][@"TimeZone"]];
+  assert([london secondsFromGMTForDate:[NSDate dateWithTimeIntervalSince1970:1736942400]] == 0);
+  assert([london secondsFromGMTForDate:[NSDate dateWithTimeIntervalSince1970:1752580800]] == 3600);
+  for (NSString *language in @[@"en",@"en-US-u-ca-buddhist",@"iw-IL",@"de-CH-1901"]) {
+    NSDictionary *legacy = @{@"Region":@"native",@"Language":language,@"TimeZone":@"native"};
+    NSDictionary *before = [legacy copy];
+    NSDictionary *accepted = validate(base,legacy);
+    assert(accepted && [legacy isEqual:before]);
+    assert([accepted[@"Localization"][@"Language"] isEqual:SHDWConfigurationLanguage(language)]);
   }
-  for (id invalid in @[@YES,@[],@{},@{@"Region":@"US",@"Language":@"en",@"TimeZone":@"native",@"Extra":@1}]) assert(!validate(base,invalid));
-  for (id region in @[@1,@"",@"USA",@"ZZ",@"us_US",@"Native",@"ß"]) assert(!validate(base,@{@"Region":region,@"Language":@"native",@"TimeZone":@"native"}));
+  for (id invalid in @[NSNull.null,@YES,@[],@{},@{@"Region":@"US",@"Language":@"en",@"TimeZone":@"native",@"Extra":@1}]) assert(!validate(base,invalid));
+  for (id region in @[@1,@"",@"USA",@"ZZ",@"DE",@"CN",@"CA",@"us_US",@"Native",@"ß"]) assert(!validate(base,@{@"Region":region,@"Language":@"native",@"TimeZone":@"native"}));
   for (id language in @[@1,@"",@"bogus",@"en_US",@"en--US",@"en\n",@"en@calendar=x",@"en-u-ca-gregory-u-nu-latn",@"de-1901-1901"]) assert(!validate(base,@{@"Region":@"native",@"Language":language,@"TimeZone":@"native"}));
-  for (id zone in @[@1,@"",@"GMT+0100",@"Moon/Test"]) assert(!validate(base,@{@"Region":@"native",@"Language":@"native",@"TimeZone":zone}));
+  for (id zone in @[@1,@"",@"GMT+0100",@"Moon/Test",@"Asia/Tokyo",@"UTC",@"Etc/UTC"]) assert(!validate(base,@{@"Region":@"native",@"Language":@"native",@"TimeZone":zone}));
   NSMutableDictionary *mutable = [@{@"Region":@"US",@"Language":@"en",@"TimeZone":@"America/New_York"} mutableCopy];
   NSDictionary *pinned = validate(base,mutable);
   mutable[@"Region"] = @"GB";
@@ -94,7 +149,7 @@ int main(void) { @autoreleasepool {
   assert(![pinned isKindOfClass:NSMutableDictionary.class]);
   assert(![pinned[@"Localization"] isKindOfClass:NSMutableDictionary.class]);
   assert(![native[@"Languages"] isKindOfClass:NSMutableArray.class]);
-  puts("localization config: required complete block, canonical validation, independent selections, immutable native snapshot passed");
+  puts("localization config: missing block follows native without changing saved settings, linked immutable selection presets, legacy languages, FR/GB/US automatic timezones, UK DST, strict choices, immutable native snapshot passed");
 } }
 '''
 with tempfile.TemporaryDirectory(prefix="shadow-localization-config-") as temporary:

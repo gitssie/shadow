@@ -103,10 +103,12 @@ verify-fingerprint:
 	python3 verify-fingerprint-manager.py
 	python3 verify-fingerprint-config-runtime.py
 	python3 verify-fingerprint-localization-config.py
+	python3 verify-fingerprint-localization-selection.py
 	python3 verify-fingerprint-localization-runtime.py
 	python3 verify-localization-bootstrap.py
 	HOOKKIT_INCLUDE="$(patsubst -I%,%,$(SHADOW_HOOKKIT_CFLAGS))" python3 verify-localization-function-hook.py
 	python3 verify-fingerprint-localization-webkit.py
+	python3 verify-localization-web-timezone.py
 	python3 verify-fingerprint-digest.py
 	python3 verify-fingerprint-raw-memory.py
 	python3 verify-fingerprint-system-version.py

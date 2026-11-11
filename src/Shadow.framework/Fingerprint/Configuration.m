@@ -41,7 +41,7 @@ static NSString *SHDWConfigurationRegion(id value) {
     if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return nil;
   }
   NSString *region = [value uppercaseString];
-  return [NSLocale.ISOCountryCodes containsObject:region] ? region : nil;
+  return [[SHDWFingerprintConfiguration supportedLocalizationRegions] containsObject:region] ? region : nil;
 }
 static NSString *SHDWConfigurationLanguage(id value) {
   if (![value isKindOfClass:NSString.class]) return nil;
@@ -92,19 +92,14 @@ static NSString *SHDWConfigurationLanguage(id value) {
   }
   return [parts componentsJoinedByString:@"-"];
 }
-static NSString *SHDWConfigurationTimeZone(id value) {
-  if (![value isKindOfClass:NSString.class]) return nil;
-  if ([value isEqualToString:@"native"]) return value;
-  if ([value isEqualToString:@"UTC"] || [value isEqualToString:@"Etc/UTC"]) return @"Etc/UTC";
-  // Reject Foundation's GMT-offset parser: the persisted choice is an IANA identifier.
-  if (![NSTimeZone.knownTimeZoneNames containsObject:value]) return nil;
-  return [NSTimeZone timeZoneWithName:value].name;
-}
 static NSDictionary *SHDWConfigurationLocalization(id value) {
+  if (!value) return @{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"};
   if (!SHDWConfigurationKeys(value, @[@"Region",@"Language",@"TimeZone"], @[])) return nil;
   NSString *region = SHDWConfigurationRegion(value[@"Region"]);
   NSString *language = SHDWConfigurationLanguage(value[@"Language"]);
-  NSString *zone = SHDWConfigurationTimeZone(value[@"TimeZone"]);
+  id storedZone = value[@"TimeZone"];
+  if (![@[@"native",@"Europe/Paris",@"Europe/London",@"America/New_York"] containsObject:storedZone]) return nil;
+  NSString *zone = [SHDWFingerprintConfiguration timeZoneForRegion:region];
   return region && language && zone ? @{@"Region":region, @"Language":language, @"TimeZone":zone} : nil;
 }
 static NSDictionary *SHDWConfigurationNativeLocalization(void) {
@@ -122,6 +117,37 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
 }
 
 @implementation SHDWFingerprintConfiguration
++ (NSArray<NSString *> *)supportedLocalizationRegions {
+  return @[@"FR", @"GB", @"US"];
+}
++ (NSDictionary *)localizationForRegion:(NSString *)region {
+  NSString *code = SHDWConfigurationRegion(region);
+  if (!code) return nil;
+  static NSDictionary *presets;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    presets = @{
+      @"native":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"},
+      @"FR":@{@"Region":@"FR", @"Language":@"fr-FR", @"TimeZone":@"Europe/Paris"},
+      @"GB":@{@"Region":@"GB", @"Language":@"en-GB", @"TimeZone":@"Europe/London"},
+      @"US":@{@"Region":@"US", @"Language":@"en-US", @"TimeZone":@"America/New_York"}
+    };
+  });
+  return presets[code];
+}
++ (NSDictionary *)localizationForLanguage:(NSString *)language {
+  NSString *canonical = SHDWConfigurationLanguage(language);
+  if (!canonical) return nil;
+  if ([canonical isEqualToString:@"native"]) return [self localizationForRegion:@"native"];
+  for (NSString *region in self.supportedLocalizationRegions) {
+    NSDictionary *preset = [self localizationForRegion:region];
+    if ([preset[@"Language"] isEqualToString:canonical]) return preset;
+  }
+  return nil;
+}
++ (NSString *)timeZoneForRegion:(NSString *)region {
+  return [self localizationForRegion:region][@"TimeZone"];
+}
 + (NSDictionary *)defaultConfiguration {
   NSString *productType = SHDWConfigurationCurrentProductType();
   NSDictionary *system = @{@"Mode":@"native"};
@@ -221,7 +247,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
 }
 
 + (NSDictionary *)configurationByValidating:(id)value error:(NSError **)error {
-  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts",@"Localization"], @[@"UpdatedAt",@"Advertising"]))
+  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts"], @[@"UpdatedAt",@"Advertising",@"Localization"]))
     return SHDWConfigurationInvalid(error);
   NSDictionary *localization = SHDWConfigurationLocalization(value[@"Localization"]);
   if (!localization) return SHDWConfigurationInvalid(error);
