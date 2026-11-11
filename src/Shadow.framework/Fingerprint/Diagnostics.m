@@ -6,6 +6,7 @@
 #import <Shadow/FingerprintMemory.h>
 #import <Shadow/FingerprintConfiguration.h>
 static NSDictionary *runtimeSnapshot;
+static BOOL networkUserAgentSourceReady;
 static NSDictionary *Fields(NSDictionary *data) {
     NSMutableDictionary *result=[NSMutableDictionary new];
     for (NSString *key in @[@"AdvertisingIdentifier",@"VendorIdentifier",@"HomeVolumeCreationTime",@"MemoryDelta",@"UpdatedAt"])
@@ -13,6 +14,9 @@ static NSDictionary *Fields(NSDictionary *data) {
     return [result copy];
 }
 @implementation SHDWFingerprintDiagnostics
++ (void)recordNetworkUserAgentSourceReady:(BOOL)ready {
+    @synchronized(self) { networkUserAgentSourceReady=ready; }
+}
 + (void)recordData:(NSDictionary *)data configuration:(NSDictionary *)configuration owner:(NSString *)owner enabled:(BOOL)enabled {
     @synchronized(self) {
         if (runtimeSnapshot) return;
@@ -28,6 +32,7 @@ static NSDictionary *Fields(NSDictionary *data) {
         if (!runtimeSnapshot) return @{@"apiVersion":@1,@"runtimeAvailable":@NO};
         NSMutableDictionary *result=[runtimeSnapshot mutableCopy];
         result[@"runtimeAvailable"]=@YES;
+        result[@"networkUserAgentSourceReady"]=@(networkUserAgentSourceReady);
         NSString *owner=runtimeSnapshot[@"ownerIdentifier"];
         NSDictionary *application=[ShadowSettings.sharedInstance storedFingerprintApplicationForIdentifier:owner];
         id value=application[@"Fingerprint_Data"];

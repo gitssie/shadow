@@ -114,6 +114,8 @@ verify-fingerprint:
 	python3 verify-fingerprint-memory.py
 	python3 verify-fingerprint-environment.py
 	python3 verify-fingerprint-version.py
+	python3 verify-fingerprint-network.py
+	python3 verify-network-user-agent-cache.py
 	python3 verify-fingerprint-webkit.py
 	python3 verify-web-clipboard.py
 

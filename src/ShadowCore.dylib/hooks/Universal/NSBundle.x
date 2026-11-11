@@ -6,6 +6,8 @@
 // immutable for the process lifetime, so the statics need no locking.
 static NSString* _shdw_main_bundle_path;
 static NSURL* _shdw_main_bundle_url;
+static BOOL shdw_bundle_metadata_paths_enabled;
+static unsigned shdw_bundle_metadata_state;
 
 static void shdw_cache_main_bundle(void) {
     CFURLRef url = CFBundleCopyBundleURL(CFBundleGetMainBundle());
@@ -23,13 +25,7 @@ static void shdw_cache_main_bundle(void) {
 
 %group shadowhook_NSBundle
 %hook NSBundle
-- (id)objectForInfoDictionaryKey:(NSString *)key __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [key isEqualToString:@"SignerIdentity"]) {
-        return nil;
-    }
 
-    return %orig;
-}
 
 + (instancetype)bundleWithURL:(NSURL *)url __attribute__((annotate("hookkit:allow_inherited"))) {
     SHADOW_RETURN_NIL_IF_URL_RESTRICTED(url);
@@ -304,17 +300,7 @@ static void shdw_cache_main_bundle(void) {
 // redirects protected classes to the main bundle. These checks are
 // defense-in-depth for objects created before the hooks installed.
 
-- (NSDictionary<NSString *, id> *)infoDictionary __attribute__((annotate("hookkit:allow_inherited"))) {
-    NSDictionary* result = %orig;
 
-    if(isCallerExternal() && result && result[@"SignerIdentity"]) {
-        NSMutableDictionary* filtered_result = [result mutableCopy];
-        [filtered_result removeObjectForKey:@"SignerIdentity"];
-        result = [filtered_result copy];
-    }
-
-    return result;
-}
 
 - (NSDictionary<NSString *, id> *)localizedInfoDictionary __attribute__((annotate("hookkit:allow_inherited"))) {
     NSDictionary* result = %orig;
@@ -464,11 +450,59 @@ static void shdw_cache_main_bundle(void) {
 %end
 %end
 
+%group shadowhook_NSBundleMetadata
+%hook NSBundle
+- (id)objectForInfoDictionaryKey:(NSString *)key __attribute__((annotate("hookkit:allow_inherited"))) {
+    if(shdw_bundle_metadata_paths_enabled && isCallerExternal() && [key isEqualToString:@"SignerIdentity"]) return nil;
+    id result = %orig;
+    if(result && ([key isEqualToString:@"CFBundleVersion"] || [key isEqualToString:@"CFBundleShortVersionString"])) {
+        const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+        NSString *version = shdw_fingerprint_cfnetwork_bundle_version(self, caller);
+        if(version) return version;
+    }
+    return result;
+}
+
+- (NSDictionary<NSString *, id> *)infoDictionary __attribute__((annotate("hookkit:allow_inherited"))) {
+    NSDictionary *result = %orig;
+    if(!result) return result;
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    NSString *version = shdw_fingerprint_cfnetwork_bundle_version(self, caller);
+    BOOL filterSigner = shdw_bundle_metadata_paths_enabled && isCallerExternal() && result[@"SignerIdentity"];
+    if(!version && !filterSigner) return result;
+    SHADOW_INTERNAL_SCOPE {
+        NSMutableDictionary *updated = [result mutableCopy];
+        if(filterSigner) [updated removeObjectForKey:@"SignerIdentity"];
+        if(version) {
+            updated[@"CFBundleVersion"] = version;
+            if(updated[@"CFBundleShortVersionString"]) updated[@"CFBundleShortVersionString"] = version;
+        }
+        return [updated copy];
+    }
+    return result;
+}
+%end
+%end
+
+void shdw_universal_bundle_metadata(SHDWHookSession *hooks) {
+    if(!hooks) return;
+    unsigned expected = 0;
+    if(!__atomic_compare_exchange_n(&shdw_bundle_metadata_state, &expected, 1, NO,
+        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    SHDWHookSession *previous = SHDWHookSessionSetCurrent(hooks);
+    @try {
+        Class cls = objc_getClass("NSBundle");
+        SEL selector = sel_registerName("infoDictionary");
+        void *original = SHDWSnapshotInstanceMethodIMP(cls, selector);
+        %init(shadowhook_NSBundleMetadata);
+        SHDWRegisterHookedInstanceMethod(cls, selector, original);
+        __atomic_store_n(&shdw_bundle_metadata_state, 2, __ATOMIC_RELEASE);
+    } @finally { SHDWHookSessionSetCurrent(previous); }
+}
+
 void shdw_universal_nsbundle(SHDWHookSession* hooks) {
+    shdw_bundle_metadata_paths_enabled = YES;
     shdw_cache_main_bundle();
-    Class cls = objc_getClass("NSBundle");
-    SEL sel = sel_registerName("infoDictionary");
-    void* orig = SHDWSnapshotInstanceMethodIMP(cls, sel);
+    shdw_universal_bundle_metadata(hooks);
     %init(shadowhook_NSBundle);
-    SHDWRegisterHookedInstanceMethod(cls, sel, orig);
 }

@@ -56,6 +56,10 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
     @"Build":@"22H31", @"Darwin":@"24.6.0",
     @"Kernel":@"Darwin Kernel Version 24.6.0: Tue Aug 12 00:02:59 PDT 2025; root:xnu-11417.140.69.700.6~5/RELEASE_ARM64_T8110",
     @"ProductTypes":@[@"iPhone14,5"]},
+    @{@"ID":@"iphone14-5_ios18.7.2_22H124", @"Name":@"iOS 18.7.2", @"Version":@"18.7.2",
+    @"Build":@"22H124", @"Darwin":@"24.6.0",
+    @"Kernel":@"Darwin Kernel Version 24.6.0: Wed Oct 15 21:14:36 PDT 2025; root:xnu-11417.140.69.702.20~1/RELEASE_ARM64_T8110",
+    @"ProductTypes":@[@"iPhone14,5"]},
     @{@"ID":@"iphone14-5_ios18.7.8_22H352", @"Name":@"iOS 18.7.8", @"Version":@"18.7.8",
     @"Build":@"22H352", @"Darwin":@"24.6.0",
     @"Kernel":@"Darwin Kernel Version 24.6.0: Wed Mar 4 22:15:14 PST 2026; root:xnu-11417.140.69.706.9~1/RELEASE_ARM64_T8110",
@@ -68,6 +72,16 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
     @"Build":@"20H392", @"Darwin":@"22.6.0",
     @"Kernel":@"Darwin Kernel Version 22.6.0: Tue Jul  2 20:47:35 PDT 2024; root:xnu-8796.142.1.703.8~1/RELEASE_ARM64_T8015",
     @"ProductTypes":@[@"iPhone10,3",@"iPhone10,6"]}];
+    NSMutableArray *resolved = [NSMutableArray arrayWithCapacity:profiles.count];
+    for (NSDictionary *profile in profiles) {
+      NSString *version = profile[@"Version"];
+      if ([version isEqualToString:@"18.7"] || [version hasPrefix:@"18.7."]) {
+        NSMutableDictionary *system = [profile mutableCopy];
+        system[@"CFNetwork"] = @"3826.600.41";
+        [resolved addObject:[system copy]];
+      } else [resolved addObject:profile];
+    }
+    profiles = [resolved copy];
   });
   return profiles;
 }

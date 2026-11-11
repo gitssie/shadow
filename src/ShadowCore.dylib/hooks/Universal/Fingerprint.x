@@ -40,6 +40,19 @@ static BOOL shdw_map_app_caller(const void *caller) {
     return applies;
 }
 
+static BOOL shdw_fingerprint_kernel_caller(const void *caller) {
+    if(shdw_map_app_caller(caller)) return YES;
+    if(!shdw_caller_is_external(caller)) return NO;
+    Dl_info image = {0};
+    BOOL applies = NO;
+    SHADOW_INTERNAL_SCOPE {
+        if(dladdr(caller, &image) && image.dli_fname)
+            applies = SHDWNetworkQueryPathMatches(image.dli_fname,
+                "/System/Library/Frameworks/CFNetwork.framework");
+    }
+    return applies;
+}
+
 BOOL shdw_fingerprint_is_enabled(void) { return shdw_fingerprint_enabled; }
 
 BOOL shdw_fingerprint_app_caller(const void *caller) {
@@ -58,7 +71,8 @@ BOOL shdw_fingerprint_sysctl_query(const char *name, void *value, size_t *length
         errno = saved;
         return NO;
     }
-    BOOL applies = shdw_map_app_caller(caller);
+    BOOL applies = (!strcmp(name, "kern.osrelease") || !strcmp(name, "kern.version"))
+        ? shdw_fingerprint_kernel_caller(caller) : shdw_map_app_caller(caller);
     errno = saved;
     if(!applies) return NO;
     if(SHDWFingerprintBootName(name)) {
@@ -69,7 +83,7 @@ BOOL shdw_fingerprint_sysctl_query(const char *name, void *value, size_t *length
 
 void shdw_fingerprint_uname_value(struct utsname *value, const void *caller) {
     int saved = errno;
-    if(shdw_fingerprint_enabled && value && shdw_map_app_caller(caller))
+    if(shdw_fingerprint_enabled && value && shdw_fingerprint_kernel_caller(caller))
         SHDWFingerprintUnameValue(value);
     errno = saved;
 }
@@ -79,7 +93,7 @@ BOOL shdw_fingerprint_sysctl_mib_query(const int *mib, u_int count, void *value,
     if(!mib || count != 2 || mib[0] != CTL_KERN || newp || newlen ||
        !shdw_fingerprint_enabled) return NO;
     int saved = errno;
-    BOOL applies = shdw_map_app_caller(caller);
+    BOOL applies = shdw_fingerprint_kernel_caller(caller);
     errno = saved;
     if(!applies) return NO;
     static const char *names[] = {"kern.osproductversion", "kern.osversion", "kern.boottime", "kern.bootsessionuuid",
@@ -392,6 +406,7 @@ void shdw_universal_fingerprint_prepare(SHDWHookSession *hooks) {
     shdw_universal_fingerprint_identity_prepare(hooks);
     if(!shdw_fingerprint_enabled) return;
     shdw_universal_fingerprint_receipts_prepare(hooks);
+    shdw_universal_fingerprint_network_prepare(hooks);
     shdw_universal_fingerprint_webkit_prepare(hooks);
     shdw_universal_fingerprint_system_version_prepare(hooks);
     shdw_universal_fingerprint_environment_prepare(hooks);

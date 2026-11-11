@@ -257,6 +257,7 @@ static BOOL _shdw_resultURLRestricted(NSURL* result) {
 %end
 %end
 
+static BOOL shdw_url_session_paths_enabled;
 %group shadowhook_NSURLSession
 %hook NSURLSession
 // Blocked-task helper (C0-3): create a REAL suspended task via %orig, wrap
@@ -282,7 +283,7 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
 }
 
 - (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [_shadow isURLRestricted:url]) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && [_shadow isURLRestricted:url]) {
         NSURLSessionDataTask* task = %orig;
         [task cancel];
 
@@ -293,7 +294,7 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
 }
 
 - (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [_shadow isURLRestricted:url]) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && [_shadow isURLRestricted:url]) {
         // roothide logos cannot parse block literals inside %orig(...) args.
         void (^swallow)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *response, NSError *error) {
             // swallow — the blocked completion below is the only one delivered
@@ -313,7 +314,7 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
 }
 
 - (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [_shadow isURLRestricted:url]) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && [_shadow isURLRestricted:url]) {
         NSURLSessionDownloadTask* task = %orig;
         [task cancel];
 
@@ -324,7 +325,7 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
 }
 
 - (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSURL *location, NSURLResponse *response, NSError *error))completionHandler __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && [_shadow isURLRestricted:url]) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && [_shadow isURLRestricted:url]) {
         // roothide logos cannot parse block literals inside %orig(...) args.
         void (^swallow)(NSURL *, NSURLResponse *, NSError *) = ^(NSURL *location, NSURLResponse *response, NSError *error) {
             // swallow
@@ -344,18 +345,20 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
 }
 
 - (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromFile:(NSURL *)fileURL __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && (_shdw_requestRestricted(request) || [_shadow isURLRestricted:fileURL])) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && (_shdw_requestRestricted(request) || [_shadow isURLRestricted:fileURL])) {
         NSURLSessionUploadTask* task = %orig;
         [task cancel];
 
         return task;
     }
 
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    request = shdw_fingerprint_network_request(self, request, caller);
     return %orig;
 }
 
 - (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromFile:(NSURL *)fileURL completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && (_shdw_requestRestricted(request) || [_shadow isURLRestricted:fileURL])) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && (_shdw_requestRestricted(request) || [_shadow isURLRestricted:fileURL])) {
         // roothide logos cannot parse block literals inside %orig(...) args.
         void (^swallow)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *response, NSError *error) {
             // swallow
@@ -371,22 +374,26 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
         return task;
     }
 
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    request = shdw_fingerprint_network_request(self, request, caller);
     return %orig;
 }
 
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && _shdw_requestRestricted(request)) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && _shdw_requestRestricted(request)) {
         NSURLSessionDataTask* task = %orig;
         [task cancel];
 
         return task;
     }
 
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    request = shdw_fingerprint_network_request(self, request, caller);
     return %orig;
 }
 
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && _shdw_requestRestricted(request)) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && _shdw_requestRestricted(request)) {
         // roothide logos cannot parse block literals inside %orig(...) args.
         void (^swallow)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *response, NSError *error) {
             // swallow
@@ -402,22 +409,26 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
         return task;
     }
 
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    request = shdw_fingerprint_network_request(self, request, caller);
     return %orig;
 }
 
 - (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && _shdw_requestRestricted(request)) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && _shdw_requestRestricted(request)) {
         NSURLSessionDownloadTask* task = %orig;
         [task cancel];
 
         return task;
     }
 
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    request = shdw_fingerprint_network_request(self, request, caller);
     return %orig;
 }
 
 - (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURL *location, NSURLResponse *response, NSError *error))completionHandler __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && _shdw_requestRestricted(request)) {
+    if(shdw_url_session_paths_enabled && isCallerExternal() && _shdw_requestRestricted(request)) {
         // roothide logos cannot parse block literals inside %orig(...) args.
         void (^swallow)(NSURL *, NSURLResponse *, NSError *) = ^(NSURL *location, NSURLResponse *response, NSError *error) {
             // swallow
@@ -433,6 +444,8 @@ static void _shdw_deliverBlockedCompletion(void (^completionHandler)(void)) {
         return task;
     }
 
+    const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+    request = shdw_fingerprint_network_request(self, request, caller);
     return %orig;
 }
 %end
@@ -446,31 +459,45 @@ static const char* const kShadowURLSessionSelectors[] = {
     "uploadTaskWithRequest:fromData:completionHandler:",
 };
 
-void shdw_universal_nsurl(SHDWHookSession* hooks) {
-    shdw_url_resources_paths_enabled = YES;
-    shdw_universal_url_resources(hooks);
-    Class sessionCls = objc_getClass("NSURLSession");
-    void* originals[sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0])] = {0};
-    Method methods[sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0])] = {0};
-    for(size_t i = 0; i < sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0]); i++) {
-        methods[i] = sessionCls ? class_getInstanceMethod(sessionCls, sel_registerName(kShadowURLSessionSelectors[i])) : NULL;
-        if(methods[i]) originals[i] = (void*)method_getImplementation(methods[i]);
-    }
+static unsigned shdw_url_session_state;
+void shdw_universal_url_session(SHDWHookSession *hooks) {
+    if(!hooks || !NSURLSession.class) return;
+    unsigned expected = 0;
+    if(!__atomic_compare_exchange_n(&shdw_url_session_state, &expected, 1, NO,
+        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    SHDWHookSession *previous = SHDWHookSessionSetCurrent(hooks);
+    @try {
+        Class sessionCls = objc_getClass("NSURLSession");
+        void* originals[sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0])] = {0};
+        Method methods[sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0])] = {0};
+        for(size_t i = 0; i < sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0]); i++) {
+            methods[i] = sessionCls ? class_getInstanceMethod(sessionCls, sel_registerName(kShadowURLSessionSelectors[i])) : NULL;
+            if(methods[i]) originals[i] = (void*)method_getImplementation(methods[i]);
+        }
 
-    %init(shadowhook_NSURL);
-    %init(shadowhook_NSURLSession);
+        %init(shadowhook_NSURLSession);
 
-    // Record replacement (post-hook IMP) -> original in the dladdr remap table.
-    for(size_t i = 0; i < sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0]); i++) {
-        if(methods[i] && originals[i]) {
-            IMP hooked = method_getImplementation(methods[i]);
-            if((void*)hooked != originals[i]) {
-                SHDWRememberHookedIMPRemap((const void*)hooked, originals[i]);
-                IMP viaClass = sessionCls ? class_getMethodImplementation(sessionCls, sel_registerName(kShadowURLSessionSelectors[i])) : NULL;
-                if(viaClass) SHDWRememberHookedIMPRemap((const void*)viaClass, originals[i]);
+        // Record replacement (post-hook IMP) -> original in the dladdr remap table.
+        for(size_t i = 0; i < sizeof(kShadowURLSessionSelectors) / sizeof(kShadowURLSessionSelectors[0]); i++) {
+            if(methods[i] && originals[i]) {
+                IMP hooked = method_getImplementation(methods[i]);
+                if((void*)hooked != originals[i]) {
+                    SHDWRememberHookedIMPRemap((const void*)hooked, originals[i]);
+                    IMP viaClass = sessionCls ? class_getMethodImplementation(sessionCls, sel_registerName(kShadowURLSessionSelectors[i])) : NULL;
+                    if(viaClass) SHDWRememberHookedIMPRemap((const void*)viaClass, originals[i]);
+                }
             }
         }
-    }
+        __atomic_store_n(&shdw_url_session_state, 2, __ATOMIC_RELEASE);
+    } @finally { SHDWHookSessionSetCurrent(previous); }
+}
+
+void shdw_universal_nsurl(SHDWHookSession* hooks) {
+    shdw_url_session_paths_enabled = YES;
+    shdw_url_resources_paths_enabled = YES;
+    shdw_universal_url_resources(hooks);
+    %init(shadowhook_NSURL);
+    shdw_universal_url_session(hooks);
 }
 
 %group shadowhook_NSURLResources

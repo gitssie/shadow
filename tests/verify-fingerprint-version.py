@@ -26,6 +26,7 @@ def function(source, signature):
 
 
 hooks = function(fingerprint, "static BOOL shdw_map_app_caller(") + "\n"
+hooks += function(fingerprint, "static BOOL shdw_fingerprint_kernel_caller(") + "\n"
 hooks += function(fingerprint, "BOOL shdw_fingerprint_sysctl_query(") + "\n"
 hooks += function(fingerprint, "BOOL shdw_fingerprint_sysctl_mib_query(") + "\n"
 hooks += function(fingerprint, "void shdw_fingerprint_sysctl_value(") + "\n"
@@ -550,6 +551,47 @@ static void verify_uname(void) {
     shdw_fingerprint_enabled = YES; internalDepth = 0; externalCaller = YES; fakeCaller = (void *)1;
     callerPath = "/Apps/Probe.app/Probe"; nativeUnameStatus = 0;
 }
+static void verify_cfnetwork_kernel(void) {
+    SysctlFunction wrappers[] = {replaced_sysctlbyname, replaced___sysctlbyname, mibAdapter};
+    const char *names[] = {"kern.osrelease", "kern.version"};
+    const char *values[] = {"24.6.0", expectedKernel};
+    for(NSString *path in @[@"/System/Library/Frameworks/CFNetwork.framework/CFNetwork",
+        @"/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork",
+        @"/System/Library/Frameworks/CFNetwork.framework.other/CFNetwork",
+        @"/Apps/Unrelated.app/CFNetwork.framework/CFNetwork",
+        @"/System/Library/Frameworks/Foundation.framework/Foundation"]) {
+        callerPath = path.UTF8String;
+        BOOL trusted = [path hasPrefix:@"/System/Library/Frameworks/CFNetwork.framework/"];
+        for(unsigned mode = 0; mode < 4; mode++) {
+            shdw_fingerprint_enabled = mode != 1;
+            internalDepth = mode == 2 ? 2 : 0;
+            externalCaller = mode != 3;
+            BOOL mapped = trusted && mode == 0;
+            struct utsname value = {0}; nativeUnameStatus = 0;
+            assert(replaced_uname(&value) == 0);
+            verify_uname_value(&value, mapped);
+            for(unsigned w = 0; w < 3; w++) for(unsigned n = 0; n < 2; n++) {
+                if(!mapped) { passthrough(wrappers[w], names[n], NULL, 0); continue; }
+                char buffer[1024] = {0}; size_t length = 0; unsigned before = nativeCalls;
+                errno = EDOM;
+                assert(wrappers[w](names[n], NULL, &length, NULL, 0) == 0);
+                assert(length == strlen(values[n]) + 1 && errno == EDOM);
+                length = sizeof(buffer);
+                assert(wrappers[w](names[n], buffer, &length, NULL, 0) == 0);
+                assert(!strcmp(buffer, values[n]) && nativeCalls == before && errno == EDOM);
+                char input = 1;
+                passthrough(wrappers[w], names[n], &input, 1);
+            }
+            for(unsigned w = 0; w < 3; w++) {
+                passthrough(wrappers[w], "kern.osrelease.extra", NULL, 0);
+                passthrough(wrappers[w], "kern.hostname", NULL, 0);
+            }
+            verify_foundation(NO);
+        }
+    }
+    shdw_fingerprint_enabled = YES; internalDepth = 0; externalCaller = YES;
+    callerPath = "/Apps/Probe.app/Probe"; nativeUnameStatus = 0;
+}
 static void verify_uname_installs(void) {
     SHDWHookSession *session = [SHDWHookSession new];
     shdw_hook_desc_t descriptor = {"uname", (void *)replaced_uname,
@@ -583,7 +625,7 @@ static void verify_uname_installs(void) {
     }
 }
 int main(void) { @autoreleasepool {
-    verify_native_string_contract(); verify_policy(); verify_hooks(); verify_boot(); verify_current_boot(); verify_version_predicate(); verify_uname(); verify_uname_installs();
+    verify_native_string_contract(); verify_policy(); verify_hooks(); verify_boot(); verify_current_boot(); verify_version_predicate(); verify_uname(); verify_cfnetwork_kernel(); verify_uname_installs();
     puts("fingerprint version/boot: policy, native uptime, version predicate, Foundation, named/MIB sysctl, uname wrappers and installation/replay fallbacks passed");
 } }
 '''

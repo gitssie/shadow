@@ -45,6 +45,9 @@ int main(void){@autoreleasepool{
  savedApplication=@{@"Fingerprint_Data":data,@"Fingerprint_Config":config};prefs=@{@"App_Enabled":@YES,@"Universal_Fingerprint":@YES};owner=@"current.app";
  [SHDWFingerprintDiagnostics recordData:data configuration:config owner:owner enabled:YES];
  NSDictionary *snapshot=[SHDWFingerprintDiagnostics currentApplicationSnapshot];
+ assert(![snapshot[@"networkUserAgentSourceReady"]boolValue]);
+ [SHDWFingerprintDiagnostics recordNetworkUserAgentSourceReady:YES];
+ assert([[SHDWFingerprintDiagnostics currentApplicationSnapshot][@"networkUserAgentSourceReady"]boolValue]);
  assert([snapshot[@"runtimeAvailable"]boolValue]);assert(![snapshot[@"stale"]boolValue]);assert(!snapshot[@"fields"][@"InterfaceSeed"]);
  NSMutableDictionary *changed=[data mutableCopy];changed[@"AdvertisingIdentifier"]=@"22222222-2222-4222-8222-222222222222";
  savedApplication=@{@"Fingerprint_Data":changed,@"Fingerprint_Config":config};assert([[SHDWFingerprintDiagnostics currentApplicationSnapshot][@"stale"]boolValue]);

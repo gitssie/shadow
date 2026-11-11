@@ -36,6 +36,10 @@ NSString *SHDWFingerprintOSVersionString(void) {
     return SHDWFingerprintSystemProfile()[@"Version"];
 }
 
+NSString *SHDWFingerprintCFNetworkVersion(void) {
+    return SHDWFingerprintSystemProfile()[@"CFNetwork"];
+}
+
 NSUUID *SHDWFingerprintVendorIdentifier(NSString *bundleID) {
     return SHDWFingerprintStoredVendorIdentifier(bundleID);
 }

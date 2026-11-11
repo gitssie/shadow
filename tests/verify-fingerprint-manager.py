@@ -353,7 +353,14 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([defaults boolForKey:SHDWSingleToggleMigrationID]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
-  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 2);
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 3);
+  NSMutableDictionary *ios1872 = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
+  ios1872[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.2_22H124"};
+  assert([SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
+  NSDictionary *resolved1872 = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:ios1872];
+  assert([resolved1872[@"Version"] isEqual:@"18.7.2"] && [resolved1872[@"Build"] isEqual:@"22H124"]);
+  managerProductType = "iPhone10,3";
+  assert(![SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
   for (NSString *product in @[@"iPhone10,3", @"iPhone10,6"]) {
     managerProductType = product.UTF8String;
     NSMutableDictionary *selected = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];

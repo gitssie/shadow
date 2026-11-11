@@ -6,6 +6,7 @@ NSOperatingSystemVersion SHDWFingerprintOSVersion(void);
 BOOL SHDWFingerprintInterceptsReceipts(void);
 BOOL SHDWFingerprintOSVersionAtLeast(NSOperatingSystemVersion requested);
 NSString *SHDWFingerprintOSVersionString(void);
+NSString *SHDWFingerprintCFNetworkVersion(void);
 NSUUID *SHDWFingerprintVendorIdentifier(NSString *bundleID);
 NSString *SHDWFingerprintUserAgent(NSString *userAgent);
 NSString *SHDWFingerprintWebClipboardScript(void);
