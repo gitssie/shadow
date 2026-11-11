@@ -11,6 +11,7 @@ __attribute__((visibility("default")))
 
 + (instancetype)sharedInstance;
 - (BOOL)isValidFingerprintData:(NSDictionary *)data;
++ (BOOL)isValidFingerprintData:(NSDictionary *)data;
 
 - (NSDictionary<NSString *, id> *)getPreferencesForIdentifier:
     (NSString *)bundleIdentifier;

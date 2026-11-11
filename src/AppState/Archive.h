@@ -7,10 +7,12 @@ typedef void (^SHDWStateProgress)(NSDictionary *event);
 // A root key is a relative archive prefix, such as containers/data.
 // Info contains format, compression, sha256, archiveSize, and entries. Each
 // entry records path, type, mode, uid, gid, nanosecond mtime/birthtime,
-// size/hash or symlink target. Container roots keep their native timestamps.
+// size (legacy entries also include a hash) or symlink target. Container roots keep their native timestamps.
 // File contents are streamed; only entry metadata and bounded payloads use RAM.
 // Metadata covers basic POSIX fields, not xattrs, ACLs or iOS protection classes.
 // The PAX creation-time annotation is archive metadata, never an app xattr.
+// Capture records one whole-archive digest without rereading entries for validation.
+// New archives use fileChecksums=none; legacy per-file hashes remain readable.
 // Throwing from progress cancels the operation and returns an error.
 @interface SHDWStateArchive : NSObject
 + (nullable NSDictionary *)captureRoots:(NSDictionary<NSString *, NSString *> *)roots

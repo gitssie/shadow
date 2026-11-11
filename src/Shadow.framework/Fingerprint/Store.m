@@ -4,6 +4,7 @@
 #import <Shadow/FingerprintState.h>
 #import <Shadow/SHDWPlugin.h>
 #import "Profile.h"
+#import "StoredApplication.h"
 #import "../../common.h"
 
 static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
@@ -41,7 +42,7 @@ static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
     NSUserDefaults *defaults = ShadowSettings.sharedInstance.userDefaults;
     [defaults synchronize];
     id app = [defaults objectForKey:bundleID];
-    return [app isKindOfClass:NSDictionary.class] ? app : nil;
+    return [app isKindOfClass:NSDictionary.class] ? app : [ShadowSettings.sharedInstance storedFingerprintApplicationForIdentifier:bundleID];
   }
 }
 

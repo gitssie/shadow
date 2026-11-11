@@ -201,15 +201,7 @@ static NSDictionary *IPJSON(NSData *data) {
         if (self.queryOnly && snapshot) { [self finish:nil]; return; }
         if (!self.queryOnly && !self.before && snapshot) {
             self.before = snapshot;
-            NSUInteger generation = self.generation;
-            [self phase:SHDWIPSwitchPhaseRequesting snapshot:snapshot];
-            if (!self.running || generation != self.generation) return;
-            [self request:self.actionURL isAction:YES completion:^(NSData *data, NSHTTPURLResponse *response, NSError *actionError) {
-                // A response or transport error cannot establish the external network outcome.
-                NSUInteger actionGeneration = self.generation;
-                [self phase:SHDWIPSwitchPhaseWaitingForNetwork snapshot:self.current];
-                if (self.running && actionGeneration == self.generation) [self scheduleProbe];
-            }];
+            [self requestSwitch];
             return;
         }
         BOOL available = self.before ? [self baselineProvidersAvailable:snapshot] : snapshot != nil;
@@ -217,6 +209,17 @@ static NSDictionary *IPJSON(NSData *data) {
         NSUInteger generation = self.generation;
         [self phase:available ? SHDWIPSwitchPhaseWaitingForChange : SHDWIPSwitchPhaseWaitingForNetwork snapshot:self.current];
         if (self.running && generation == self.generation) [self scheduleProbe];
+    }];
+}
+- (void)requestSwitch {
+    NSUInteger generation = self.generation;
+    [self phase:SHDWIPSwitchPhaseRequesting snapshot:self.before];
+    if (!self.running || generation != self.generation) return;
+    [self request:self.actionURL isAction:YES completion:^(NSData *data, NSHTTPURLResponse *response, NSError *actionError) {
+        // Observe the network outcome even if the action response is lost.
+        NSUInteger actionGeneration = self.generation;
+        [self phase:SHDWIPSwitchPhaseWaitingForNetwork snapshot:self.current];
+        if (self.running && actionGeneration == self.generation) [self scheduleProbe];
     }];
 }
 - (BOOL)beginWithProgress:(void (^)(SHDWIPSwitchPhase, SHDWIPSnapshot *))progress completion:(void (^)(SHDWIPSnapshot *, SHDWIPSnapshot *, NSError *))completion timeout:(NSTimeInterval)timeout query:(BOOL)query {
@@ -236,14 +239,19 @@ static NSDictionary *IPJSON(NSData *data) {
     [self phase:SHDWIPSwitchPhaseChecking snapshot:nil];
     return self.running && generation == self.generation;
 }
-- (void)startWithURL:(NSURL *)URL progress:(void (^)(SHDWIPSwitchPhase, SHDWIPSnapshot *))progress completion:(void (^)(SHDWIPSnapshot *, SHDWIPSnapshot *, NSError *))completion {
-    if (!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self startWithURL:URL progress:progress completion:completion]; }); return; }
+- (void)startWithURL:(NSURL *)URL baseline:(SHDWIPSnapshot *)baseline progress:(void (^)(SHDWIPSwitchPhase, SHDWIPSnapshot *))progress completion:(void (^)(SHDWIPSnapshot *, SHDWIPSnapshot *, NSError *))completion {
+    if (!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self startWithURL:URL baseline:baseline progress:progress completion:completion]; }); return; }
     if (self.running) { completion(nil, nil, IPError(6, @"An IP switch is already running.")); return; }
     NSURL *url = ActionURL(URL);
     if (!url) { completion(nil, nil, IPError(2, @"Enter a valid HTTP or HTTPS URL without credentials or spaces.")); return; }
     if (![self beginWithProgress:progress completion:completion timeout:self.operationTimeout query:NO]) return;
     self.actionURL = url;
-    [self performLookup];
+    // The dialog has already queried the original IP. Reuse that observation
+    // and query again only after the action; callers without one acquire it first.
+    if (baseline.ip.length || baseline.ipv4.length) {
+        self.before = baseline; self.current = baseline;
+        [self requestSwitch];
+    } else [self performLookup];
 }
 
 - (void)queryWithProgress:(void (^)(SHDWIPSwitchPhase, SHDWIPSnapshot *))progress completion:(void (^)(SHDWIPSnapshot *, NSError *))completion {

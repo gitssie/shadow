@@ -92,6 +92,7 @@ HARNESS = r'''
 #import <Foundation/Foundation.h>
 #import <Shadow/Fingerprint.h>
 #import "Services/BackupService.h"
+#import "SHDWAppStateClient.h"
 #import "Services/CleanupService.h"
 #import "Services/OperationCoordinator.h"
 #import "Services/BackupPolicy.h"
@@ -113,7 +114,7 @@ NSString *JBPath(NSString *value) { return value; }
 @end
 @interface SHDWBackupService (FixtureSeam)
 - (NSString *)helperPath;
-- (BOOL)validateHelperAtPath:(NSString *)path error:(NSError **)error;
+- (SHDWAppStateClient *)appStateClient;
 - (NSTimeInterval)operationTimeout;
 @end
 @interface TestBackup : SHDWBackupService
@@ -122,9 +123,15 @@ NSString *JBPath(NSString *value) { return value; }
 @property(nonatomic) NSTimeInterval timeout;
 @property(nonatomic) BOOL rejectHelper;
 @end
+@interface FixtureClient : SHDWAppStateClient
+@property(nonatomic, weak) TestBackup *owner;
+@end
+@implementation FixtureClient
+- (BOOL)validateHelperAtPath:(NSString *)path error:(NSError **)error { (void)path;self.owner.validations++;if(self.owner.rejectHelper){if(error)*error=[NSError errorWithDomain:@"fixture" code:9 userInfo:@{NSLocalizedDescriptionKey:@"untrusted fixture"}];return NO;}return YES; }
+@end
 @implementation TestBackup
 - (NSString *)helperPath { return [fixtures stringByAppendingPathComponent:[@"fixture-" stringByAppendingString:self.fixture]]; }
-- (BOOL)validateHelperAtPath:(NSString *)path error:(NSError **)error { (void)path;self.validations++;if(self.rejectHelper){if(error)*error=[NSError errorWithDomain:@"fixture" code:9 userInfo:@{NSLocalizedDescriptionKey:@"untrusted fixture"}];return NO;}return YES; }
+- (SHDWAppStateClient *)appStateClient { FixtureClient *client=[[FixtureClient alloc]initWithHelperPath:[self helperPath]];client.owner=self;client.timeout=[self operationTimeout];return client; }
 - (NSTimeInterval)operationTimeout { return self.timeout ?: 5; }
 @end
 @interface SHDWCleanupService (FixtureSeam)
@@ -218,10 +225,30 @@ static void Next(void) {
 }
 int main(int argc,const char *argv[]){@autoreleasepool{Check(argc==2,@"fixture directory argument");fixtures=[NSString stringWithUTF8String:argv[1]];
 Check(!SHDWBackupCanRestore(@{},YES)&&SHDWBackupCanRestore(@{},NO),@"ordinary same-IDFV restore was enabled");
+Check(SHDWBackupPhoneOwned(@{})&&!SHDWBackupPhoneOwned(@{@"owner":@"rv"})&&!SHDWBackupCanRestore(@{@"owner":@"rv"},NO),@"RV owner allowed phone controls");
+NSString *active=@"11111111-2222-3333-4444-555555555555";
+NSDictionary *first=@{@"idfv":@"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},*current=@{@"idfv":active},*last=@{@"idfv":@"99999999-8888-7777-6666-555555555555"};
+NSArray *input=@[first,current,last];
+Check(!SHDWBackupCanDiscard(input,active),@"backed-up current identity allowed direct cleanup");
+Check(!SHDWBackupCanDiscard(@[first],[first[@"idfv"] lowercaseString]),@"current backup comparison ignored canonical UUID case");
+Check(!SHDWBackupCanDiscard(@[@{@"idfv":active.lowercaseString,@"unavailable":@YES}],active),@"unavailable current backup allowed direct cleanup");
+Check(SHDWBackupCanDiscard(@[first,last],active)&&SHDWBackupCanDiscard(@[],active),@"unrelated or absent backups blocked direct cleanup");
+Check(!SHDWBackupCanDiscard(nil,active)&&!SHDWBackupCanDiscard(input,nil)&&!SHDWBackupCanDiscard(input,@"invalid"),@"unknown backup or identity state allowed direct cleanup");
+Check([SHDWBackupActiveFirst(input,active)isEqual:@[current,first,last]],@"active backup was not pinned while preserving other order");
+Check([SHDWBackupActiveFirst(input,nil)isEqual:input]&&[SHDWBackupActiveFirst(input,@"absent")isEqual:input],@"unknown active identity reordered backups");
+Check([SHDWBackupActiveFirst(@[first,last],active)isEqual:@[first,last]],@"missing active backup created or reordered an entry");
+NSDictionary *named=@{@"title":@"Summer shop",@"note":@"",@"idfv":@"not-searched"},*noted=@{@"title":@"Other",@"note":@"Summer collection"},*missing=@{@"title":NSNull.null,@"note":@42};
+NSArray *searchCatalog=@[named,noted,missing];
+Check([SHDWBackupMatching(searchCatalog,@"  SUMMER \n")isEqual:@[named,noted]],@"search must match title and note, ignore case and preserve catalog order");
+Check([SHDWBackupMatching(searchCatalog,@"shop")isEqual:@[named]],@"filtered actions must refer to matching snapshot identity");
+Check(!SHDWBackupMatching(searchCatalog,@"not-searched").count,@"search unexpectedly matched identity fields");
+Check([SHDWBackupMatching(searchCatalog,@" \n")isEqual:searchCatalog]&&[SHDWBackupMatching(searchCatalog,nil)isEqual:searchCatalog],@"clearing search must restore complete catalog");
+Check(!SHDWBackupMatching(searchCatalog,@"absent").count&&searchCatalog.count==3,@"empty search results changed source catalog");
 NSDictionary *pending=@{@"restorePending":@YES,@"recoverySource":@YES};
 Check(!SHDWBackupCanRestore(pending,YES)&&SHDWBackupCanRestore(pending,NO),@"incomplete restore bypassed identity rule");
 NSDictionary *finalizing=@{@"restorePending":@YES,@"recoverySource":@YES,@"finalizationPending":@YES};
 Check(SHDWBackupCanRestore(finalizing,YES)&&SHDWBackupFinalizationOnly(finalizing,YES)&&!SHDWBackupFinalizationOnly(finalizing,NO),@"pending finalization action unavailable");
+Check(SHDWBackupCanRestore(@{@"restorePending":@YES,@"recoverySource":@YES,@"resetPending":@YES},YES),@"same-IDFV interrupted reset recovery unavailable");
 Check(!SHDWBackupCanRestore(@{@"restorePending":@YES},NO),@"unrelated snapshot allowed during pending restore");
 Check(!SHDWBackupCanRestore(@{@"unavailable":@YES,@"recoverySource":@YES,@"finalizationPending":@YES},YES),@"corrupt snapshot became restorable");
 [NSNotificationCenter.defaultCenter addObserverForName:SHDWOperationDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note){(void)note;Check(NSThread.isMainThread,@"coordinator notification off main");notifications++;}];dispatch_async(dispatch_get_main_queue(),^{Next();});while(YES)[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];}return 0;}
@@ -241,8 +268,9 @@ def main():
         harness = temp / "main.m"
         harness.write_text(HARNESS)
         sources = [ROOT / "src/Shadow.app/Services" / (name + ".m") for name in ("BackupService", "OperationCoordinator", "CleanupService", "OwnershipDiagnostics")]
+        sources.append(ROOT / "sdk/AppState/SHDWAppStateClient.m")
         binary = temp / "check"
-        command = ["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-incomplete-implementation", "-framework", "Foundation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1", "-I" + str(ROOT / "src/Shadow.framework/Headers"), "-I" + str(ROOT / "src/Shadow.app"), str(harness), *map(str, sources), "-o", str(binary)]
+        command = ["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-incomplete-implementation", "-framework", "Foundation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1", "-I" + str(ROOT / "src/Shadow.framework/Headers"), "-I" + str(ROOT / "src/Shadow.app"), "-I" + str(ROOT / "sdk/AppState"), str(harness), *map(str, sources), "-o", str(binary)]
         subprocess.run(command, check=True)
         environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:abort_on_error=1", UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1")
         subprocess.run([str(binary), str(temp)], env=environment, check=True, timeout=60)

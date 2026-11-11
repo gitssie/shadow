@@ -2,6 +2,9 @@
 #import "../../policy/FingerprintEnvironment.h"
 #import <UIKit/UIKit.h>
 #include <stdlib.h>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <string.h>
 
 static unsigned shdw_environment_scheduled;
 static unsigned shdw_environment_requested;
@@ -124,4 +127,30 @@ void shdw_universal_fingerprint_environment_prepare(SHDWHookSession *hooks) {
                 shdw_universal_fingerprint_environment_prepare(hooks);
         }
     });
+}
+
+static BOOL shdw_environment_application_started(void) {
+    static BOOL ready;
+    if(ready) return YES;
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    for(int i = 0; i < count; i++) {
+        Dl_info info = {0};
+        if(dladdr(frames[i], &info) && info.dli_sname && info.dli_fname &&
+           !strcmp(info.dli_sname, "UIApplicationMain") &&
+           !strncmp(info.dli_fname, "/System/Library/", 16)) {
+            ready = YES;
+            return YES;
+        }
+    }
+    return NO;
+}
+
+void shdw_universal_fingerprint_environment_dlopen_completed(SHDWHookSession *hooks) {
+    if(!hooks || !shdw_fingerprint_is_enabled() || shdw_environment_is_complete()) return;
+    if(!NSThread.isMainThread || !shdw_environment_application_started()) {
+        shdw_universal_fingerprint_environment_prepare(hooks);
+        return;
+    }
+    shdw_environment_install_ready(hooks);
 }

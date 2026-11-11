@@ -69,6 +69,7 @@ verify-procargs-filter:
 
 # Pure-C check for the anti-fishhook journal/repair core (rebind_slots.h).
 verify-rebind-repair:
+	python3 verify-late-image-replay.py
 	$(CC) -std=c99 -Wall -Wextra -pthread -o /tmp/shadow-rebind-test \
 		verify-rebind-repair.c
 	/tmp/shadow-rebind-test
@@ -125,6 +126,8 @@ verify-fingerprint:
 .PHONY: verify-fingerprint
 
 verify-cleanup:
+	python3 verify-reset-baseline.py
+	python3 verify-documents-reset.py
 	python3 verify-process-stop.py
 	python3 verify-cleanup-engine.py
 	python3 verify-ownership-diagnostics.py
@@ -135,14 +138,18 @@ verify-cleanup:
 
 # Optional macOS integration check of the actual AppState archive and store.
 verify-app-state:
+	python3 verify-state-transition-wait.py
 	python3 verify-app-state.py
 	python3 verify-archive-links.py
+	python3 verify-archive-recovery.py
+	python3 verify-backup-capture-boundary.py
 	python3 verify-app-state-progress.py
 	python3 verify-state-durability.py
 
 .PHONY: verify-app-state
 
 verify-backups: verify-app-state
+	python3 verify-app-state-client.py
 	python3 verify-backup-service.py
 	python3 verify-backup-keychain.py
 	python3 verify-state-backend.py
@@ -204,3 +211,39 @@ verify-loaded-image-registry:
 	@echo "SKIP: loaded image registry host checks require macOS Foundation"
 endif
 .PHONY: verify-loaded-image-registry
+
+verify-deb-ownership:
+	python3 verify-deb-ownership.py
+
+.PHONY: verify-deb-ownership
+test: verify-deb-ownership
+
+verify-hookkit-version:
+	python3 verify-hookkit-version.py
+
+.PHONY: verify-hookkit-version
+test: verify-hookkit-version
+
+verify-toolchain:
+	bash ToolchainTests.sh
+
+test: verify-toolchain
+.PHONY: verify-toolchain
+
+verify-reset-baseline:
+	python3 verify-reset-baseline.py
+
+test: verify-reset-baseline
+.PHONY: verify-reset-baseline
+
+verify-advertising:
+	python3 verify-advertising.py
+
+test: verify-advertising
+.PHONY: verify-advertising
+
+verify-fingerprint-diagnostics:
+	python3 verify-fingerprint-diagnostics.py
+
+test: verify-fingerprint-diagnostics
+.PHONY: verify-fingerprint-diagnostics

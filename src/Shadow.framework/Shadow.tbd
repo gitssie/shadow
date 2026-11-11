@@ -10,6 +10,7 @@ exports:
                             _ShadowSettings,
                             _SHDWFingerprintStore,
                             _SHDWFingerprintConfiguration,
+                            _SHDWFingerprintDiagnostics,
                             _SystemRulesGenerator ]
     symbols:              [ _SHDWHookPlan, _SHDWPluginPlan, _SHDWInstallUnits, _SHDWPluginRegistry,
                             _SHDWDefaultHookSettings, _SHDWHookGroupCapabilityKind,

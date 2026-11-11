@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-pages-test-") as temporary:
                                    ("rootless", "test", output)):
         rejected(lambda: pages.render(package, lane, tag, destination))
 
-    hookkit_fields = dict(Package="me.jjolano.fmwk.hookkit", Version="3.0.5+shadow.1-1",
+    hookkit_fields = dict(Package="me.jjolano.fmwk.hookkit", Version="3.0.5-1",
                           Architecture=fields["Architecture"], Maintainer="Shadow",
                           Description="HookKit framework")
     hookkit = build_package(temporary / "hookkit", hookkit_fields)
@@ -102,8 +102,10 @@ with tempfile.TemporaryDirectory(prefix="shadow-pages-test-") as temporary:
 
     for label, changes in (("identity", {"Package": "other.framework"}),
                            ("architecture", {"Architecture": "iphoneos-arm"}),
-                           ("old-version", {"Version": "3.0.5"}),
-                           ("unpatched-newer-version", {"Version": "3.0.6"})):
+                           ("old-version", {"Version": "3.0.4"}),
+                           ("old-patched-version", {"Version": "3.0.5+shadow.1-1"}),
+                           ("missing-revision", {"Version": "3.0.5"}),
+                           ("newer-version", {"Version": "3.0.7-1"})):
         invalid = build_package(temporary / label, dict(hookkit_fields, **changes))
         rejected(lambda: pages.render(package, "rootless", "test", temporary / (label + "-site"),
                                       hookkit_package=invalid))

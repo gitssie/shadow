@@ -34,6 +34,14 @@ static void FixturePreferencesFlush(CFStringRef,CFStringRef);
 #define SecItemAdd FixtureAdd
 #define SecItemUpdate FixtureUpdate
 #define dlsym FixtureSymbol
+static CFPropertyListRef FixtureExternalCopy(CFStringRef,CFStringRef,CFStringRef,CFStringRef);
+static Boolean FixtureExternalSync(CFStringRef,CFStringRef,CFStringRef);
+static CFDictionaryRef FixtureExternalMultiple(CFArrayRef,CFStringRef,CFStringRef,CFStringRef);
+#define CFPreferencesCopyValue FixtureExternalCopy
+#define CFPreferencesSynchronize FixtureExternalSync
+#define CFPreferencesCopyMultiple FixtureExternalMultiple
+static NSArray *FixtureExternalPaths(void);
+#define SHDW_STATE_IDENTITY_PATHS() FixtureExternalPaths()
 #define SHADOW_STATE_SUPPORT 1
 #import "__CLEANER__"
 #undef dlsym
@@ -159,10 +167,13 @@ static void NativePreferenceTests(NSString *root){
 - (void)setObject:(id)object forKey:(NSString *)key{self.writes++;self.values[key]=object;}
 @end
 static FixtureDefaults *preferences;
+static BOOL fingerprintRefreshFails;
+static NSUInteger settingsInitializations;
 @implementation ShadowSettings
-+ (instancetype)sharedInstance{static id value;if(!value)value=[self new];return value;}
++ (instancetype)sharedInstance{settingsInitializations++;static id value;if(!value)value=[self new];return value;}
 - (NSUserDefaults *)userDefaults{return (NSUserDefaults *)preferences;}
 - (BOOL)isValidFingerprintData:(NSDictionary *)data{return [data isKindOfClass:NSDictionary.class]&&[data[@"VendorIdentifier"] isKindOfClass:NSString.class];}
++ (BOOL)isValidFingerprintData:(NSDictionary *)data{return [data isKindOfClass:NSDictionary.class]&&[data[@"VendorIdentifier"] isKindOfClass:NSString.class];}
 @end
 @implementation SHDWFingerprintConfiguration
 + (NSDictionary *)configurationByValidating:(id)value error:(NSError **)error{(void)error;return [value isKindOfClass:NSDictionary.class]&&[value[@"valid"] boolValue]?value:nil;}
@@ -170,8 +181,95 @@ static FixtureDefaults *preferences;
 @implementation SHDWFingerprintStore
 + (instancetype)sharedStore{static id value;if(!value)value=[self new];return value;}
 + (NSString *)deviceFingerprintForData:(NSDictionary *)data{return data[@"VendorIdentifier"];}
+- (BOOL)lockedForApplication:(NSString *)identifier{return [preferences.values[identifier][@"Fingerprint_Locked"]boolValue];}
+- (BOOL)setLocked:(BOOL)value forApplication:(NSString *)identifier error:(NSError **)error{(void)error;NSMutableDictionary *app=[preferences.values[identifier] mutableCopy];app[@"Fingerprint_Locked"]=@(value);[preferences setObject:app forKey:identifier];return YES;}
+- (BOOL)refreshApplication:(NSString *)identifier error:(NSError **)error{(void)error;if(fingerprintRefreshFails)return NO;NSMutableDictionary *app=[preferences.values[identifier] mutableCopy];app[@"Fingerprint_Data"]=@{@"VendorIdentifier":@"44444444-4444-4444-8444-444444444444"};app[@"Fingerprint_Locked"]=@YES;[preferences setObject:app forKey:identifier];return YES;}
 - (NSDictionary *)configurationForApplication:(NSString *)identifier{(void)identifier;return @{@"valid":@YES,@"region":@"fallback"};}
 @end
+
+static NSArray *externalPaths;
+static NSArray *FixtureExternalPaths(void){return externalPaths?:@[];}
+static id externalSettings;
+static NSDictionary *externalRoot;
+static BOOL externalSyncFailure;
+static NSUInteger externalReads;
+static void ExternalScope(CFStringRef domain,CFStringRef user,CFStringRef host){Check(CFEqual(domain,CFSTR(SHADOW_PREFS_PLIST))&&CFEqual(user,CFSTR("mobile"))&&CFEqual(host,kCFPreferencesAnyHost),@"external identity must read Shadow absolute suite in mobile context");}
+static Boolean FixtureExternalSync(CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);return !externalSyncFailure;}
+static CFPropertyListRef FixtureExternalCopy(CFStringRef key,CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);Check(CFEqual(key,CFSTR("local.fixture.app")),@"unexpected identity bundle");externalReads++;return externalSettings?CFBridgingRetain(externalSettings):NULL;}
+static CFDictionaryRef FixtureExternalMultiple(CFArrayRef keys,CFStringRef domain,CFStringRef user,CFStringRef host){ExternalScope(domain,user,host);Check([(__bridge NSArray *)keys count]==3,@"active query did not scope preference keys");return externalRoot?CFBridgingRetain(externalRoot):NULL;}
+@interface SavedOnlyFixture : NSObject
+@property(nonatomic)NSUInteger deletes,verifications;
+@end
+@implementation SavedOnlyFixture
+- (NSDictionary *)claimBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)bundle;(void)error;return @{@"idfv":idfv,@"owner":@"rv"};}
+- (NSDictionary *)releaseBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)bundle;(void)error;return @{@"idfv":idfv,@"owner":@"phone"};}
+- (NSDictionary *)ownershipBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)bundle;(void)error;return @{@"idfv":idfv,@"owner":@"phone"};}
+- (BOOL)deleteBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"delete mapping changed identity");self.deletes++;return YES;}
+- (BOOL)recheckBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error{(void)error;Check([bundle isEqual:@"local.fixture.app"]&&idfv.length==36,@"verify mapping changed identity");self.verifications++;return YES;}
+@end
+static void ExternalTests(NSString *base){
+    Check([StateExternalIdentityPaths(@"/var/jb",@SHADOW_PREFS_PLIST)isEqual:@[@"/var/jb/var/mobile/Library/Preferences/me.jjolano.shadow.plist",@SHADOW_PREFS_PLIST]],@"production persisted identity builder lost bootstrap prefix");
+    Check([StateExternalIdentityPaths(@"",@SHADOW_PREFS_PLIST)isEqual:@[@SHADOW_PREFS_PLIST]],@"rootful identity builder duplicated raw path");
+    Check([StateExternalIdentityPaths(@"/",@SHADOW_PREFS_PLIST)isEqual:@[@SHADOW_PREFS_PLIST]],@"root slash identity builder duplicated raw path");
+
+    NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555";externalSettings=nil;externalReads=0;Check([StateReadExternalIdentity(bundle)isEqual:@""],@"missing identity is explicit empty wire value");
+    externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid]&&externalReads==2,@"token-independent identity query");
+    for(id malformed in @[@"bad",@{@"Fingerprint_Data":@"bad"},@{@"Fingerprint_Data":@{@"VendorIdentifier":@"bad"}},@{@"Fingerprint_Data":@{@"VendorIdentifier":@1}}]){externalSettings=malformed;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed identity accepted as absent");}
+    externalSettings=nil;NSString *rooted=[base stringByAppendingPathComponent:@"rooted-identity.plist"],*stale=[base stringByAppendingPathComponent:@"stale-identity.plist"];
+    NSDictionary *persisted=@{bundle:@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}}};Check([persisted writeToFile:rooted atomically:YES]&&[[NSData data]writeToFile:stale atomically:YES],@"persisted identity fixture");
+    externalPaths=@[rooted,stale];NSData *rootedBefore=[NSData dataWithContentsOfFile:rooted],*staleBefore=[NSData dataWithContentsOfFile:stale];NSDictionary *rootedAttributes=[NSFileManager.defaultManager attributesOfItemAtPath:rooted error:NULL];
+    Check([StateReadExternalIdentity(bundle)isEqual:uuid],@"CF-missing identity did not read persisted Shadow selection");
+    Check([[NSData dataWithContentsOfFile:rooted]isEqual:rootedBefore]&&[[NSData dataWithContentsOfFile:stale]isEqual:staleBefore]&&[[NSFileManager.defaultManager attributesOfItemAtPath:rooted error:NULL][NSFileModificationDate]isEqual:rootedAttributes[NSFileModificationDate]],@"persisted identity query wrote preferences");
+    Check([@{}writeToFile:rooted atomically:YES],@"absent selected-app fixture");Check([StateReadExternalIdentity(bundle)isEqual:@""],@"absent persisted app rejected empty stale placeholder");
+    Check([[@"invalid secondary plist" dataUsingEncoding:NSUTF8StringEncoding]writeToFile:stale atomically:NO],@"malformed secondary fixture");Check(Reject(^{StateReadExternalIdentity(bundle);}),@"nonempty malformed secondary source ignored");
+    Check([[NSData data]writeToFile:stale atomically:NO],@"restore empty secondary fixture");externalPaths=@[stale];Check(Reject(^{StateReadExternalIdentity(bundle);}),@"empty sole source accepted as absent");externalPaths=@[rooted,stale];
+    Check([@{bundle:@{@"Fingerprint_Data":@{@"VendorIdentifier":@"invalid"}}}writeToFile:rooted atomically:YES],@"malformed persisted fixture");Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed persisted identity became missing");
+    externalSettings=@{@"Fingerprint_Data":@{@"VendorIdentifier":uuid}};Check([StateReadExternalIdentity(bundle)isEqual:uuid],@"valid preference cache lost precedence over persisted data");
+    externalSettings=nil;Check([[@"invalid plist" dataUsingEncoding:NSUTF8StringEncoding]writeToFile:rooted atomically:NO],@"malformed persisted plist fixture");Check(Reject(^{StateReadExternalIdentity(bundle);}),@"malformed persisted plist became missing");
+    externalPaths=@[];
+    externalSyncFailure=YES;Check(Reject(^{StateReadExternalIdentity(bundle);}),@"failed preference sync reported absent identity");externalSyncFailure=NO;
+    NSDictionary *capabilities=StateExternalCommand(bundle,@"capabilities",@{});Check([capabilities[@"ok"]boolValue],@"capabilities needs installed app or storage");
+    NSData *capData=[[NSData alloc]initWithBase64EncodedString:capabilities[@"result"] options:0];NSDictionary *caps=[NSPropertyListSerialization propertyListWithData:capData options:NSPropertyListImmutable format:NULL error:NULL];for(NSString *operation in @[@"backup",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"])Check([caps[@"operations"]containsObject:operation],@"missing public operation capability");
+    for(NSString *code in @[@"busy",@"invalid_request",@"restore_pending",@"active_environment",@"ownership_conflict",@"snapshot_unavailable",@"invalid_archive",@"permission_denied",@"operation_failed",@"outcome_unknown"]){NSError *source=[NSError errorWithDomain:@"fixture.source" code:41 userInfo:@{NSLocalizedDescriptionKey:@"arbitrary localized message",@"errorCode":code,NSUnderlyingErrorKey:[NSError errorWithDomain:NSPOSIXErrorDomain code:13 userInfo:nil]}];NSDictionary *terminal=StateErrorTerminal(source);Check([terminal[@"errorCode"]isEqual:code]&&[terminal[@"sourceDomain"]isEqual:@"fixture.source"]&&[terminal[@"sourceCode"]integerValue]==41&&[terminal[@"posixCode"]integerValue]==13,@"typed terminal classification changed");}
+    Check(StateExternalAction(@"externalDelete")&&StateExternalAction(@"externalVerify"),@"store-only external operations unavailable");
+Check(Reject(^{StateExternalCommand(bundle,@"capabilities",@{@"unexpected":@1});}),@"unknown external key accepted");
+    SavedOnlyFixture *saved=[SavedOnlyFixture new];NSError *savedError=nil;
+    Check([StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalDelete",@{@"idfv":uuid},&savedError)[@"deleted"]boolValue]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalVerify",@{@"idfv":uuid},&savedError)[@"verified"]boolValue]&&saved.deletes==1&&saved.verifications==1,@"saved operations require live device backend");
+    NSDictionary *deleted=StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalDelete",@{@"idfv":uuid.lowercaseString},&savedError);
+    Check([deleted[@"deleted"]isEqual:@YES]&&[deleted[@"idfv"]isEqual:uuid],@"delete terminal omitted canonical snapshot identity");
+    Check([StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalClaim",@{@"idfv":uuid},&savedError)[@"owner"]isEqual:@"rv"]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalRelease",@{@"idfv":uuid},&savedError)[@"owner"]isEqual:@"phone"]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalOwnership",@{@"idfv":uuid},&savedError)[@"owner"]isEqual:@"phone"],@"ownership helper action mapping failed");
+    Check(Reject(^{StateExternalCommand(bundle,@"exportState",@{@"idfv":uuid,@"part":@"manifest",@"requester":@"invalid"});}),@"invalid requester reached storage");
+    stateInitiatingParent=getppid();NSMutableArray *frames=[NSMutableArray new];SHDWStateProgress progress=StateProgressHandler(^(NSDictionary *frame){[frames addObject:frame];});
+    progress(@{@"phase":@"verify",@"stage":@"data",@"bytes":@1,@"secret":@"hidden"});progress(@{@"phase":@"verify",@"stage":@"data",@"bytes":@2});progress(@{@"phase":@"verify",@"stage":@"state",@"entries":@3});
+    Check(frames.count==2&&[frames[0][@"event"]isEqual:@"progress"]&&[frames[0][@"progress"][@"bytes"]isEqual:@1]&&frames[0][@"progress"][@"secret"]==nil&&[frames[1][@"progress"][@"stage"]isEqual:@"state"],@"shared verify progress framing/throttling/filtering changed");
+    puts("external helper: same mobile suite, token-independent identity, missing/malformed distinction and capabilities passed");
+}
+static void ActiveFingerprintTests(NSString *base){
+    NSUInteger initializations=settingsInitializations;
+    NSString *bundle=@"local.fixture.app",*uuid=@"11111111-2222-3333-4444-555555555555",*path=[base stringByAppendingPathComponent:@"active-fingerprint.plist"];
+    externalPaths=@[path];externalSyncFailure=NO;externalRoot=@{};
+    NSDictionary *empty=StateActiveFingerprint(bundle);Check(![empty[@"available"]boolValue]&&![empty[@"enabled"]boolValue]&&[empty[@"current_idfv"]isEqual:@""],@"absent profile generated an identity");
+    NSDictionary *data=@{@"VendorIdentifier":uuid,@"AdvertisingIdentifier":@"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",@"nested":@{@"date":[NSDate dateWithTimeIntervalSince1970:123],@"bytes":[NSData dataWithBytes:"\0\xff" length:2]}};
+    NSMutableDictionary *app=[@{@"Fingerprint_Data":data,@"Fingerprint_Config":@{@"valid":@YES},@"Fingerprint_Locked":@YES,@"App_Enabled":@YES,@"privateField":@"must not escape"}mutableCopy];
+    NSMutableDictionary *root=[@{bundle:app,@"SingleToggleMigrated":@YES,@"other.app":@{@"secret":@"must not escape"}}mutableCopy];
+    Check([root writeToFile:path atomically:YES],@"active fixture write");NSData *before=[NSData dataWithContentsOfFile:path];
+    NSDictionary *reply=StateActiveFingerprint(bundle);
+    Check([reply[@"available"]boolValue]&&[reply[@"enabled"]boolValue]&&[reply[@"locked"]boolValue]&&[reply[@"current_idfv"]isEqual:uuid]&&[reply[@"source"]isEqual:@"stored_settings"],@"active profile state missing");
+    Check([reply[@"fingerprint_data"][@"nested"][@"date"]isEqual:@123]&&[reply[@"fingerprint_data"][@"nested"][@"bytes"]isEqual:@"AP8="]&&[NSJSONSerialization isValidJSONObject:reply],@"active profile is not JSON safe");
+    Check(!reply[@"privateField"]&&!reply[@"other.app"]&&[before isEqual:[NSData dataWithContentsOfFile:path]],@"active query leaked or wrote settings");
+    for(NSString *key in @[@"App_Disabled",@"Fingerprint_Enabled",@"App_Enabled"]){app[@"App_Enabled"]=@YES;app[key]=[key isEqual:@"App_Disabled"]?@YES:@NO;Check([root writeToFile:path atomically:YES],@"disable fixture");reply=StateActiveFingerprint(bundle);Check(![reply[@"enabled"]boolValue]&&[reply[@"available"]boolValue],@"disabled fingerprint lost saved data or stayed enabled");[app removeObjectForKey:key];}
+    root[@"Global_Enabled"]=@YES;root[@"SingleToggleMigrated"]=@NO;Check([root writeToFile:path atomically:YES],@"legacy global fixture");Check([StateActiveFingerprint(bundle)[@"enabled"]boolValue],@"legacy global enable ignored");
+    app[@"Fingerprint_Data"]=@{@"VendorIdentifier":@"invalid"};Check([root writeToFile:path atomically:YES],@"bad identity fixture");Check(Reject(^{StateActiveFingerprint(bundle);}),@"bad current identity treated as missing");
+    app[@"Fingerprint_Data"]=data;app[@"Fingerprint_Config"]=@{@"valid":@NO};Check([root writeToFile:path atomically:YES],@"bad config fixture");Check(Reject(^{StateActiveFingerprint(bundle);}),@"bad configuration accepted");
+    [app removeObjectForKey:@"Fingerprint_Config"];Check([root writeToFile:path atomically:YES],@"legacy config fixture");reply=StateActiveFingerprint(bundle);Check([reply[@"available"]boolValue]&&!reply[@"fingerprint_config"],@"legacy profile manufactured configuration");
+    externalSyncFailure=YES;Check(Reject(^{StateActiveFingerprint(bundle);}),@"failed sync returned active data");externalSyncFailure=NO;
+    Check([@{}writeToFile:path atomically:YES],@"deleted profile fixture");externalRoot=@{bundle:app};Check(![StateActiveFingerprint(bundle)[@"available"]boolValue],@"stale preference cache resurrected deleted profile");
+    Check(!unlink(path.fileSystemRepresentation),@"remove active fixture");Check([StateActiveFingerprint(bundle)[@"available"]boolValue],@"CF-only selected profile unavailable");
+    Check(StateExternalAction(@"externalActiveFingerprint")&&Reject(^{StateExternalCommand(bundle,@"externalActiveFingerprint",@{@"path":@"/tmp/other"});}),@"active query action or request boundary missing");
+    externalRoot=nil;externalPaths=@[];
+    Check(settingsInitializations==initializations,@"read-only active query initialized migrating settings singleton");
+    puts("active fingerprint: saved-only query, JSON conversion, effective switches, missing/legacy/invalid profiles, no writes and app isolation passed");
+}
 static void KeychainTests(void){
     NSDictionary *local=Record((__bridge id)kSecClassGenericPassword,Group,@"local",@"service",@"local-data",NO),*internet=Record((__bridge id)kSecClassInternetPassword,Group,@"web",@"example.test",@"web-data",NO),*synced=Record((__bridge id)kSecClassGenericPassword,Group,@"cloud",@"service",@"cloud-old",YES),*other=Record((__bridge id)kSecClassGenericPassword,Other,@"other",@"service",@"untouched",NO);
     database=[@[local,internet,synced,other] mutableCopy];Reset();NSArray *captured=StateExportRecords(@[Group]);Check(captured.count==3&&deletes==0&&adds==0&&updates==0,@"read-only portable credential capture");
@@ -184,10 +282,53 @@ static void KeychainTests(void){
     puts("native state backend: portable genp/inet, exact scope, nonportable fail-closed, synchronized replacement and credential validation passed");
 }
 static void FingerprintTests(void){
-    Check(getuid()==501&&geteuid()==501,@"native preference worker host fixture requires mobile-equivalent UID501");preferences=[FixtureDefaults new];NSDictionary *oldData=@{@"VendorIdentifier":@"11111111-1111-4111-8111-111111111111",@"tag":@"old"},*newData=@{@"VendorIdentifier":@"22222222-2222-4222-8222-222222222222",@"tag":@"new"},*config=@{@"Localization":@{@"Region":@"native"},@"FutureFeature":@{@"enabled":@YES,@"opaque":[NSData dataWithBytes:"\0\1" length:2]}},*other=@{@"sentinel":@"unchanged"};NSString *bundle=@"local.fixture.app";preferences.values=[@{bundle:@{@"Fingerprint_Managed":@YES,@"Fingerprint_Data":oldData,@"Fingerprint_Config":@{@"valid":@YES},@"Fingerprint_Locked":@NO,@"Fingerprint_Enabled":@NO,@"unrelated":@"preserve"},@"other.app":other} mutableCopy];NSDictionary *target=@{@"bundleID":bundle,@"bundlePath":@"/nonexistent/shadow-state-fixture.app"};keychainParent=getppid();NSDictionary *request=@{@"fingerprint":@{@"data":newData,@"configuration":config,@"locked":@NO}};Check([StateMobileFingerprint(@"state-fingerprint-validate",target,request)[@"validated"] boolValue]&&preferences.writes==0,@"fingerprint preflight wrote preferences");StateMobileFingerprint(@"state-fingerprint-restore",target,request);NSDictionary *app=preferences.values[bundle];Check(preferences.writes==1&&[app[@"Fingerprint_Data"]isEqual:newData]&&[app[@"Fingerprint_Config"]isEqual:config]&&[app[@"Fingerprint_Locked"]boolValue],@"fingerprint data/configuration/lock were not restored atomically");Check([app[@"unrelated"]isEqual:@"preserve"]&&![app[@"Fingerprint_Enabled"]boolValue]&&[preferences.values[@"other.app"]isEqual:other],@"fingerprint restore changed unrelated application preferences");NSDictionary *captured=StateMobileFingerprint(@"state-fingerprint-capture",target,@{});Check([captured[@"data"]isEqual:newData]&&[captured[@"configuration"]isEqual:config]&&[captured[@"locked"]boolValue],@"fingerprint readback differs");NSUInteger identityWrites=preferences.writes;Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:newData[@"VendorIdentifier"]]&&preferences.writes==identityWrites,@"current IDFV read changed preferences or returned a different identity");NSMutableDictionary *identityOnly=[app mutableCopy];[identityOnly removeObjectForKey:@"Fingerprint_Config"];preferences.values[bundle]=identityOnly;Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:newData[@"VendorIdentifier"]]&&preferences.writes==identityWrites,@"identity read unnecessarily required a valid full fingerprint configuration");[identityOnly removeObjectForKey:@"Fingerprint_Data"];Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:@""]&&preferences.writes==identityWrites,@"missing IDFV did not return an empty read-only identity");identityOnly[@"Fingerprint_Data"]=@{@"VendorIdentifier":@42};Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:@""]&&preferences.writes==identityWrites,@"non-string IDFV escaped native identity reader");preferences.values[bundle]=app;NSUInteger writes=preferences.writes;Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-restore",target,@{@"fingerprint":@{@"data":newData,@"configuration":@[@"not a dictionary"]}});})&&preferences.writes==writes,@"non-dictionary fingerprint configuration wrote preferences");puts("native state backend: in-memory mobile preferences restore data/config/lock atomically and preserve unrelated fields/apps");
+    Check(getuid()==501&&geteuid()==501,@"native preference worker host fixture requires mobile-equivalent UID501");preferences=[FixtureDefaults new];NSDictionary *oldData=@{@"VendorIdentifier":@"11111111-1111-4111-8111-111111111111",@"tag":@"old"},*newData=@{@"VendorIdentifier":@"22222222-2222-4222-8222-222222222222",@"tag":@"new"},*config=@{@"Localization":@{@"Region":@"native"},@"FutureFeature":@{@"enabled":@YES,@"opaque":[NSData dataWithBytes:"\0\1" length:2]}},*other=@{@"sentinel":@"unchanged"};NSString *bundle=@"local.fixture.app";preferences.values=[@{bundle:@{@"Fingerprint_Managed":@YES,@"Fingerprint_Data":oldData,@"Fingerprint_Config":@{@"valid":@YES},@"Fingerprint_Locked":@NO,@"Fingerprint_Enabled":@NO,@"unrelated":@"preserve"},@"other.app":other} mutableCopy];NSDictionary *target=@{@"bundleID":bundle,@"bundlePath":@"/nonexistent/shadow-state-fixture.app"};keychainParent=getppid();NSDictionary *request=@{@"fingerprint":@{@"data":newData,@"configuration":config,@"locked":@NO}};Check([StateMobileFingerprint(@"state-fingerprint-validate",target,request)[@"validated"] boolValue]&&preferences.writes==0,@"fingerprint preflight wrote preferences");StateMobileFingerprint(@"state-fingerprint-restore",target,request);NSDictionary *app=preferences.values[bundle];Check(preferences.writes==1&&[app[@"Fingerprint_Data"]isEqual:newData]&&[app[@"Fingerprint_Config"]isEqual:config]&&[app[@"Fingerprint_Locked"]boolValue],@"fingerprint data/configuration/lock were not restored atomically");Check([app[@"unrelated"]isEqual:@"preserve"]&&![app[@"Fingerprint_Enabled"]boolValue]&&[preferences.values[@"other.app"]isEqual:other],@"fingerprint restore changed unrelated application preferences");NSDictionary *captured=StateMobileFingerprint(@"state-fingerprint-capture",target,@{});Check([captured[@"data"]isEqual:newData]&&[captured[@"configuration"]isEqual:config]&&[captured[@"locked"]boolValue],@"fingerprint readback differs");NSUInteger identityWrites=preferences.writes;Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:newData[@"VendorIdentifier"]]&&preferences.writes==identityWrites,@"current IDFV read changed preferences or returned a different identity");NSMutableDictionary *identityOnly=[app mutableCopy];[identityOnly removeObjectForKey:@"Fingerprint_Config"];preferences.values[bundle]=identityOnly;Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:newData[@"VendorIdentifier"]]&&preferences.writes==identityWrites,@"identity read unnecessarily required a valid full fingerprint configuration");[identityOnly removeObjectForKey:@"Fingerprint_Data"];Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:@""]&&preferences.writes==identityWrites,@"missing IDFV did not return an empty read-only identity");identityOnly[@"Fingerprint_Data"]=@{@"VendorIdentifier":@42};Check([StateMobileFingerprint(@"state-fingerprint-identity",target,@{})[@"idfv"] isEqual:@""]&&preferences.writes==identityWrites,@"non-string IDFV escaped native identity reader");preferences.values[bundle]=app;NSUInteger writes=preferences.writes;Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-restore",target,@{@"fingerprint":@{@"data":newData,@"configuration":@[@"not a dictionary"]}});})&&preferences.writes==writes,@"non-dictionary fingerprint configuration wrote preferences");NSMutableDictionary *enabled=[app mutableCopy];enabled[@"Fingerprint_Enabled"]=@YES;enabled[@"Fingerprint_Locked"]=@YES;preferences.values[bundle]=enabled;
+    NSUInteger beforeReset=preferences.writes;
+    Check([StateMobileFingerprint(@"state-fingerprint-reset-check",target,@{})[@"ready"]boolValue]&&preferences.writes==beforeReset,@"reset readiness check wrote preferences");
+    Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-reset",target,@{@"idfv":@"33333333-3333-4333-8333-333333333333"});})&&preferences.writes==beforeReset,@"mismatched fingerprint reset wrote preferences");
+    fingerprintRefreshFails=YES;
+    Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-reset",target,@{@"idfv":newData[@"VendorIdentifier"]});})&&[preferences.values[bundle][@"Fingerprint_Locked"]boolValue]&&[preferences.values[bundle][@"Fingerprint_Data"]isEqual:newData],@"failed reset lost its original fingerprint lock/data");
+    fingerprintRefreshFails=NO;
+    NSDictionary *reset=StateMobileFingerprint(@"state-fingerprint-reset",target,@{@"idfv":newData[@"VendorIdentifier"]});
+    Check([reset[@"idfv"]isEqual:@"44444444-4444-4444-8444-444444444444"]&&[preferences.values[bundle][@"Fingerprint_Locked"]boolValue]&&[preferences.values[bundle][@"unrelated"]isEqual:@"preserve"],@"fingerprint reset did not relock/preserve settings");
+    puts("native state backend: in-memory mobile preferences restore data/config/lock atomically and preserve unrelated fields/apps");
 }
 
 
+static void ResetBaselineFingerprintTests(NSString *base) {
+    NSString *bundle=@"local.fixture.app",*root=[base stringByAppendingPathComponent:@"documents-baseline"];
+    NSString *documents=[root stringByAppendingPathComponent:@"Documents"];
+    Check([NSFileManager.defaultManager createDirectoryAtPath:documents withIntermediateDirectories:YES attributes:nil error:NULL],@"baseline documents fixture");
+    struct attrlist attrs={.bitmapcount=ATTR_BIT_MAP_COUNT,.commonattr=ATTR_CMN_CRTIME};struct timespec original={.tv_sec=1000000000,.tv_nsec=123456789};
+    Check(!setattrlist(documents.fileSystemRepresentation,&attrs,&original,sizeof(original),FSOPT_NOFOLLOW),@"historical baseline fixture");
+    struct stat st;Check(!stat(root.fileSystemRepresentation,&st),@"baseline container identity");
+    NSDictionary *target=@{@"bundleID":bundle,@"bundlePath":@"/nonexistent/shadow-state-fixture.app",@"containers":@[@{@"identifier":bundle,@"path":root,@"device":@((uint64_t)st.st_dev),@"inode":@(st.st_ino)}]};
+    NSDictionary *data=@{@"VendorIdentifier":@"11111111-1111-4111-8111-111111111111"};
+    preferences=[FixtureDefaults new];preferences.values=[@{bundle:@{@"Fingerprint_Managed":@YES,@"Fingerprint_Enabled":@YES,@"Fingerprint_Locked":@YES,@"Fingerprint_Data":data,@"Fingerprint_Config":@{@"valid":@YES},@"unrelated":@"keep"}}mutableCopy];keychainParent=getppid();
+    StateMobileFingerprint(@"state-fingerprint-reset-baseline",target,@{@"apply":@NO});
+    NSDictionary *baseline=preferences.values[bundle][@"Fingerprint_ResetBaseline"];
+    Check(SHDWFingerprintResetBaselineValid(baseline),@"baseline not stored in Shadow profile");
+    NSDictionary *captured=StateMobileFingerprint(@"state-fingerprint-capture",target,@{});
+    Check([captured[@"resetBaseline"]isEqual:baseline],@"fingerprint capture omitted baseline");
+    StateMobileFingerprint(@"state-fingerprint-reset-baseline",target,@{@"apply":@YES});
+    StateMobileFingerprint(@"state-fingerprint-reset",target,@{@"idfv":data[@"VendorIdentifier"]});
+    Check([preferences.values[bundle][@"Fingerprint_ResetBaseline"]isEqual:baseline],@"fingerprint refresh overwrote original baseline");
+    Check([preferences.values[bundle][@"unrelated"]isEqual:@"keep"],@"baseline reset lost unrelated profile fields");
+    struct stat before,after;Check(!stat(documents.fileSystemRepresentation,&before),@"read post-reset metadata");
+    StateMobileFingerprint(@"state-fingerprint-restore",target,@{@"fingerprint":captured});
+    Check(!stat(documents.fileSystemRepresentation,&after)&&before.st_birthtimespec.tv_sec==after.st_birthtimespec.tv_sec&&before.st_birthtimespec.tv_nsec==after.st_birthtimespec.tv_nsec,@"fingerprint restore randomized live Documents time");
+    Check(SHDWFingerprintResetBaselineTimesEqual(preferences.values[bundle][@"Fingerprint_ResetBaseline"],baseline),@"fingerprint restore lost original baseline");
+    NSMutableDictionary *legacy=[captured mutableCopy];[legacy removeObjectForKey:@"resetBaseline"];
+    StateMobileFingerprint(@"state-fingerprint-restore",target,@{@"fingerprint":legacy});
+    Check([preferences.values[bundle][@"Fingerprint_ResetBaseline"]isEqual:baseline],@"legacy fingerprint restore discarded cached original baseline");
+    NSUInteger writes=preferences.writes;NSMutableDictionary *bad=[captured mutableCopy];bad[@"resetBaseline"]=@{@"Version":@YES,@"Containers":@{}};
+    Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-validate",target,@{@"fingerprint":bad});})&&writes==preferences.writes,@"malformed baseline passed readonly preflight");
+    NSMutableDictionary *outOfScope=[captured mutableCopy];
+    NSDictionary *record=[baseline[@"Containers"] allValues].firstObject;
+    outOfScope[@"resetBaseline"]=@{@"Version":@1,@"Containers":@{@"other.container":record}};
+    Check(Reject(^{StateMobileFingerprint(@"state-fingerprint-validate",target,@{@"fingerprint":outOfScope});})&&writes==preferences.writes,@"out-of-scope baseline passed readonly restore preflight");
+    puts("native reset baseline: mobile profile persistence, fingerprint refresh preservation, capture/restore roundtrip and legacy compatibility passed");
+}
 static NSDictionary *RequiredWorker(NSString *mode,NSDictionary *target,NSString *directory){@try{return StateWorker(mode,target,directory);}@catch(NSException *exception){Check(NO,[NSString stringWithFormat:@"%@ failed: %@",mode,exception.reason]);return nil;}}
 static void WorkerReplacementTests(NSString *root){
     fixtureRoot=root;
@@ -262,7 +403,7 @@ static void CatalogProjectionTests(void) {
     Check(catalog.count==2&&[catalog[0][@"unavailable"]boolValue]&&[catalog[0][@"error"]isEqual:@"corrupt"]&&[catalog[0][@"size"]isEqual:@0],@"corrupt snapshot status lost in catalog transport");
     Check([catalog[1][@"finalizationPending"]boolValue]&&[catalog[1][@"size"]isEqual:@50],@"pending finalization status lost in catalog transport");
 }
-int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
+int main(int argc,const char **argv){@autoreleasepool{CatalogProjectionTests();Check(argc==2,@"fixture directory argument");ExternalTests([NSString stringWithUTF8String:argv[1]]);ActiveFingerprintTests([NSString stringWithUTF8String:argv[1]]);KeychainTests();NativePreferenceTests([NSString stringWithUTF8String:argv[1]]);FingerprintTests();ResetBaselineFingerprintTests([NSString stringWithUTF8String:argv[1]]);WorkerReplacementTests([NSString stringWithUTF8String:argv[1]]);AnchorTests([NSString stringWithUTF8String:argv[1]]);return 0;}}
 '''
 
 

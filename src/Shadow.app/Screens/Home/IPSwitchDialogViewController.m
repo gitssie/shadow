@@ -144,9 +144,10 @@ static BOOL IPChanged(NSString *before, NSString *current) {
 }
 - (void)startSwitch {
     if (!self.entry || ![self beginQuery]) return;
+    SHDWIPSnapshot *baseline = self.currentSnapshot;
     self.attemptedSwitch = NO; self.needsRequery = NO; self.beforeSnapshot = nil; self.currentSnapshot = nil; [self renderSnapshots];
     __weak typeof(self) weakSelf = self;
-    [SHDWIPSwitchService.sharedService startWithURL:[SHDWIPSwitchConfiguration URLForString:self.entry[@"url"]] progress:^(SHDWIPSwitchPhase phase, SHDWIPSnapshot *snapshot) {
+    [SHDWIPSwitchService.sharedService startWithURL:[SHDWIPSwitchConfiguration URLForString:self.entry[@"url"]] baseline:baseline progress:^(SHDWIPSwitchPhase phase, SHDWIPSnapshot *snapshot) {
         [weakSelf progress:phase snapshot:snapshot];
     } completion:^(SHDWIPSnapshot *before, SHDWIPSnapshot *current, NSError *error) {
         [SHDWOperationCoordinator endOperation]; [weakSelf finishedWithBefore:before current:current error:error];

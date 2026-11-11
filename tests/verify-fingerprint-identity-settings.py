@@ -34,6 +34,7 @@ bootstrap = bootstrap.replace("[NSBundle mainBundle]", "testBundle")
 bootstrap = bootstrap.replace('NSUserDefaults* defaults = [[NSUserDefaults alloc] initWithSuiteName:@SHADOW_PREFS_PLIST];', 'ReadDefaults* defaults = supplied;')
 bootstrap = bootstrap.replace("return;", "return NO;")
 methods = "\n".join(function(signature) for signature in [
+    "+ (BOOL)isValidFingerprintData:",
     "- (NSString *)fingerprintOwnerIdentifierForIdentifier:",
     "- (NSUUID *)storedFingerprintVendorIdentifierForIdentifier:",
     "- (NSDictionary *)runtimeFingerprintDataForIdentifier:",
@@ -44,6 +45,7 @@ constants = set(re.findall(r"\bSHDW[A-Za-z]+ID\b", methods))
 source = r'''
 #import <Foundation/Foundation.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintAdvertising.h>
 #include <assert.h>
 #include <math.h>
 static const NSInteger kSHDWBootOffsetLimit = 86400;
@@ -84,6 +86,7 @@ static BOOL SHDWDetectorAggressiveEnabled(NSDictionary *app, BOOL global) {
     NSDictionary *defaultSettings;
 }
 @property(nonatomic, strong) ReadDefaults *userDefaults;
++ (BOOL)isValidFingerprintData:(NSDictionary *)data;
 - (NSString *)fingerprintOwnerIdentifierForIdentifier:(NSString *)identifier;
 - (NSUUID *)storedFingerprintVendorIdentifierForIdentifier:(NSString *)identifier;
 - (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier;
@@ -127,6 +130,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
     NSDictionary *profile = @{@"VendorIdentifier":uuid, @"Version":@1, @"MemoryDelta":@16384,
         @"InterfaceSeed":[NSMutableData dataWithLength:32], @"BootTimeOffset":@100,
         @"NativeBootTimestamp":@1600000000, @"BootSessionUUID":uuid, @"NativeBootSessionUUID":uuid};
+    assert([ShadowSettings isValidFingerprintData:profile]);
+    assert(![ShadowSettings isValidFingerprintData:@{@"VendorIdentifier":uuid}]);
     NSDictionary *app = @{@"App_Enabled":@YES, @"Fingerprint_Data":profile};
     defaults.values[@"owner.app"] = app;
     NSDictionary *before = [defaults.values copy];

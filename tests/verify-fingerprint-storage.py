@@ -42,6 +42,8 @@ customized = function((root / "src/ShadowSettings.bundle/SHDWPrefs.m").read_text
 source = r'''
 #import <Foundation/Foundation.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintVolumeTime.h>
+#import <Shadow/FingerprintAdvertising.h>
 #import <Shadow/FingerprintOwner.h>
 #include <assert.h>
 #include <math.h>
@@ -127,7 +129,24 @@ int main(int argc, const char **argv) { @autoreleasepool {
     sharedSettings.userDefaults = store;
     assert(![sharedSettings fingerprintDataForIdentifier:nil]);
     assert(![sharedSettings refreshFingerprintDataForIdentifier:@""]);
-    if([phase isEqual:@"seed"]) {
+    if([phase isEqual:@"fresh"]) {
+        double now = floor(NSDate.date.timeIntervalSince1970);
+        nativeBoot = now - 900.25;
+        varBirth = now - 2000.125;
+        store.values[@"fresh.app"] = @{@"Fingerprint_Enabled":@YES, @"Unrelated":@"keep"};
+        for(unsigned i = 0; i < 2; i++) {
+            maximumEntropy = i;
+            assert([sharedSettings refreshFingerprintDataForIdentifier:@"fresh.app"]);
+            NSDictionary *data = store.values[@"fresh.app"][@"Fingerprint_Data"];
+            assert(SHDWValidFingerprintData(data));
+            double projected = nativeBoot + [data[@"BootTimeOffset"] doubleValue];
+            assert(projected >= varBirth && projected < NSDate.date.timeIntervalSince1970);
+            assert([store.values[@"fresh.app"][@"Unrelated"] isEqual:@"keep"]);
+        }
+        NSInteger lo, hi;
+        varBirth = now + 60;
+        assert(!SHDWFingerprintBootOffsetBounds(nativeBoot, now, &lo, &hi));
+    } else if([phase isEqual:@"seed"]) {
         for(unsigned i = 0; i < 2; i++) {
             maximumEntropy = i;
             NSDictionary *edge = SHDWNewFingerprintData();
@@ -204,6 +223,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
         assert([sharedSettings refreshFingerprintDataForIdentifier:@"a.app"]);
         NSDictionary *fresh = [sharedSettings fingerprintDataForIdentifier:@"a.app"];
         assert(SHDWValidFingerprintData(fresh) && ![a isEqual:fresh]);
+        assert(SHDWFingerprintAdvertisingUUIDValid(fresh[@"AdvertisingIdentifier"]));
+        assert(![fresh[@"AdvertisingIdentifier"] isEqual:fresh[@"VendorIdentifier"]]);
         assert(![fresh[@"VendorIdentifier"] isEqual:a[@"VendorIdentifier"]]);
         // Existing processes retain their original immutable snapshot.
         assert([SHDWFingerprintData(@"a.app") isEqual:a]);
@@ -245,6 +266,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
         NSDictionary *persisted = [store.values[@"legacy.app"][@"Fingerprint_Data"] copy];
         NSDictionary *restarted = [sharedSettings fingerprintDataForIdentifier:@"legacy.app"];
         assert([persisted isEqual:restarted]);
+        if (persisted[@"AdvertisingIdentifier"]) assert([persisted[@"AdvertisingIdentifier"] isEqual:restarted[@"AdvertisingIdentifier"]]);
         assert([restarted[@"VendorIdentifier"] isEqual:persisted[@"VendorIdentifier"]]);
     } else if([phase isEqual:@"bounds"]) {
         NSDictionary *otherApp = [store.values[@"b.app"] copy];
@@ -356,5 +378,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-storage-") as tmp:
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Shadow.framework/Headers"), "-I",
         str(root / "src/ShadowCore.dylib/policy"), str(src), "-o", str(binary)], check=True)
-    for phase in ["seed", "restart", "restart", "vendor-migrate", "vendor-restart", "bounds", "clock", "reboot"]:
+    for phase in ["seed", "restart", "restart", "vendor-migrate", "vendor-restart", "bounds", "clock", "reboot", "fresh"]:
         subprocess.run([str(binary), str(prefs), phase], check=True)

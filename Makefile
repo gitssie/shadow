@@ -30,3 +30,7 @@ ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
 else
 	$(ECHO_NOTHING)rm -f "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/me.jjolano.shadow.watcher.rootless.plist"$(ECHO_END)
 endif
+
+# Some dm.pl versions rewrite owner names but retain the host numeric IDs.
+after-package::
+	python3 "$(THEOS_PROJECT_DIR)/scripts/normalize-deb-ownership.py" "$(__THEOS_LAST_PACKAGE_FILENAME)"

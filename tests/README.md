@@ -3,8 +3,8 @@
 Public tests combine pure-C checks, static contract scripts, and a macOS-only
 Foundation image-registry check. They need make, Bash,
 a host C compiler, Python 3.7+, and standard shell tools; no device, Docker, iOS SDK, or engine
-build is required. The lane/package contract also requires `THEOS` to point to a
-directory containing `bin/lane.sh`; a full Theos installation is not required.
+build is required. Lane/package checks use the local `build-support/lanes.sh`
+and do not require Theos or the `THEOS` environment variable.
 
 | Check | Command |
 | --- | --- |
@@ -15,12 +15,15 @@ directory containing `bin/lane.sh`; a full Theos installation is not required.
 | mount filtering (pure C + static query contract) | `make -C tests verify-mount-filter` |
 | rebind journal/repair (pure C) | `make -C tests verify-rebind-repair` |
 | KERN_PROCARGS2 payload filter (kernel-shaped payloads) | `make -C tests verify-procargs-filter` |
+| exact HookKit package/framework version consistency | `make -C tests verify-hookkit-version` |
+| upstream Theos toolchain and HookKit adapter | `make -C tests verify-toolchain` |
 | lane/package contract | `sh tests/verify-lane-contract.sh` |
 | binary compatibility checker (synthetic tool output) | `make -C tests verify-binary-compat` |
 | hook→engine matrix drift | `sh tests/verify-hook-matrix.sh` |
 | raw syscall metadata | `sh tests/verify-syscall-meta.sh` |
 | settings structure | `sh tests/verify-settings-structure.sh` |
 | JB-identifier data contract | `make -C tests jb-identifiers` |
+| Debian numeric ownership and payload preservation | `make -C tests verify-deb-ownership` |
 | package maintainer scripts | `sh tests/MaintainerScriptTests.sh` |
 
 Run the public checks from the repository root:
@@ -98,7 +101,15 @@ verified without accessing the user's Keychain or installed apps. Native prefere
 API doubles also exercise global/container and AnyHost/CurrentHost import, unknown
 configuration fields, unchanged-value no-op, stale-key removal, and synchronization
 failures. Split archive checks cover missing/corrupt/swapped state packages and
-pinning both archives during restore retries. This target
+pinning both archives during restore retries. The same target also runs `verify-app-state-client.py` against the shared SDK,
+covering large stdin requests, private unlinked input, response bounds, malformed
+frames, validation, timeout and unknown outcomes without automatic retry.
+External helper fixtures check the exact mobile preference suite, absent versus
+malformed identity, failed synchronization and capability negotiation. Transfer
+fixtures use real archives to check manifest conflict rejection, pending-source
+protection, corrupt import rejection and read-only storage opening.
+
+This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.
 
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer
@@ -111,10 +122,9 @@ snapshot matcher, including rule precedence and absence of refresh/resolution
 in the query. They do not execute Foundation predicates or test device locking;
 custom predicates that perform I/O are outside the mount-query contract.
 
-Binary compatibility checks exercise all four lanes with synthetic Mach-O tool
+Binary compatibility checks exercise the three supported lanes with synthetic Mach-O tool
 output, including both deployment-load-command formats. They accept matching
-architecture/deployment/ABI fixtures and reject mismatches, legacy lock imports,
-and invalid RootHide linking. These test the checker, not actual iOS execution.
+architecture/deployment/ABI fixtures and reject mismatches and legacy lock imports. These test the checker, not actual iOS execution.
 Packaged lane builds separately run the checker against their real binaries.
 
 The full engine/detector/adversary/fuzz/device harness is private and
@@ -131,3 +141,21 @@ Backup recovery regressions cover atomic tombstone deletion, per-snapshot corrup
 snapshots, containing-app configuration for extensions, and scoped native
 accessor consistency. These host checks use Foundation and runtime doubles;
 private selector availability and actual hook installation require device checks.
+
+AppState helper checks also cover stable machine error codes through the real
+process transport, preserving source/POSIX codes and independent partial/unknown
+flags. Core fixtures check busy locks, active/pending protection, damaged and
+missing snapshots, and partial metadata updates. Native helper fixtures verify
+that saved-snapshot deletion and full verification dispatch without live target
+resolution. These checks do not establish live device permissions.
+
+The optional AppState check also runs verify-state-transition-wait.py. It extracts
+the production native wait method and uses real monotonic time to confirm the
+three-second and one-second minimum waits, with controlled process/authority
+loss during waiting. The storage fixture separately traces real archive
+capture/restore/synchronization calls and injects interrupted waits, restarted
+targets and data reappearing after clear. It also changes 12 shared-memory header
+bytes after extraction and confirms restore and pending finalization do not
+rehash live container files. New captures omit per-file digests and repeated
+post-pack validation, while whole-archive digests and legacy checksum reading
+remain covered. Saved archive integrity checks before restore remain enabled. No installed app or phone is touched.

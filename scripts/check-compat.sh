@@ -12,8 +12,8 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 . "$ROOT/build-support/lanes.sh"
 
 case "$PROFILE" in
-    rootful-legacy|rootful-modern|rootless|roothide) ;;
-    *) echo "usage: $0 <rootful-legacy|rootful-modern|rootless|roothide> ARTIFACT.deb" >&2; exit 2 ;;
+    rootful-legacy|rootful-modern|rootless) ;;
+    *) echo "usage: $0 <rootful-legacy|rootful-modern|rootless> ARTIFACT.deb" >&2; exit 2 ;;
 esac
 
 PACKAGE=$(shadow_lane_field "$PROFILE" PACKAGE)

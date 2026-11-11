@@ -13,7 +13,7 @@ fail() {
     status=1
 }
 
-for lane in rootful-legacy rootful-modern rootless roothide; do
+for lane in $(shadow_lanes); do
     template="$ROOT/packaging/controls/control.$lane.in"
     [ -f "$template" ] || { fail "$lane has no control template"; continue; }
 
@@ -29,7 +29,7 @@ for lane in rootful-legacy rootful-modern rootless roothide; do
 
     [ -n "$sdk" ] && [ "$sdk" != "$target" ] || fail "$lane has no SDK in TARGET '$target'"
     [ "$actual_package" = "$package" ] || fail "$lane package '$actual_package' != '$package'"
-    # The rootless/RootHide Theos schemes rewrite the control template's
+    # The rootless Theos schemes rewrite the control template's
     # iphoneos-arm architecture during packaging.  The final package
     # architecture is checked by scripts/check-compat.sh against PACKAGE_ARCH.
 

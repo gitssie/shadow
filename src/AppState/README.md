@@ -50,6 +50,29 @@ The store checks this before publication and again before accepting a saved
 manifest, including manifests supplied by mobile-context sync tools. Unsupported
 source ownership/permissions fail backup rather than creating an unusable snapshot.
 
+## Phone and RV ownership
+
+New manifests record `owner` as `phone` or `rv`. Missing owner on an existing
+manifest means phone; querying never rewrites old backups. `owner_id` is reserved
+and exposed as JSON null by adapters. It is omitted from the plist because the
+plist format has no null value. This is cooperative ownership for one RV, not
+an authentication boundary; no credential, generation, lease or expiry is used.
+
+`claimBundle` checks the current IDFV and pending restoration under the existing
+application lock before setting an inactive snapshot to RV. Claim/release are
+idempotent. `ownershipBundle` and catalog remain available to either side.
+All other saved-snapshot operations require `requester` to match the saved owner;
+requester defaults to phone. Active capture and restoration remain phone-only.
+An RV-owned snapshot cannot be overwritten by a phone backup or restored before
+release. Imports cannot change the owner through a supplied manifest.
+
+RV claims before downloading state, passes requester=rv while editing/transferring,
+and releases only after publishing and verifying the final state. Failed writes
+never implicitly release ownership. An uncertain ownership write is reported as
+unknown so callers query ownership before deciding what to do. An unreadable
+manifest cannot establish its owner and therefore cannot be deleted; readable
+ownership still permits deleting an otherwise damaged archive.
+
 ## Archive and checks
 
 `Archive` writes PAX tar with Zstandard level 3. Regular file contents are read in
@@ -67,6 +90,12 @@ creation/modification times. Container content operations can naturally change
 its modification time. An internal PAX annotation preserves creation times that
 libarchive's standard creation-time field omits (including equal/later creation
 times); it is archive metadata and is never installed as an app extended attribute.
+Restored-root verification does not require modification times to match the
+archive, for any entry type. It still checks content hashes, sizes, types,
+permissions, ownership, creation times and link identities. Archive integrity and
+source-capture consistency checks retain their timestamp checks; detecting a
+concurrent change while reading is distinct from comparing a restored timestamp
+with the archived value. Verification itself does not rewrite timestamps.
 The module does **not** preserve extended
 attributes, filesystem ACLs, or iOS file protection classes. It is not a complete
 filesystem image. Regular-file hard links within captured roots share one archived
@@ -93,12 +122,32 @@ must report failures through `NSError`; progress callbacks should not mutate
 the store or application state.
 
 Restore verifies both complete archives and all payloads before clearing target files.
+The native stop barrier requires all selected App, extension and owned WebKit
+processes to remain absent for one continuous second before proceeding. Any
+reappearance restarts that quiet window within the existing overall deadline.
 Before stopping or mutating the target, restore reads its current IDFV from the
 backend. If it equals the selected snapshot's IDFV, restoration is rejected
 regardless of `saveCurrent`, including an ordinary pending retry. A matching IDFV denotes
 the active environment, whose subsequently generated data must be retained.
 This comparison uses IDFV, not the displayed fingerprint digest. Optional saving
-of a different current environment runs before restore mutations.
+of a different current environment runs before restore mutations. If that current
+IDFV already has a snapshot, saving is mandatory for a new restoration; requesting
+`saveCurrent=NO` returns `backup_required` before stopping or mutating the App.
+An existing pending recovery still retries without capturing partial live data.
+
+
+The storage transition barrier is independent of UI progress pacing. After a
+confirmed stop, capture and non-saving restore wait at least three seconds while
+the backend continuously checks process and container authority. A saving restore
+uses the capture barrier, then waits one second after the verified current backup.
+Backup-and-reset also waits one second between verified backup and reset.
+After clearing all containers, restore synchronizes their directory trees, waits
+one second, and verifies that no application data reappeared before extraction.
+After extraction, it synchronizes all current roots and waits another second
+before the unchanged complete content/metadata verification. Any interrupted
+wait, restarted target, changed container, or late data stops the operation;
+mutation retains the pinned pending recovery source. Waiting never substitutes
+for checksum verification or retries a destructive step.
 
 Restoration matches archived container identities to the currently authorized
 containers, so changed container UUID paths and app version/build values do not
@@ -182,3 +231,82 @@ also builds these libraries; packaged builds link them into the cleaner helper.
 Host and compile/link checks do not verify live iOS permissions, Keychain
 entitlement behavior, file protection, UIKit rendering, or app compatibility after
 restore. Those require device verification before release.
+
+Restoration fully verifies extracted files against `data.tar.zst` before replaying
+preferences from `state.tar.zst`. It then verifies logical preferences and Keychain
+records, synchronizes all writes and commits the fingerprint. The data archive
+is unchanged. Verification-only identity finalization still requires the original
+raw-file baseline: if preference replay changed that baseline, finalization fails
+and retains pending recovery state without replaying or claiming data verification.
+
+## External helper API
+
+The installed helper accepts additive `capabilities`, `externalCatalog`,
+`externalEdit`, `exportState`, and `importState` actions through its existing
+`state <bundle> <action> <request>` entry point. External requests may use `-`
+for a bounded binary property list on standard input (96 MiB maximum). Existing
+Manager commands and scoped-worker limits are unchanged. Responses retain the
+existing NDJSON envelope containing a base64 binary property-list result.
+
+Catalog and transfer operations do not resolve installed targets or start scoped
+credential workers. Current identity is read separately in the mobile preferences
+domain; missing identity is represented as an empty string in the property-list
+wire result. The network adapter maps that value to JSON null. Malformed identity
+is an error. Export returns raw bytes plus manifest/state/data hashes; state
+export requires the expected state hash. Import receives both complete files and
+the expected current manifest hash. It rejects pending restoration sources and
+changes to immutable snapshot fields, copies the existing data archive into a
+private stage, verifies both complete archives and logical payload identity, and
+publishes the complete snapshot with a directory exchange. It never modifies
+live application state. Interrupted private stages are collected by the existing
+exclusive-operation cleanup. Permissions and device preference visibility still
+require device verification.
+
+## Atomic backup and reset
+
+`backupAndResetBundle:expectedIDFV:reset:error:` keeps the exclusive snapshot lock
+through stop/identity validation, verified backup publication, full native reset,
+and verification of a new locked fingerprint. The helper action `backupAndReset`
+requires only `idfv`; clients cannot select steps or skip backup. It uses the same
+cleanup step/finalize/recheck functions as Manager and leaves the app stopped.
+
+Before the first cleanup mutation, the verified source is pinned in the existing
+pending record with `resetRecovery` and phase `resetting`. Failure or interruption
+retains that source: another backup/reset cannot overwrite good data with partial
+state. Explicit restore without save-current can replay a pending reset source
+into its same live IDFV, including retry after an interrupted fingerprint write.
+The reset-recovery marker survives identity-pending until identity commitment;
+ordinary same-IDFV restoration remains prohibited. Catalog exposes `resetPending`
+for the Manager's recovery action. Successful verified reset removes pending.
+
+Known reset errors retain `backupIDFV` and `step`; the shared SDK forwards these,
+and HTTP maps the saved identity to `backup_id`. Timeouts remain unknown and are
+never replayed automatically. Device cleanup permissions and UI behavior still
+require separate live validation; host fixture results do not establish those.
+
+## Explicit discard and reset
+
+`discardAndResetBundle:expectedIDFV:reset:error:` is a separate opt-in operation
+for discarding the live environment. It shares stop/identity checks, the exclusive
+App directory lock, native cleanup callback and final changed/locked fingerprint
+verification with backup/reset. It never captures or publishes a snapshot; existing
+snapshots stay unchanged. If the current IDFV already has a snapshot, discard is
+rejected with `backup_required`; use `backupAndReset` to save current changes first.
+Pending restoration and foreign snapshot ownership remain
+blocking conditions. With no captured source, no backup recovery record is created.
+Failures once reset begins report `stateMayBePartial`; a lost response does not
+authorize automatic replay. Success omits `backup_id` and returns `previous_idfv`,
+`current_idfv`, `reset=true`, `verified=true`, `backup_created=false`.
+
+## Current saved fingerprint query
+
+The helper action `externalActiveFingerprint` returns only the requested Bundle
+ID's current `Fingerprint_Config` and `Fingerprint_Data`, availability, lock state
+and effective enable state. It uses a shared application session lock without
+opening the snapshot store, resolving application containers or running workers.
+It synchronizes the mobile preferences suite and reads one complete persisted
+settings domain, using the same domain's global switches. If no persisted domain
+exists, a scoped CFPreferences read supplies the selected application and enable
+switches. A persisted empty domain does not resurrect a cached deleted profile.
+No fingerprints are generated and no settings are written by this query. See the
+shared SDK contract for JSON representations and missing/invalid-data behavior.

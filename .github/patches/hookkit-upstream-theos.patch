@@ -1,0 +1,19 @@
+--- a/build.sh
++++ b/build.sh
+@@ -24,4 +24,4 @@
+ # arm64e slices with the versioned ptrauth ABI (cpusubtype 0x80000002); theos's
+ # bundled clang emits 0x00000002, which modern ld rejects as "arm64e.old".
+ # $THEOS/bin/setup-modern-toolchain.sh assembles one that can.
+-. "$THEOS/bin/lane.sh"
++. "$ROOT/build-support/shadow/hookkit-lanes.sh"
+--- a/Makefile
++++ b/Makefile
+@@ -11,7 +11,7 @@
+ # The lane matrix itself lives in $THEOS/bin/lane.sh, shared with Shadow so the
+ # two cannot drift on architectures, pinned SDK or packaging scheme.
+ ifneq ($(HOOKKIT_LANE),)
+-_HK_LANE := $(THEOS)/bin/lane.sh get $(HOOKKIT_LANE)
++_HK_LANE := bash "$(CURDIR)/build-support/shadow/hookkit-lanes.sh" get $(HOOKKIT_LANE)
+ override ARCHS := $(shell $(_HK_LANE) ARCHS)
+ override TARGET := $(shell $(_HK_LANE) TARGET)
+ override THEOS_PACKAGE_SCHEME := $(shell $(_HK_LANE) SCHEME)

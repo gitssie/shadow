@@ -47,6 +47,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
 @property(nonatomic, copy) void (^completion)(void);
 @property(nonatomic) BOOL completed;
 @property(nonatomic) BOOL requiresRecovery;
+@property(nonatomic) BOOL requiresCurrentBackup;
 @end
 @implementation SHDWRestoreViewController
 - (void)viewDidLoad {
@@ -59,13 +60,16 @@ static NSString *ProgressTitle(NSDictionary *event) {
     UILabel *save = [UILabel new]; save.text = SHDWText(@"Back up current data first"); save.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:[UIFont systemFontOfSize:15]]; save.adjustsFontForContentSizeCategory = YES; save.textColor = SHDWInk(); save.numberOfLines = 0;
     BOOL recovery = [self.snapshot[@"restorePending"] boolValue]; self.requiresRecovery = recovery;
     self.saveCurrent = [UISwitch new]; self.saveCurrent.onTintColor = SHDWAccent(); self.saveCurrent.on = !self.sameIDFV && !recovery; self.saveCurrent.accessibilityIdentifier = @"backup.restore.save-current"; [self.saveCurrent addTarget:self action:@selector(updateTitle) forControlEvents:UIControlEventValueChanged];
+    self.saveCurrent.enabled = !self.requiresCurrentBackup && !self.sameIDFV && !recovery;
     self.saveRow = [[UIStackView alloc] initWithArrangedSubviews:@[save, self.saveCurrent]]; self.saveRow.spacing = 12; self.saveRow.alignment = UIStackViewAlignmentCenter; [self.saveCurrent setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal]; [card addArrangedSubview:self.saveRow]; self.saveRow.hidden = self.sameIDFV || recovery;
-    self.hint = [UILabel new]; self.hint.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:12]]; self.hint.adjustsFontForContentSizeCategory = YES; self.hint.textColor = UIColor.secondaryLabelColor; self.hint.numberOfLines = 0; self.hint.text = SHDWText(SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV) ? @"Verify the restored data and finish the interrupted operation." : (self.sameIDFV ? @"This backup belongs to the current IDFV and cannot be restored." : (recovery ? @"Retry the interrupted restore without backing up partial data." : @"The restored fingerprint stays locked.")));
+    self.hint = [UILabel new]; self.hint.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:12]]; self.hint.adjustsFontForContentSizeCategory = YES; self.hint.textColor = UIColor.secondaryLabelColor; self.hint.numberOfLines = 0; self.hint.text = SHDWText(SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV) ? @"Verify the restored data and finish the interrupted operation." : (self.sameIDFV && ![self.snapshot[@"resetPending"] boolValue] ? @"This backup belongs to the current IDFV and cannot be restored." : (recovery ? @"Retry the interrupted restore without backing up partial data." : @"The restored fingerprint stays locked.")));
     self.action = [SHDWBackupButton new]; self.action.symbol.image = SHDWSymbol(@"square.and.arrow.down", 20); [self.action.heightAnchor constraintGreaterThanOrEqualToConstant:48].active = YES; self.action.accessibilityIdentifier = @"backup.restore.confirm"; [self.action addTarget:self action:@selector(restore) forControlEvents:UIControlEventTouchUpInside];
     self.status = [UILabel new]; self.status.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleFootnote] scaledFontForFont:[UIFont systemFontOfSize:12]]; self.status.adjustsFontForContentSizeCategory = YES; self.status.numberOfLines = 0; self.status.hidden = YES; self.status.accessibilityIdentifier = @"backup.restore.status";
     for (UIView *view in @[card, self.hint, self.action, self.status]) [self.contentStack addArrangedSubview:view]; self.action.enabled = SHDWBackupCanRestore(self.snapshot, self.sameIDFV); [self updateTitle];
+    [self refreshRecoveryState];
 }
 - (void)updateTitle {
+    if (self.requiresCurrentBackup && !self.sameIDFV && !self.requiresRecovery) self.saveCurrent.on = YES;
     BOOL finalizing = SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV);
     [self.action setTitle:SHDWText(finalizing ? @"Finish verification" : (self.saveCurrent.on ? @"Back up and restore" : @"Restore backup")) forState:UIControlStateNormal];
     self.action.symbol.image = SHDWSymbol(finalizing ? @"checkmark.shield" : @"square.and.arrow.down", 20);
@@ -78,7 +82,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     if (!self.service.running) [self dismissViewControllerAnimated:YES completion:^{ [self notifyCompletion]; }];
 }
 - (void)refreshRecoveryState {
-    self.action.enabled = NO; [self.action setWorking:YES];
+    self.action.enabled = NO; self.saveCurrent.enabled = NO; [self.action setWorking:YES];
     __weak typeof(self) weakSelf = self;
     [self.service loadCatalog:^(NSArray *catalog, NSError *error) {
         typeof(self) self = weakSelf; if (!self) return;
@@ -90,6 +94,11 @@ static NSString *ProgressTitle(NSDictionary *event) {
         self.snapshot = updated;
         NSString *current = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier][@"VendorIdentifier"]);
         self.sameIDFV = [current isEqual:CanonicalIDFV(updated[@"idfv"])];
+        self.requiresRecovery = self.requiresRecovery || [updated[@"restorePending"] boolValue];
+        self.saveRow.hidden = self.sameIDFV || self.requiresRecovery;
+        if (self.requiresRecovery) self.saveCurrent.on = NO;
+        self.requiresCurrentBackup = !SHDWBackupCanDiscard(catalog, current);
+        self.saveCurrent.enabled = !self.completed && !self.sameIDFV && !self.requiresRecovery && !self.requiresCurrentBackup;
         self.action.enabled = SHDWBackupCanRestore(updated, self.sameIDFV);
         if (SHDWBackupFinalizationOnly(updated, self.sameIDFV)) self.hint.text = SHDWText(@"Verify the restored data and finish the interrupted operation.");
         [self updateTitle]; [self requestSheetLayout];
@@ -99,7 +108,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     if (!SHDWBackupCanRestore(self.snapshot, self.sameIDFV) || self.completed || self.service.running || [SHDWOperationCoordinator isRunning]) return;
     self.action.enabled = NO; self.saveCurrent.enabled = NO; self.closeButton.enabled = NO; self.modalInPresentation = YES;
     BOOL finalizing = SHDWBackupFinalizationOnly(self.snapshot, self.sameIDFV);
-    BOOL backupCurrent = !self.sameIDFV && !self.requiresRecovery && self.saveCurrent.on;
+    BOOL backupCurrent = !self.sameIDFV && !self.requiresRecovery && (self.requiresCurrentBackup || self.saveCurrent.on);
     [self.action setWorking:YES]; [self.action setTitle:SHDWText(finalizing ? @"Verifying backup" : (backupCurrent ? @"Backing up data" : @"Restoring data")) forState:UIControlStateNormal]; self.status.textColor = UIColor.secondaryLabelColor;
     __weak typeof(self) weakSelf = self;
     [self.service performAction:@"restore" request:@{@"idfv": self.snapshot[@"idfv"], @"saveCurrent": @(backupCurrent)} progress:^(NSDictionary *event) {
@@ -117,11 +126,11 @@ static NSString *ProgressTitle(NSDictionary *event) {
         self.requiresRecovery = self.requiresRecovery || [error.userInfo[@"stateMayBePartial"] boolValue];
         if (self.requiresRecovery) { self.saveCurrent.on = NO; self.saveRow.hidden = YES; self.hint.text = SHDWText(@"Retry the interrupted restore without backing up partial data."); }
         self.action.enabled = error && SHDWBackupCanRestore(self.snapshot, self.sameIDFV);
-        self.saveCurrent.enabled = !self.completed && !self.sameIDFV && !self.requiresRecovery;
+        self.saveCurrent.enabled = !self.completed && !self.sameIDFV && !self.requiresRecovery && !self.requiresCurrentBackup;
         self.status.textColor = error ? UIColor.systemRedColor : UIColor.secondaryLabelColor; self.status.hidden = NO;
         self.status.text = error ? error.localizedDescription : SHDWText(@"Restore completed");
         [self requestSheetLayout]; UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, self.status.text);
-        if (error) { [self updateTitle]; if (self.requiresRecovery) [self refreshRecoveryState]; }
+        if (error) { [self updateTitle]; [self refreshRecoveryState]; }
         else { [self.action setTitle:SHDWText(@"Restore completed") forState:UIControlStateNormal]; [self notifyCompletion]; }
     }];
 }
@@ -156,6 +165,9 @@ static NSString *ProgressTitle(NSDictionary *event) {
 @property(nonatomic, strong) UILabel *status;
 @property(nonatomic, strong) UITableView *table;
 @property(nonatomic, strong) NSLayoutConstraint *tableHeight;
+@property(nonatomic, strong) UIView *searchOverlay;
+@property(nonatomic, strong) UISearchTextField *searchField;
+@property(nonatomic, copy) NSArray<NSDictionary *> *visibleCatalog;
 @property(nonatomic, strong) UILabel *empty;
 @property(nonatomic, strong) UIImageView *emptyIcon;
 @property(nonatomic, strong) UIActivityIndicatorView *listSpinner;
@@ -172,14 +184,19 @@ static NSString *ProgressTitle(NSDictionary *event) {
 @property(nonatomic) NSUInteger loadGeneration;
 @end
 @implementation SHDWBackupViewController
+@synthesize catalog = _catalog;
+- (void)setCatalog:(NSArray<NSDictionary *> *)catalog {
+    _catalog = SHDWBackupActiveFirst(catalog ?: @[], self.liveIDFV);
+    self.visibleCatalog = SHDWBackupMatching(_catalog, self.searchField.text);
+}
 - (void)viewDidLoad {
     [super viewDidLoad]; self.title = SHDWText(@"Data backups"); self.view.backgroundColor = SHDWBackground(); self.view.accessibilityIdentifier = @"backup.screen";
     self.selector = [SHDWAppSelectorView new]; self.selector.accessibilityIdentifier = @"backup.application-selector"; __weak typeof(self) weakSelf = self;
-    self.selector.heightChanged = ^(CGFloat height, BOOL animated) { typeof(self) self = weakSelf; if (!self) return; self.selectorHeight.constant = height; [self.view bringSubviewToFront:self.selector]; if (animated) [UIView animateWithDuration:0.22 animations:^{ [self.view layoutIfNeeded]; }]; };
-    self.selector.selectionChanged = ^(SHDWInstalledApplication *application) { typeof(self) self = weakSelf; if (!self || self.working || [SHDWOperationCoordinator isRunning]) return; self.selected = application; [NSUserDefaults.standardUserDefaults setObject:application.bundleIdentifier forKey:SelectedApplicationKey]; [self showSelection]; };
+    self.selector.heightChanged = ^(CGFloat height, BOOL animated) { typeof(self) self = weakSelf; if (!self) return; self.selectorHeight.constant = height; [self.view bringSubviewToFront:self.selector]; if (self.searchOverlay && !self.searchOverlay.hidden) [self.view bringSubviewToFront:self.searchOverlay]; if (animated) [UIView animateWithDuration:0.22 animations:^{ [self.view layoutIfNeeded]; }]; };
+    self.selector.selectionChanged = ^(SHDWInstalledApplication *application) { typeof(self) self = weakSelf; if (!self || self.working || [SHDWOperationCoordinator isRunning]) return; [self closeSearch]; self.selected = application; [NSUserDefaults.standardUserDefaults setObject:application.bundleIdentifier forKey:SelectedApplicationKey]; [self showSelection]; };
     self.action = [SHDWBackupButton new]; self.action.accessibilityIdentifier = @"backup.current"; [self.action addTarget:self action:@selector(backupCurrent) forControlEvents:UIControlEventTouchUpInside];
     self.status = [UILabel new]; self.status.font = [UIFont systemFontOfSize:12]; self.status.numberOfLines = 0; self.status.textColor = UIColor.secondaryLabelColor; self.status.accessibilityIdentifier = @"backup.status";
-    self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain]; self.table.backgroundColor = UIColor.clearColor; self.table.layer.cornerRadius = 18; self.table.clipsToBounds = YES; self.table.rowHeight = 60; self.table.dataSource = self; self.table.delegate = self; self.table.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16); self.table.separatorColor = [SHDWInk() colorWithAlphaComponent:0.06]; self.table.tableFooterView = [UIView new]; self.table.accessibilityIdentifier = @"backup.snapshots";
+    self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain]; self.table.backgroundColor = UIColor.clearColor; self.table.layer.cornerRadius = 18; self.table.clipsToBounds = YES; self.table.rowHeight = 60; self.table.dataSource = self; self.table.delegate = self; self.table.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16); self.table.separatorColor = [SHDWInk() colorWithAlphaComponent:0.06]; self.table.tableFooterView = [UIView new]; self.table.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag; self.table.accessibilityIdentifier = @"backup.snapshots";
     self.empty = [UILabel new]; self.empty.textAlignment = NSTextAlignmentCenter; self.empty.font = [UIFont systemFontOfSize:14]; self.empty.textColor = UIColor.secondaryLabelColor; self.empty.numberOfLines = 0;
     self.emptyIcon = [[UIImageView alloc] initWithImage:SHDWSymbol(@"tray", 28)]; self.emptyIcon.tintColor = [SHDWAccent() colorWithAlphaComponent:0.45]; self.emptyIcon.contentMode = UIViewContentModeScaleAspectFit; self.emptyIcon.isAccessibilityElement = YES; self.emptyIcon.accessibilityLabel = SHDWText(@"No backups yet"); self.emptyIcon.accessibilityIdentifier = @"backup.empty";
     self.listSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium]; self.listSpinner.color = SHDWAccent(); self.listSpinner.hidesWhenStopped = YES; self.listSpinner.isAccessibilityElement = YES; self.listSpinner.accessibilityLabel = SHDWText(@"Loading backups"); self.listSpinner.accessibilityIdentifier = @"backup.loading";
@@ -190,8 +207,26 @@ static NSString *ProgressTitle(NSDictionary *event) {
     self.selectorHeight = [self.selector.heightAnchor constraintEqualToConstant:70]; self.selectorHeight.active = YES; self.tableHeight = [self.table.heightAnchor constraintEqualToConstant:140]; self.tableHeight.priority = UILayoutPriorityDefaultHigh; self.tableHeight.active = YES;
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[[self.selector.topAnchor constraintEqualToAnchor:safe.topAnchor constant:12], [self.selector.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:16], [self.selector.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16], [self.action.topAnchor constraintEqualToAnchor:self.selector.topAnchor constant:86], [self.action.leadingAnchor constraintEqualToAnchor:self.selector.leadingAnchor], [self.action.trailingAnchor constraintEqualToAnchor:self.selector.trailingAnchor], [self.action.heightAnchor constraintEqualToConstant:48], [self.status.topAnchor constraintEqualToAnchor:self.action.bottomAnchor constant:8], [self.status.leadingAnchor constraintEqualToAnchor:self.action.leadingAnchor constant:4], [self.status.trailingAnchor constraintEqualToAnchor:self.action.trailingAnchor constant:-4], [self.table.topAnchor constraintEqualToAnchor:self.status.bottomAnchor constant:10], [self.table.leadingAnchor constraintEqualToAnchor:self.selector.leadingAnchor], [self.table.trailingAnchor constraintEqualToAnchor:self.selector.trailingAnchor], [self.table.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor constant:-16]]];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:SHDWSymbol(@"magnifyingglass", 16) style:UIBarButtonItemStylePlain target:self action:@selector(toggleSearch)];
+    self.navigationItem.rightBarButtonItem.tintColor = SHDWAccent(); self.navigationItem.rightBarButtonItem.accessibilityLabel = SHDWText(@"Search backups"); self.navigationItem.rightBarButtonItem.accessibilityIdentifier = @"backup.search.toggle";
+    self.searchOverlay = [UIView new]; self.searchOverlay.backgroundColor = UIColor.whiteColor; self.searchOverlay.layer.cornerRadius = 16; self.searchOverlay.layer.shadowColor = UIColor.blackColor.CGColor; self.searchOverlay.layer.shadowOpacity = 0.12; self.searchOverlay.layer.shadowRadius = 12; self.searchOverlay.layer.shadowOffset = CGSizeMake(0, 4); self.searchOverlay.hidden = YES; self.searchOverlay.accessibilityIdentifier = @"backup.search.overlay"; self.searchOverlay.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:self.searchOverlay];
+    self.searchField = [UISearchTextField new]; self.searchField.placeholder = SHDWText(@"Search titles and notes"); self.searchField.accessibilityLabel = self.searchField.placeholder; self.searchField.accessibilityIdentifier = @"backup.search.field"; self.searchField.backgroundColor = UIColor.clearColor; self.searchField.textColor = SHDWInk(); self.searchField.tintColor = SHDWAccent(); self.searchField.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:[UIFont systemFontOfSize:15]]; self.searchField.adjustsFontForContentSizeCategory = YES; self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing; self.searchField.returnKeyType = UIReturnKeyDone; self.searchField.autocorrectionType = UITextAutocorrectionTypeNo; self.searchField.autocapitalizationType = UITextAutocapitalizationTypeNone; [self.searchField addTarget:self action:@selector(searchChanged) forControlEvents:UIControlEventEditingChanged]; [self.searchField addTarget:self action:@selector(finishSearchEditing) forControlEvents:UIControlEventEditingDidEndOnExit];
+    self.searchField.translatesAutoresizingMaskIntoConstraints = NO; [self.searchOverlay addSubview:self.searchField];
+    [NSLayoutConstraint activateConstraints:@[[self.searchOverlay.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8], [self.searchOverlay.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:16], [self.searchOverlay.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16], [self.searchField.topAnchor constraintEqualToAnchor:self.searchOverlay.topAnchor constant:6], [self.searchField.bottomAnchor constraintEqualToAnchor:self.searchOverlay.bottomAnchor constant:-6], [self.searchField.leadingAnchor constraintEqualToAnchor:self.searchOverlay.leadingAnchor constant:10], [self.searchField.trailingAnchor constraintEqualToAnchor:self.searchOverlay.trailingAnchor constant:-10], [self.searchField.heightAnchor constraintGreaterThanOrEqualToConstant:40], [self.table.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.keyboardLayoutGuide.topAnchor constant:-12]]];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(activityChanged) name:SHDWOperationDidChangeNotification object:nil]; [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reloadApplications) name:UIApplicationWillEnterForegroundNotification object:nil];
     UITapGestureRecognizer *outside = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(collapseSelector)]; outside.cancelsTouchesInView = NO; outside.delegate = self; [self.view addGestureRecognizer:outside];
+}
+- (void)toggleSearch {
+    if (!self.searchOverlay.hidden) { [self closeSearch]; return; }
+    [self collapseSelector]; self.searchOverlay.hidden = NO; [self.view bringSubviewToFront:self.searchOverlay]; [self.searchField becomeFirstResponder];
+}
+- (void)closeSearch {
+    [self.searchField resignFirstResponder]; self.searchOverlay.hidden = YES; self.searchField.text = @""; [self searchChanged];
+}
+- (void)finishSearchEditing { [self.searchField resignFirstResponder]; }
+- (void)searchChanged {
+    self.visibleCatalog = SHDWBackupMatching(self.catalog, self.searchField.text); [self.table reloadData]; [self updateControls];
+    if (self.visibleCatalog.count) [self.table setContentOffset:CGPointZero animated:NO];
 }
 - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.navigationController setNavigationBarHidden:NO animated:animated]; if (!self.working) [self reloadApplications]; }
@@ -220,30 +255,37 @@ static NSString *ProgressTitle(NSDictionary *event) {
 }
 - (NSDictionary *)currentSnapshot { for (NSDictionary *item in self.catalog) if ([CanonicalIDFV(item[@"idfv"]) isEqual:self.liveIDFV]) return item; return nil; }
 - (void)updateControls {
-    self.tableHeight.constant = self.catalog.count ? self.catalog.count * 60 : 140;
-    BOOL busy = self.working || [SHDWOperationCoordinator isRunning]; BOOL pending = [self.catalog.firstObject[@"restorePending"] boolValue]; self.selector.enabled = !busy && !self.loading; self.table.userInteractionEnabled = !busy; self.action.enabled = self.selected && self.liveIDFV && !self.loading && !self.catalogFailed && !busy && !pending; self.action.alpha = self.action.enabled || self.working || self.loading ? 1 : 0.5; [self.action setWorking:self.working || self.loading];
+    self.tableHeight.constant = self.visibleCatalog.count ? self.visibleCatalog.count * 60 : 140;
+    BOOL busy = self.working || [SHDWOperationCoordinator isRunning]; BOOL pending = [self.catalog.firstObject[@"restorePending"] boolValue]; self.selector.enabled = !busy && !self.loading; self.table.userInteractionEnabled = !busy; self.action.enabled = self.selected && self.liveIDFV && !self.loading && !self.catalogFailed && !busy && !pending && SHDWBackupPhoneOwned([self currentSnapshot]); self.action.alpha = self.action.enabled || self.working || self.loading ? 1 : 0.5; [self.action setWorking:self.working || self.loading];
     if (!self.working) [self.action setTitle:SHDWText([self currentSnapshot] ? @"Update current backup" : @"Back up current data") forState:UIControlStateNormal];
-    self.listBackground.hidden = self.catalog.count > 0;
+    self.listBackground.hidden = self.visibleCatalog.count > 0;
     if (self.loading && !self.listBackground.hidden) [self.listSpinner startAnimating]; else [self.listSpinner stopAnimating];
     NSString *guidance = !self.selected ? SHDWText(@"Choose an application on Home to create a backup.") : (!self.liveIDFV ? SHDWText(@"Refresh the fingerprint on Home before creating a backup.") : nil);
+    BOOL noMatches = self.catalog.count && !self.visibleCatalog.count;
+    if (noMatches) guidance = SHDWText(@"No matching backups");
     self.empty.text = guidance; self.empty.hidden = self.loading || !guidance.length;
     self.emptyIcon.hidden = self.loading || guidance.length || self.catalogFailed;
 }
 - (void)activityChanged { if (self.reloadPending && !self.loading && !self.working && ![SHDWOperationCoordinator isRunning]) [self reloadApplications]; else [self updateControls]; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView; (void)section; return self.catalog.count; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView; (void)section; return self.visibleCatalog.count; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    (void)tableView; NSDictionary *item = self.catalog[indexPath.row]; UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil]; cell.selectionStyle = UITableViewCellSelectionStyleNone; cell.backgroundColor = UIColor.whiteColor;
+    (void)tableView; NSDictionary *item = self.visibleCatalog[indexPath.row]; UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil]; cell.selectionStyle = UITableViewCellSelectionStyleNone; cell.backgroundColor = UIColor.whiteColor;
+    BOOL phoneOwned = SHDWBackupPhoneOwned(item);
+    UIImageView *owner = [[UIImageView alloc] initWithImage:SHDWSymbol(phoneOwned ? @"iphone" : @"desktopcomputer", 12)];
+    owner.contentMode = UIViewContentModeScaleAspectFit; owner.tintColor = phoneOwned ? SHDWAccent() : UIColor.secondaryLabelColor;
+    owner.isAccessibilityElement = YES; owner.accessibilityLabel = SHDWText(phoneOwned ? @"Controlled by phone" : @"Controlled by RV");
+    owner.accessibilityIdentifier = [@"backup.owner." stringByAppendingString:item[@"idfv"]];
     UILabel *title = [UILabel new]; title.text = item[@"title"]; title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]; title.textColor = SHDWInk(); [title setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
     UILabel *current = [UILabel new]; current.text = [NSString stringWithFormat:@" %@ ", SHDWText(@"Current")]; current.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; current.textColor = SHDWAccent(); current.backgroundColor = [SHDWAccent() colorWithAlphaComponent:0.09]; current.layer.cornerRadius = 8; current.clipsToBounds = YES; current.hidden = ![CanonicalIDFV(item[@"idfv"]) isEqual:self.liveIDFV];
     UIImageView *fingerprint = [[UIImageView alloc] initWithImage:SHDWSymbol(@"touchid", 12)]; fingerprint.tintColor = [SHDWAccent() colorWithAlphaComponent:0.65]; fingerprint.contentMode = UIViewContentModeScaleAspectFit;
     UILabel *digest = [UILabel new]; digest.text = Abbreviate(item[@"digest"]); digest.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular]; digest.textColor = UIColor.secondaryLabelColor;
     UILabel *detail = [UILabel new]; detail.font = [UIFont systemFontOfSize:10]; detail.textColor = UIColor.secondaryLabelColor; detail.textAlignment = NSTextAlignmentRight; detail.text = [NSString stringWithFormat:@"%@ · %@", BackupDate(item[@"date"]), [NSByteCountFormatter stringFromByteCount:[item[@"size"] longLongValue] countStyle:NSByteCountFormatterCountStyleFile]];
     if ([item[@"unavailable"] boolValue]) { detail.text = SHDWText(@"Backup unavailable"); detail.textColor = UIColor.systemRedColor; }
-    UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem]; [more setImage:SHDWSymbol(@"ellipsis", 17) forState:UIControlStateNormal]; more.tintColor = SHDWInk(); more.tag = indexPath.row; more.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", item[@"title"], SHDWText(@"Backup actions")]; more.accessibilityIdentifier = [@"backup.actions." stringByAppendingString:item[@"idfv"]]; [more addTarget:self action:@selector(showActions:) forControlEvents:UIControlEventTouchUpInside];
-    for (UIView *view in @[title, current, fingerprint, digest, detail, more]) { view.translatesAutoresizingMaskIntoConstraints = NO; [cell.contentView addSubview:view]; }
-    [NSLayoutConstraint activateConstraints:@[[title.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16], [title.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:10], [title.trailingAnchor constraintLessThanOrEqualToAnchor:more.leadingAnchor constant:-8], [current.leadingAnchor constraintEqualToAnchor:title.trailingAnchor constant:8], [current.centerYAnchor constraintEqualToAnchor:title.centerYAnchor], [current.trailingAnchor constraintLessThanOrEqualToAnchor:more.leadingAnchor constant:-4], [current.heightAnchor constraintEqualToConstant:17], [fingerprint.leadingAnchor constraintEqualToAnchor:title.leadingAnchor], [fingerprint.centerYAnchor constraintEqualToAnchor:digest.centerYAnchor], [fingerprint.widthAnchor constraintEqualToConstant:12], [fingerprint.heightAnchor constraintEqualToConstant:12], [digest.leadingAnchor constraintEqualToAnchor:fingerprint.trailingAnchor constant:6], [digest.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:5], [detail.leadingAnchor constraintGreaterThanOrEqualToAnchor:digest.trailingAnchor constant:8], [detail.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16], [detail.centerYAnchor constraintEqualToAnchor:digest.centerYAnchor], [more.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-6], [more.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor], [more.widthAnchor constraintEqualToConstant:44], [more.heightAnchor constraintEqualToConstant:32]]]; cell.accessibilityIdentifier = [@"backup.snapshot." stringByAppendingString:item[@"idfv"]]; return cell;
+    UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem]; [more setImage:SHDWSymbol(@"ellipsis", 17) forState:UIControlStateNormal]; more.tintColor = SHDWInk(); more.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", item[@"title"], SHDWText(@"Backup actions")]; more.accessibilityIdentifier = [@"backup.actions." stringByAppendingString:item[@"idfv"]]; [more addTarget:self action:@selector(showActions:) forControlEvents:UIControlEventTouchUpInside];
+    for (UIView *view in @[owner, title, current, fingerprint, digest, detail, more]) { view.translatesAutoresizingMaskIntoConstraints = NO; [cell.contentView addSubview:view]; }
+    [NSLayoutConstraint activateConstraints:@[[owner.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16], [owner.centerYAnchor constraintEqualToAnchor:digest.centerYAnchor], [owner.widthAnchor constraintEqualToConstant:12], [owner.heightAnchor constraintEqualToConstant:12], [title.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16], [title.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:10], [title.trailingAnchor constraintLessThanOrEqualToAnchor:more.leadingAnchor constant:-8], [current.leadingAnchor constraintEqualToAnchor:title.trailingAnchor constant:8], [current.centerYAnchor constraintEqualToAnchor:title.centerYAnchor], [current.trailingAnchor constraintLessThanOrEqualToAnchor:more.leadingAnchor constant:-4], [current.heightAnchor constraintEqualToConstant:17], [fingerprint.leadingAnchor constraintEqualToAnchor:owner.trailingAnchor constant:6], [fingerprint.centerYAnchor constraintEqualToAnchor:digest.centerYAnchor], [fingerprint.widthAnchor constraintEqualToConstant:12], [fingerprint.heightAnchor constraintEqualToConstant:12], [digest.leadingAnchor constraintEqualToAnchor:fingerprint.trailingAnchor constant:6], [digest.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:5], [detail.leadingAnchor constraintGreaterThanOrEqualToAnchor:digest.trailingAnchor constant:8], [detail.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16], [detail.centerYAnchor constraintEqualToAnchor:digest.centerYAnchor], [more.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-6], [more.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor], [more.widthAnchor constraintEqualToConstant:44], [more.heightAnchor constraintEqualToConstant:32]]]; cell.accessibilityIdentifier = [@"backup.snapshot." stringByAppendingString:item[@"idfv"]]; return cell;
 }
-- (void)backupCurrent { if (!self.action.enabled) return; [self collapseSelector]; if ([self currentSnapshot]) [self perform:@"backup" request:@{}]; else [self editMetadata:nil]; }
+- (void)backupCurrent { if (!self.action.enabled) return; [self finishSearchEditing]; [self collapseSelector]; if ([self currentSnapshot]) [self perform:@"backup" request:@{}]; else [self editMetadata:nil]; }
 - (void)editMetadata:(NSDictionary *)snapshot {
     if (self.working || [SHDWOperationCoordinator isRunning]) return;
     SHDWBackupMetadataViewController *editor = [[SHDWBackupMetadataViewController alloc] initWithApplication:self.selected snapshot:snapshot];
@@ -252,8 +294,11 @@ static NSString *ProgressTitle(NSDictionary *event) {
     [self presentViewController:editor animated:YES completion:nil];
 }
 - (void)showActions:(UIButton *)sender {
-    if (self.working || [SHDWOperationCoordinator isRunning] || (NSUInteger)sender.tag >= self.catalog.count) return;
-    [self collapseSelector]; NSDictionary *snapshot = self.catalog[sender.tag];
+    if (self.working || [SHDWOperationCoordinator isRunning]) return;
+    NSDictionary *snapshot = nil;
+    for (NSDictionary *item in self.visibleCatalog) if ([sender.accessibilityIdentifier isEqual:[@"backup.actions." stringByAppendingString:item[@"idfv"]]]) { snapshot = item; break; }
+    if (!snapshot) return;
+    [self finishSearchEditing]; [self collapseSelector];
     SHDWBackupActionsViewController *menu = [[SHDWBackupActionsViewController alloc] initWithApplication:self.selected snapshot:snapshot currentIDFV:self.liveIDFV]; __weak typeof(self) weakSelf = self;
     menu.selection = ^(NSString *action) {
         if ([action isEqual:@"restore"]) [weakSelf showRestore:snapshot];
@@ -271,8 +316,8 @@ static NSString *ProgressTitle(NSDictionary *event) {
 - (void)showRestore:(NSDictionary *)snapshot {
     NSString *currentIDFV = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]);
     BOOL sameIDFV = [currentIDFV isEqual:CanonicalIDFV(snapshot[@"idfv"])];
-    if (!SHDWBackupCanRestore(snapshot, sameIDFV)) { self.status.text = SHDWText(@"This backup belongs to the current IDFV and cannot be restored."); self.status.textColor = UIColor.secondaryLabelColor; return; }
-    SHDWRestoreViewController *controller = [SHDWRestoreViewController new]; controller.application = self.selected; controller.snapshot = snapshot; controller.sameIDFV = sameIDFV; controller.service = self.service; __weak typeof(self) weakSelf = self; controller.completion = ^{ [weakSelf reloadApplications]; }; [self presentViewController:controller animated:YES completion:nil]; }
+    if (!SHDWBackupCanRestore(snapshot, sameIDFV)) { self.status.text = SHDWText(!SHDWBackupPhoneOwned(snapshot) ? @"Controlled by RV" : @"This backup belongs to the current IDFV and cannot be restored."); self.status.textColor = UIColor.secondaryLabelColor; return; }
+    SHDWRestoreViewController *controller = [SHDWRestoreViewController new]; controller.application = self.selected; controller.snapshot = snapshot; controller.sameIDFV = sameIDFV; controller.requiresCurrentBackup = !SHDWBackupCanDiscard(self.catalog, currentIDFV); controller.service = self.service; __weak typeof(self) weakSelf = self; controller.completion = ^{ [weakSelf reloadApplications]; }; [self presentViewController:controller animated:YES completion:nil]; }
 - (void)perform:(NSString *)action request:(NSDictionary *)request {
     if (self.working || [SHDWOperationCoordinator isRunning] || !self.service) return;
     self.working = YES; self.status.textColor = UIColor.secondaryLabelColor; self.status.text = SHDWText([action isEqual:@"recheck"] ? @"Verifying backup" : ([action isEqual:@"edit"] ? @"Saving changes" : ([action isEqual:@"delete"] ? @"Deleting backup" : @"Backing up data"))); [self.action setTitle:self.status.text forState:UIControlStateNormal]; [self.action setWorking:YES]; [self collapseSelector]; [self updateControls];

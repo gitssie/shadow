@@ -251,6 +251,12 @@ int main(int argc, const char *argv[]) {
         Require([NSFileManager.defaultManager fileExistsAtPath:outside], @"protected sibling deleted");
         Require(!BundleIdentifier(@"..") && !BundleIdentifier(@".") && !BundleIdentifier(@"example..app") && !BundleIdentifier(@"example.app.") && BundleIdentifier(@"local.sdkprobe.app"), @"bundle identifier validation");
         Require([ValidateBundleIdentity(@{@"CFBundleIdentifier":@"example.app.extension"}, @{@"application-identifier":@"TEAM.example.app.extension"}, @"example.app", @"TEAM") isEqual:@"TEAM"], @"valid extension identity");
+        Require([ValidateBundleIdentity(@{@"CFBundleIdentifier":@"example.app"}, @{@"application-identifier":@"LEGACY.example.app",@"com.apple.developer.team-identifier":@"TEAM"}, @"example.app", nil) isEqual:@"TEAM"], @"legacy App ID prefix was mistaken for signing team");
+        Require([ValidateBundleIdentity(@{@"CFBundleIdentifier":@"example.app.extension"}, @{@"application-identifier":@"TEAM.example.app.extension",@"com.apple.developer.team-identifier":@"TEAM"}, @"example.app", @"TEAM") isEqual:@"TEAM"], @"same-team extension with different App ID prefix rejected");
+        for (id signingTeam in @[@"OTHER",@"bad.team",@42,@""]) {
+            BOOL rejected=NO;@try { ValidateBundleIdentity(@{@"CFBundleIdentifier":@"example.app.extension"},@{@"application-identifier":@"TEAM.example.app.extension",@"com.apple.developer.team-identifier":signingTeam},@"example.app",@"TEAM"); }@catch(NSException *exception){(void)exception;rejected=YES;}
+            Require(rejected,@"foreign or malformed explicit signing team accepted");
+        }
         for (NSArray *pair in @[
             @[@"victim.app", @"TEAM.victim.app"],
             @[@"example.app.extension", @"OTHER.example.app.extension"],
@@ -339,6 +345,11 @@ int main(int argc, const char *argv[]) {
         @try { ExactEntitlements(baseEntitlements, @[@"*"]); } @catch (NSException *exception) { (void)exception; wildcardRejected = YES; }
         Require(wildcardRejected, @"worker signing accepted wildcard scope");
         Require([ValidatedKeychainScope(@{@"team":@"TEAM", @"keychainGroups":@[@"TEAM.example.app"]}) isEqual:@[@"TEAM.example.app"]], @"same-team keychain scope rejected");
+        NSArray *transferredGroups=@[@"LEGACY.example.shared",@"LEGACY.example.app",@"TEAM.example.app.extension",@"group.example.app"];
+        Require([ValidatedKeychainScope(@{@"team":@"TEAM",@"keychainPrefixes":@[@"LEGACY",@"TEAM"],@"appGroups":@[@"group.example.app"],@"keychainGroups":transferredGroups})isEqual:transferredGroups],@"exact signed legacy/current keychain prefixes rejected");
+        for(NSArray *prefixes in @[@[@"bad.prefix"],@[@"*"],@[]]) {
+            BOOL rejected=NO;@try{ValidatedKeychainScope(@{@"team":@"TEAM",@"keychainPrefixes":prefixes,@"keychainGroups":@[@"TEAM.example.app"]});}@catch(NSException *exception){(void)exception;rejected=YES;}Require(rejected,@"unsafe keychain prefix list accepted");
+        }
         for (NSString *group in @[@"VICTIM.example.app", @"com.apple.token", @"apple.system", @"*"]) {
             BOOL scopeRejected = NO;
             @try { ValidatedKeychainScope(@{@"team":@"TEAM", @"keychainGroups":@[group]}); } @catch (NSException *exception) { (void)exception; scopeRejected = YES; }
@@ -392,6 +403,7 @@ LOCK_HARNESS = r'''#import <Foundation/Foundation.h>
 static NSString *SessionRoot;
 static void Fail(NSString *reason) { @throw [NSException exceptionWithName:@"LockFixture" reason:reason userInfo:nil]; }
 static void Require(BOOL value, NSString *reason) { if(!value) Fail(reason); }
+static NSString *stateFailureCode;
 static NSString *Hash(NSArray *values) { return values.firstObject; }
 __LOCK_SOURCE__
 static void Blocked(BOOL exclusive) {

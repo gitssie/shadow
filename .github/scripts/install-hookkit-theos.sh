@@ -5,9 +5,12 @@
 # HookKit (HookKit repo: make install-theos) and do not need this.
 set -euo pipefail
 
-LANE=${1:?usage: install-hookkit-theos.sh <rootful-legacy|rootful-modern|rootless|roothide>}
+LANE=${1:?usage: install-hookkit-theos.sh <rootful-legacy|rootful-modern|rootless>}
 : "${THEOS:?THEOS must be set}"
 : "${HOOKKIT:?HOOKKIT pin must be set}"
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
+. "$ROOT/build-support/lanes.sh"
+shadow_lane_field "$LANE" ARCHS >/dev/null || exit 2
 
 WORK=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/hookkit-theos.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
@@ -25,6 +28,19 @@ git -C "$WORK/hookkit" checkout --quiet --detach "$HOOKKIT" 2>/dev/null || {
     git -C "$WORK/hookkit" fetch --quiet origin "$HOOKKIT"
     git -C "$WORK/hookkit" checkout --quiet --detach FETCH_HEAD
 }
+
+# Validate exact package pins before allowing a checkout to replace Theos files.
+python3 "$ROOT/scripts/check-hookkit-version.py" \
+    "$ROOT/packaging/controls/control.$LANE.in" \
+    --source-control "$WORK/hookkit/packaging/layout/DEBIAN/control"
+
+# Adapt only the pinned release's build configuration to upstream Theos.
+# A changed dependency must pass the patch check before it can replace files.
+git -C "$WORK/hookkit" apply --check "$ROOT/.github/patches/hookkit-upstream-theos.patch"
+git -C "$WORK/hookkit" apply "$ROOT/.github/patches/hookkit-upstream-theos.patch"
+mkdir -p "$WORK/hookkit/build-support/shadow"
+cp "$ROOT/build-support/lanes.sh" "$ROOT/build-support/toolchain.sh" \
+    "$ROOT/build-support/hookkit-lanes.sh" "$WORK/hookkit/build-support/shadow/"
 
 # Build and stage just this lane's framework into $THEOS at the location
 # build-support/hookkit.mk resolves. install-theos.sh owns the lane -> path layout.

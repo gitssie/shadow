@@ -33,7 +33,7 @@ static void RestoreArchiveLocale(locale_t locale, locale_t previous) {
     if (locale) { uselocale(previous); freelocale(locale); }
 }
 static void PublishError(NSError **error, NSException *exception) {
-    if (error) *error = [NSError errorWithDomain:SHDWStateArchiveErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Archive operation failed"}];
+    if (error) *error = [NSError errorWithDomain:SHDWStateArchiveErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Archive operation failed",@"errorCode":@"invalid_archive"}];
 }
 static NSString *Hex(const unsigned char *bytes, size_t count) {
     NSMutableString *value = [NSMutableString new];
@@ -191,7 +191,7 @@ static void CaptureNode(struct archive *writer, ArchiveRoot *root, int parent, N
         Check(before.st_size >= 0, @"Invalid source file size");
         NSDictionary *first = inodes[InodeKey(before)];
         if (first) {
-            entry[@"hardlink"] = first[@"path"]; entry[@"size"] = first[@"size"]; entry[@"sha256"] = first[@"sha256"];
+            entry[@"hardlink"] = first[@"path"]; entry[@"size"] = first[@"size"];
             for (NSString *key in @[@"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"]) Check([entry[key] isEqual:first[key]], @"Source hardlink metadata changed");
             Check((unsigned long long)before.st_size == [first[@"size"] unsignedLongLongValue], @"Source hardlink size changed");
             WriteHeader(writer, entry, 0); [entries addObject:entry];
@@ -202,15 +202,14 @@ static void CaptureNode(struct archive *writer, ArchiveRoot *root, int parent, N
         @try {
             Check(!fstat(fd, &after) && SameStat(before, after), @"Source file changed before capture"); WriteHeader(writer, entry, (unsigned long long)before.st_size);
             buffer = malloc(Chunk); Check(buffer != NULL, @"Cannot allocate streaming source buffer");
-            unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX context; CC_SHA256_Init(&context);
             unsigned long long total = 0; ssize_t count;
             while ((count = read(fd, buffer, Chunk)) != 0) {
                 if (count < 0 && errno == EINTR) continue; Check(count > 0, @"Cannot read source file");
-                Progress(progress, @"capture", *bytes, entries.count); WriteBytes(writer, buffer, (size_t)count); CC_SHA256_Update(&context, buffer, (CC_LONG)count); total += (unsigned long long)count; *bytes += (unsigned long long)count;
+                Progress(progress, @"capture", *bytes, entries.count); WriteBytes(writer, buffer, (size_t)count); total += (unsigned long long)count; *bytes += (unsigned long long)count;
                 Progress(progress, @"capture", *bytes, entries.count);
             }
             Check(total == (unsigned long long)before.st_size && !fstat(fd, &after) && SameStat(before, after), @"Source file changed during capture");
-            CC_SHA256_Final(digest, &context); entry[@"size"] = @(total); entry[@"sha256"] = Hex(digest, sizeof(digest)); [entries addObject:entry]; inodes[InodeKey(before)] = entry;
+            entry[@"size"] = @(total); [entries addObject:entry]; inodes[InodeKey(before)] = entry;
         } @finally { free(buffer); close(fd); }
     }
     Check(archive_write_finish_entry(writer) == ARCHIVE_OK, @"Cannot finish archive entry"); Progress(progress, @"capture", *bytes, entries.count);
@@ -227,6 +226,8 @@ static BOOL IntegralNumber(id value) {
 static NSDictionary *InfoEntries(NSDictionary *info) {
     Check([info isKindOfClass:NSDictionary.class] && [info[@"format"] isEqual:@"pax"] && [info[@"compression"] isEqual:@"zstd"] &&
         [info[@"entries"] isKindOfClass:NSArray.class] && [info[@"entries"] count] <= 1000000 && [info[@"sha256"] isKindOfClass:NSString.class] && [info[@"sha256"] length] == 64 && [info[@"archiveSize"] isKindOfClass:NSNumber.class], @"Invalid archive information");
+    Check(!info[@"fileChecksums"] || [info[@"fileChecksums"] isEqual:@"none"], @"Unknown file checksum policy");
+    BOOL legacyChecksums = !info[@"fileChecksums"];
     NSMutableDictionary *result = [NSMutableDictionary new];
     for (NSDictionary *entry in info[@"entries"]) {
         Check([entry isKindOfClass:NSDictionary.class] && SafePath(entry[@"path"]) && !result[entry[@"path"]] &&
@@ -234,12 +235,13 @@ static NSDictionary *InfoEntries(NSDictionary *info) {
         for (NSString *key in @[@"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"]) Check(IntegralNumber(entry[key]), @"Archive metadata is incomplete or nonintegral");
         Check([entry[@"mode"] unsignedLongLongValue] <= 07777 && [entry[@"mtimeNsec"] unsignedLongLongValue] < 1000000000 && [entry[@"birthtimeNsec"] unsignedLongLongValue] < 1000000000, @"Invalid archive permissions or timestamp");
         Check([entry[@"uid"] longLongValue] >= 0 && [entry[@"uid"] unsignedLongLongValue] <= UINT_MAX && [entry[@"gid"] longLongValue] >= 0 && [entry[@"gid"] unsignedLongLongValue] <= UINT_MAX, @"Invalid archived ownership");
-        if ([entry[@"type"] isEqual:@"file"]) Check(IntegralNumber(entry[@"size"]) && [entry[@"size"] longLongValue] >= 0 && [entry[@"sha256"] isKindOfClass:NSString.class] && [entry[@"sha256"] length] == 64, @"Invalid file archive information");
+        if ([entry[@"type"] isEqual:@"file"]) Check(IntegralNumber(entry[@"size"]) && [entry[@"size"] longLongValue] >= 0 && (legacyChecksums ? ([entry[@"sha256"] isKindOfClass:NSString.class] && [entry[@"sha256"] length] == 64) : !entry[@"sha256"]), @"Invalid file archive information");
         if ([entry[@"type"] isEqual:@"symlink"]) Check([entry[@"target"] isKindOfClass:NSString.class] && [entry[@"target"] length], @"Invalid archive link target");
         if (entry[@"hardlink"]) {
             NSDictionary *target = SafePath(entry[@"hardlink"]) ? result[entry[@"hardlink"]] : nil;
             Check([entry[@"type"] isEqual:@"file"] && [target[@"type"] isEqual:@"file"] && !target[@"hardlink"], @"Invalid or forward archive hardlink target");
-            for (NSString *key in @[@"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec", @"size", @"sha256"]) Check([entry[key] isEqual:target[key]], @"Archive hardlink metadata differs");
+            for (NSString *key in @[@"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec", @"size"]) Check([entry[key] isEqual:target[key]], @"Archive hardlink metadata differs");
+            if (legacyChecksums) Check([entry[@"sha256"] isEqual:target[@"sha256"]], @"Archive hardlink checksum differs");
         }
         result[entry[@"path"]] = entry;
     }
@@ -300,15 +302,15 @@ static void ReadArchive(NSString *path, NSDictionary *info, SHDWStateProgress pr
             }
             la_int64_t size = archive_entry_size(header); Check(size >= 0 && (type == AE_IFREG && !hardlink ? (unsigned long long)size == [entry[@"size"] unsignedLongLongValue] : size == 0), @"Archive entry size differs");
             if (event) event(entry, NULL, 0, NO);
-            unsigned char buffer[128 * 1024], hash[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX context; CC_SHA256_Init(&context);
+            unsigned char buffer[128 * 1024], hash[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX context; BOOL checkHash = entry[@"sha256"] != nil; if (checkHash) CC_SHA256_Init(&context);
             unsigned long long total = 0; la_ssize_t count;
             while ((count = archive_read_data(reader, buffer, sizeof(buffer))) != 0) {
                 Check(count > 0 && type == AE_IFREG, @"Archive data is truncated or malformed"); total += (unsigned long long)count; bytes += (unsigned long long)count;
-                Check(total <= (unsigned long long)size, @"Archive file exceeded its declared size"); CC_SHA256_Update(&context, buffer, (CC_LONG)count);
+                Check(total <= (unsigned long long)size, @"Archive file exceeded its declared size"); if (checkHash) CC_SHA256_Update(&context, buffer, (CC_LONG)count);
                 if (event) event(entry, buffer, (size_t)count, NO); Progress(progress, @"verify", bytes, seen.count);
             }
-            Check(total == (unsigned long long)size, @"Archive file is truncated"); CC_SHA256_Final(hash, &context);
-            if (type == AE_IFREG && !hardlink) Check([Hex(hash, sizeof(hash)) isEqual:entry[@"sha256"]], @"Archived file checksum differs");
+            Check(total == (unsigned long long)size, @"Archive file is truncated"); if (checkHash) CC_SHA256_Final(hash, &context);
+            if (checkHash && type == AE_IFREG && !hardlink) Check([Hex(hash, sizeof(hash)) isEqual:entry[@"sha256"]], @"Archived file checksum differs");
             if (event) event(entry, NULL, 0, YES);
         }
         Check(status == ARCHIVE_EOF && seen.count == expected.count, @"Archive is truncated or has missing entries");
@@ -461,18 +463,15 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
         NSMutableArray *entries = [NSMutableArray new]; NSMutableDictionary *inodes = [NSMutableDictionary new]; unsigned long long bytes = 0;
         for (ArchiveRoot *root in opened) CaptureNode(writer, root, root.fd, @".", @"", entries, inodes, progress, &bytes);
         for (NSString *name in [[payloads allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
-            NSData *data = payloads[name]; unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
-            NSMutableDictionary *entry = [@{@"path":name, @"type":@"file", @"mode":@0600, @"uid":@(getuid()), @"gid":@(getgid()), @"mtime":@0, @"mtimeNsec":@0, @"birthtime":@0, @"birthtimeNsec":@0, @"size":@(data.length), @"sha256":Hex(digest, sizeof(digest))} mutableCopy];
+            NSData *data = payloads[name];
+            NSMutableDictionary *entry = [@{@"path":name, @"type":@"file", @"mode":@0600, @"uid":@(getuid()), @"gid":@(getgid()), @"mtime":@0, @"mtimeNsec":@0, @"birthtime":@0, @"birthtimeNsec":@0, @"size":@(data.length)} mutableCopy];
             WriteHeader(writer, entry, data.length);
             for (NSUInteger offset = 0; offset < data.length;) { NSUInteger count = MIN(Chunk, data.length - offset); WriteBytes(writer, (const unsigned char *)data.bytes + offset, count); offset += count; bytes += count; Progress(progress, @"capture", bytes, entries.count); }
             Check(archive_write_finish_entry(writer) == ARCHIVE_OK, @"Cannot finish bounded archive payload"); [entries addObject:entry];
         }
         Check(archive_write_close(writer) == ARCHIVE_OK && !fsync(fd), @"Cannot flush completed archive"); archive_write_free(writer); writer = NULL; close(fd); fd = -1;
-        for (ArchiveRoot *root in opened) [root pin];
-        NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@3, @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
-        NSError *verification = nil;
-        Check([self verifyRoots:roots info:info progress:progress error:&verification], verification.localizedDescription ?: @"Capture sources changed before completion");
-        ReadArchive(path, info, progress, nil); complete = YES; return info;
+        NSMutableDictionary *info = [@{@"format":@"pax", @"compression":@"zstd", @"compressionLevel":@3, @"fileChecksums":@"none", @"entries":entries, @"sourceRoots":[roots copy]} mutableCopy]; [info addEntriesFromDictionary:HashPath(path, progress)];
+        complete = YES; return info;
     } @catch (NSException *exception) { PublishError(error, exception); return nil; }
     @finally { if (writer) archive_write_free(writer); if (fd >= 0) close(fd); if (created && !complete) unlink(path.fileSystemRepresentation); RestoreArchiveLocale(locale, previous); }
 }
@@ -573,8 +572,8 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
             Check(st.st_dev == root.device, @"Restored root crosses a filesystem boundary");
             NSString *path = relative.length ? [root.prefix stringByAppendingPathComponent:relative] : root.prefix; NSDictionary *entry = expected[path], *actual = StatEntry(path, st);
             Check(entry && ![seen containsObject:path], @"Restored root contains an extra entry"); [seen addObject:path];
-            for (NSString *key in @[@"type", @"mode", @"uid", @"gid", @"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"]) {
-                if (!relative.length && [@[@"mtime", @"mtimeNsec", @"birthtime", @"birthtimeNsec"] containsObject:key]) continue;
+            for (NSString *key in @[@"type", @"mode", @"uid", @"gid", @"birthtime", @"birthtimeNsec"]) {
+                if (!relative.length && [@[@"birthtime", @"birthtimeNsec"] containsObject:key]) continue;
                 Check([actual[key] isEqual:entry[key]], @"Restored entry metadata differs");
             }
             if (S_ISDIR(st.st_mode)) {
@@ -596,7 +595,9 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
                     struct stat openedStat, finalStat, namedStat;
                     Check(!fstat(fd, &openedStat) && SameStat(st, openedStat), @"Restored file changed before verification");
                     unsigned long long size = (unsigned long long)st.st_size; NSString *digest = verifiedHashes[inode];
-                    if (digest) {
+                    if (!entry[@"sha256"]) {
+                        Check(size == [entry[@"size"] unsignedLongLongValue], @"Restored file size differs");
+                    } else if (digest) {
                         struct stat previous; [verifiedStats[inode] getBytes:&previous length:sizeof(previous)];
                         Check(SameStat(previous, st), @"Hardlink content changed during verification");
                     } else {
@@ -604,7 +605,7 @@ static void SynchronizeDirectory(int fd, dev_t device, NSString *prefix, NSStrin
                         verifiedStats[inode] = [NSData dataWithBytes:&st length:sizeof(st)]; verifiedHashes[inode] = digest;
                     }
                     Check(!fstat(fd, &finalStat) && SameStat(st, finalStat) && !fstatat(parent, name.fileSystemRepresentation, &namedStat, AT_SYMLINK_NOFOLLOW) && SameStat(st, namedStat), @"Restored file changed during verification");
-                    Check(size == [entry[@"size"] unsignedLongLongValue] && [digest isEqual:entry[@"sha256"]], @"Restored file checksum differs");
+                    Check(size == [entry[@"size"] unsignedLongLongValue] && (!entry[@"sha256"] || [digest isEqual:entry[@"sha256"]]), @"Restored file checksum differs");
                 } @finally { close(fd); }
             }
             Progress(progress, @"verify_roots", bytes, seen.count);

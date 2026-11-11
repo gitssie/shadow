@@ -294,3 +294,16 @@
 "App group being checked" = "App group being checked";
 
 "Keychain group being checked" = "Keychain group being checked";
+
+"Controlled by phone" = "Controlled by phone";
+
+"Controlled by RV" = "Controlled by RV";
+
+"Search backups" = "Search backups";
+"Search titles and notes" = "Search titles and notes";
+"No matching backups" = "No matching backups";
+
+"Follow system" = "Follow system";
+"Advertising tracking" = "Advertising tracking";
+"Advertising fingerprint" = "Advertising fingerprint";
+"Disable tracking" = "Disable tracking";

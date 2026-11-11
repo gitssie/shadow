@@ -17,6 +17,9 @@ static NSMutableArray *syncs;
 static NSString *failSyncPath, *failCleanupPath, *cleanupLock, *inspectRoot;
 static BOOL inspectLinks, preferencesReplayed, requireReplay;
 static NSUInteger cleanupAttempts;
+static NSUInteger importSwaps;
+static BOOL importFault,rollbackSyncFault,rollbackRenameFault;
+int DurabilityRenameatx(int from,const char *source,int to,const char *destination,unsigned int flags){if(importFault){importSwaps++;if(importSwaps==2&&rollbackRenameFault){errno=EIO;return -1;}}return renameatx_np(from,source,to,destination,flags);}
 static NSArray *requiredSyncRoots;
 static NSString *requiredPreferenceFile;
 static void Ordered(NSString *root,BOOL replay);
@@ -28,6 +31,7 @@ int DurabilityFsync(int fd) {
         Check([Get(inspectRoot,@"deep/child/value") isEqual:Bytes(@"durable")],@"directory flush preceded file completion");
         if(inspectLinks) {struct stat a,b,l;Check(!lstat([inspectRoot stringByAppendingPathComponent:@"deep/child/value"].fileSystemRepresentation,&a)&&!lstat([inspectRoot stringByAppendingPathComponent:@"deep/alias"].fileSystemRepresentation,&b)&&a.st_ino==b.st_ino,@"directory flush preceded hardlink creation");Check(!lstat([inspectRoot stringByAppendingPathComponent:@"symbolic"].fileSystemRepresentation,&l)&&S_ISLNK(l.st_mode),@"directory flush preceded symlink creation");}
     }
+    if(importFault&&S_ISDIR(st.st_mode)&&(importSwaps==1||(importSwaps==2&&rollbackSyncFault))){errno=EIO;return -1;}
     if([path isEqual:failSyncPath]&&(!requireReplay||preferencesReplayed)) {errno=EIO;return -1;}
     return fsync(fd);
 }
@@ -98,7 +102,20 @@ static void RestoreDurability(NSString *base) {
     Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"post-preference directory fsync EIO was ignored");Check(preferencesReplayed&&![backend.calls containsObject:@"restore-fingerprint"],@"preference flush failure crossed identity boundary");Check([[NSDictionary dictionaryWithContentsOfFile:pending][@"phase"] isEqual:@"restoring"],@"post-preference fsync failure advanced pending identity phase");Check(Exists([extra stringByAppendingPathComponent:@"Library/Preferences/ByHost/new.plist"]),@"preference replay did not create new directory fixture");
     failSyncPath=nil;preferencesReplayed=NO;[syncs removeAllObjects];[backend.calls removeAllObjects];Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,[NSString stringWithFormat:@"retry after fsync failure: %@",error]);Ordered(data,YES);Ordered(extra,YES);BOOL flushedPreference=NO;for(NSDictionary *event in syncs)if([event[@"path"] isEqual:[extra stringByAppendingPathComponent:@"Library/Preferences/ByHost/new.plist"]]&&[event[@"replayed"] boolValue])flushedPreference=YES;Check(flushedPreference,@"replayed preference file was not synced");Check([backend.calls containsObject:@"restore-fingerprint"]&&!Exists(pending),@"retry did not commit and complete");syncs=nil;requireReplay=NO;requiredSyncRoots=nil;requiredPreferenceFile=nil;
 }
-int main(int argc,const char **argv){@autoreleasepool{Check(argc==2,@"fixture argument");NSString *base=@(argv[1]);Mk(base);ArchiveDurability(base);CollectionTests(base);RestoreDurability(base);puts("app-state durability: exclusive abandoned-stage collection/retry, deepest-first directory fsync, pre-identity EIO failures, post-preference file/directory sync and recovery passed");}return 0;}
+
+static void ImportDurability(NSString *base){
+    for(NSUInteger scenario=0;scenario<3;scenario++){
+        NSString *data=[base stringByAppendingFormat:@"/import-data-%lu",(unsigned long)scenario],*root=[base stringByAppendingFormat:@"/import-store-%lu",(unsigned long)scenario];Mk(data);Mk(root);chmod(root.fileSystemRepresentation,0700);Put(data,@"value",Bytes(@"saved"));DurableBackend *backend=Backend(data);NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];Check(store&&[store backupBundle:BID metadata:nil error:&error],@"import durability initial snapshot");
+        NSDictionary *manifest=[store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error],*state=[store exportBundle:BID idfv:A part:@"state" expectedStateSHA:manifest[@"stateSHA"] error:&error];Check(manifest&&state,@"import durability exports");
+        importSwaps=0;rollbackSyncFault=scenario==1;rollbackRenameFault=scenario==2;importFault=YES;
+        Check(![store importBundle:BID idfv:A manifest:manifest[@"data"] state:state[@"data"] expectedManifestSHA:manifest[@"manifestSHA"] error:&error],@"post-publication fsync failure reported success");importFault=NO;
+        Check(importSwaps==2,@"failed publication did not attempt rollback");Check([error.userInfo[@"outcomeUnknown"]boolValue]==(scenario!=0),@"rollback durability uncertainty misclassified");
+        NSString *app=[root stringByAppendingPathComponent:BID];NSUInteger stages=0;for(NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:app error:NULL])if([name hasPrefix:@".capture-"])stages++;
+        Check((stages>0)==(scenario!=0),@"uncertain rollback did not preserve recovery copy");Check([store recheckBundle:BID idfv:A error:&error],@"publication fault exposed mixed snapshot");
+    }
+    puts("import durability: synced rollback is known failure; failed rollback rename/sync retain recovery copy and report unknown");
+}
+int main(int argc,const char **argv){@autoreleasepool{Check(argc==2,@"fixture argument");NSString *base=@(argv[1]);Mk(base);ArchiveDurability(base);CollectionTests(base);RestoreDurability(base);ImportDurability(base);puts("app-state durability: exclusive abandoned-stage collection/retry, deepest-first directory fsync, pre-identity EIO failures, post-preference file/directory sync and recovery passed");}return 0;}
 '''
 
 
@@ -111,7 +128,7 @@ def main():
         wrappers = []
         for name in ("Archive", "State"):
             wrapper = temp / (name + "-instrumented.m")
-            wrapper.write_text('#import <Foundation/Foundation.h>\n#include <unistd.h>\nint DurabilityFsync(int);\nint DurabilityUnlinkat(int,const char *,int);\n#define fsync DurabilityFsync\n' + ('#define unlinkat DurabilityUnlinkat\n' if name == "State" else '') + '#include "' + str(ROOT / "src/AppState" / (name + ".m")) + '"\n')
+            wrapper.write_text('#import <Foundation/Foundation.h>\n#include <unistd.h>\nint DurabilityFsync(int);\nint DurabilityUnlinkat(int,const char *,int);\n#define fsync DurabilityFsync\n' + ('#include <stdio.h>\nint DurabilityRenameatx(int,const char *,int,const char *,unsigned int);\n#define renameatx_np DurabilityRenameatx\n#define unlinkat DurabilityUnlinkat\n' if name == "State" else '') + '#include "' + str(ROOT / "src/AppState" / (name + ".m")) + '"\n')
             wrappers.append(wrapper)
         binary = temp / "durability"
         command = ["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-Wno-deprecated-declarations", "-g", "-O1", "-framework", "Foundation", "-I" + str(prefix / "include"), "-I" + str(ROOT / "src/AppState"), "-L" + str(prefix / "lib"), "-Wl,-rpath," + str(prefix / "lib"), str(harness), *map(str, wrappers), "-larchive", "-lzstd", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-o", str(binary)]

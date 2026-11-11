@@ -64,7 +64,7 @@
 }
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.tableView reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 3; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return section == 0 ? 6 : 2; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return section == 0 ? 7 : 2; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil]; cell.selectionStyle = UITableViewCellSelectionStyleNone; cell.textLabel.textColor = SHDWInk(); cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; cell.detailTextLabel.font = cell.textLabel.font; cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     if (indexPath.section == 0) {
@@ -72,9 +72,9 @@
         NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
         BOOL locked = [store lockedForApplication:self.bundleIdentifier];
         NSDictionary *localization = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration];
-        NSArray *labels = @[@"iOS", SHDWText(@"Region"), SHDWText(@"Time zone"), SHDWText(@"Language"), SHDWText(@"Network"), SHDWText(@"Receipt interception")];
+        NSArray *labels = @[@"iOS", SHDWText(@"Region"), SHDWText(@"Time zone"), SHDWText(@"Language"), SHDWText(@"Network"), SHDWText(@"Receipt interception"), SHDWText(@"Advertising tracking")];
         cell.textLabel.text = labels[indexPath.row];
-        cell.accessibilityIdentifier = @[@"fingerprint.system", @"fingerprint.region", @"fingerprint.time-zone", @"fingerprint.language", @"fingerprint.network", @"fingerprint.receipts-row"][indexPath.row];
+        cell.accessibilityIdentifier = @[@"fingerprint.system", @"fingerprint.region", @"fingerprint.time-zone", @"fingerprint.language", @"fingerprint.network", @"fingerprint.receipts-row", @"fingerprint.advertising-mode"][indexPath.row];
         if (indexPath.row == 0) {
             NSDictionary *profile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
             cell.detailTextLabel.text = profile[@"Version"] ?: UIDevice.currentDevice.systemVersion;
@@ -86,11 +86,14 @@
             NSMutableArray *values = [NSMutableArray new];
             for (NSString *value in @[@"4g", @"5g"]) if ([technologies containsObject:value]) [values addObject:value.uppercaseString];
             cell.detailTextLabel.text = values.count ? [values componentsJoinedByString:@" / "] : @"—";
+        } else if (indexPath.row == 6) {
+            NSString *mode=configuration[@"Advertising"][@"Mode"] ?: @"perApp";
+            cell.detailTextLabel.text=SHDWText([mode isEqual:@"zero"] ? @"Disable tracking" : [mode isEqual:@"system"] ? @"Follow system" : @"Advertising fingerprint");
         } else {
             UISwitch *toggle = [UISwitch new]; toggle.onTintColor = SHDWAccent(); toggle.on = [configuration[@"Receipts"][@"InterceptEnabled"] boolValue]; toggle.enabled = !locked;
             toggle.accessibilityIdentifier = @"fingerprint.receipts"; [toggle addTarget:self action:@selector(receiptsChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
-        if (indexPath.row <= 4) {
+        if (indexPath.row <= 4 || indexPath.row == 6) {
             cell.accessoryType = locked ? UITableViewCellAccessoryNone : UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = locked ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
             cell.textLabel.textColor = locked ? UIColor.secondaryLabelColor : SHDWInk();
@@ -127,15 +130,19 @@
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section != 0 || indexPath.row > 4) return;
+    if (indexPath.section != 0 || indexPath.row == 5 || indexPath.row > 6) return;
     SHDWFingerprintStore *store = [SHDWFingerprintStore sharedStore];
     if ([store lockedForApplication:self.bundleIdentifier]) return;
     NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
     SHDWConfigurationSelectionController *controller = [[SHDWConfigurationSelectionController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     controller.multiple = indexPath.row == 4;
-    controller.title = SHDWText(@[@"System version", @"Region", @"Time zone", @"Language", @"Network"][indexPath.row]);
+    controller.title = SHDWText(@[@"System version", @"Region", @"Time zone", @"Language", @"Network", @"Receipt interception", @"Advertising tracking"][indexPath.row]);
     NSString *localizationKey = indexPath.row >= 1 && indexPath.row <= 3 ? @[@"Region", @"TimeZone", @"Language"][indexPath.row - 1] : nil;
-    if (controller.multiple) {
+    if (indexPath.row == 6) {
+        controller.title=SHDWText(@"Advertising tracking");
+        controller.options=@[@{@"ID":@"perApp",@"Name":SHDWText(@"Advertising fingerprint")},@{@"ID":@"zero",@"Name":SHDWText(@"Disable tracking")},@{@"ID":@"system",@"Name":SHDWText(@"Follow system")}];
+        controller.selection=[NSMutableSet setWithObject:configuration[@"Advertising"][@"Mode"] ?: @"perApp"];
+    } else if (controller.multiple) {
         controller.options = @[@{@"ID": @"4g", @"Name": @"4G"}, @{@"ID": @"5g", @"Name": @"5G"}];
         controller.selection = [NSMutableSet setWithArray:configuration[@"Network"][@"RadioTechnologies"] ?: @[]];
     } else if (localizationKey) {
@@ -172,11 +179,13 @@
         controller.options = options;
         controller.selection = [NSMutableSet setWithObject:[configuration[@"System"][@"Mode"] isEqual:@"profile"] ? configuration[@"System"][@"ProfileID"] : @"native"];
     }
-    __weak typeof(self) weakSelf = self; BOOL network = controller.multiple;
+    __weak typeof(self) weakSelf = self; BOOL network = controller.multiple; BOOL advertising=indexPath.row==6;
     controller.saveSelection = ^BOOL(NSSet<NSString *> *selection) {
         typeof(self) self = weakSelf; if (!self) return NO;
         NSMutableDictionary *latest = [[[SHDWFingerprintStore sharedStore] configurationForApplication:self.bundleIdentifier] mutableCopy];
-        if (network) {
+        if (advertising) {
+            latest[@"Advertising"]=@{@"Mode":selection.anyObject ?: @"perApp"};
+        } else if (network) {
             NSMutableArray *technologies = [NSMutableArray new];
             for (NSString *value in @[@"4g", @"5g"]) if ([selection containsObject:value]) [technologies addObject:value];
             latest[@"Network"] = @{@"RadioTechnologies": technologies};

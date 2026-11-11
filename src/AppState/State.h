@@ -14,6 +14,8 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 - (nullable NSDictionary *)resolveBundle:(NSString *)bundleID error:(NSError **)error;
 - (BOOL)stopTarget:(NSDictionary *)target error:(NSError **)error;
 - (BOOL)assertStopped:(NSDictionary *)target error:(NSError **)error;
+// Keep process/container authority valid throughout the minimum settling interval.
+- (BOOL)waitForStoppedTarget:(NSDictionary *)target duration:(NSTimeInterval)duration error:(NSError **)error;
 - (BOOL)flushPreferencesForTarget:(NSDictionary *)target error:(NSError **)error;
 - (nullable NSString *)currentVendorIdentifierForTarget:(NSDictionary *)target error:(NSError **)error;
 - (nullable NSDictionary *)capturePreferencesForTarget:(NSDictionary *)target error:(NSError **)error;
@@ -29,12 +31,28 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 
 @interface SHDWAppStateStore : NSObject
 @property(nonatomic, copy, nullable) SHDWStateProgress progressHandler;
+// Cooperative caller context, not an authentication credential. Defaults to phone.
+@property(nonatomic, copy, nullable) NSString *requester;
+@property(nonatomic, copy, nullable) NSString * _Nullable (^currentIdentityProvider)(NSString *bundleID);
+- (nullable NSDictionary *)ownershipBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
+- (nullable NSDictionary *)claimBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
+- (nullable NSDictionary *)releaseBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
 - (nullable instancetype)initWithRoot:(NSString *)root backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
 // Storage and restored container entries use this UID/GID; SUID/SGID are rejected.
 - (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error;
+- (nullable instancetype)initWithRoot:(NSString *)root ownerUID:(uid_t)uid ownerGID:(gid_t)gid backend:(id<SHDWAppStateBackend>)backend readOnly:(BOOL)readOnly error:(NSError **)error;
 // snapshots/<canonical IDFV>/manifest.plist + data.tar.zst + state.tar.zst. Metadata is title/note.
 - (nullable NSDictionary *)backupBundle:(NSString *)bundleID metadata:(nullable NSDictionary *)metadata error:(NSError **)error;
+// The caller supplies the native full-reset adapter; storage keeps one exclusive
+// lock through identity validation, verified backup publication and reset.
+- (nullable NSDictionary *)backupAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
+    reset:(NSDictionary * _Nullable (^)(NSDictionary *target, NSError **error))reset error:(NSError **)error;
+// Explicitly discards the expected live environment; creates no snapshot.
+- (nullable NSDictionary *)discardAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
+    reset:(NSDictionary * _Nullable (^)(NSDictionary *target, NSError **error))reset error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error;
+- (nullable NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(nullable NSString *)sha error:(NSError **)error;
+- (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)manifest state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error;
 - (BOOL)recheckBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
 // Restoration into the currently active IDFV is rejected.
 // Failed/partial restores stay pending; source identity restrictions still apply.

@@ -135,7 +135,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   }
   return @{@"Version":@1, @"System":system,
     @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},
-    @"Receipts":@{@"InterceptEnabled":@YES},
+    @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"perApp"},
     @"Localization":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"}};
 }
 + (NSArray<NSDictionary *> *)allSystemProfiles {
@@ -149,7 +149,15 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
     @{@"ID":@"iphone14-5_ios18.7.8_22H352", @"Name":@"iOS 18.7.8", @"Version":@"18.7.8",
     @"Build":@"22H352", @"Darwin":@"24.6.0",
     @"Kernel":@"Darwin Kernel Version 24.6.0: Wed Mar 4 22:15:14 PST 2026; root:xnu-11417.140.69.706.9~1/RELEASE_ARM64_T8110",
-    @"ProductTypes":@[@"iPhone14,5"]}];
+    @"ProductTypes":@[@"iPhone14,5"]},
+    @{@"ID":@"iphonex_ios16.7.12_20H364", @"Name":@"iOS 16.7.12", @"Version":@"16.7.12",
+    @"Build":@"20H364", @"Darwin":@"22.6.0",
+    @"Kernel":@"Darwin Kernel Version 22.6.0: Tue Jul  2 20:47:35 PDT 2024; root:xnu-8796.142.1.703.8~1/RELEASE_ARM64_T8015",
+    @"ProductTypes":@[@"iPhone10,3",@"iPhone10,6"]},
+    @{@"ID":@"iphonex_ios16.7.16_20H392", @"Name":@"iOS 16.7.16", @"Version":@"16.7.16",
+    @"Build":@"20H392", @"Darwin":@"22.6.0",
+    @"Kernel":@"Darwin Kernel Version 22.6.0: Tue Jul  2 20:47:35 PDT 2024; root:xnu-8796.142.1.703.8~1/RELEASE_ARM64_T8015",
+    @"ProductTypes":@[@"iPhone10,3",@"iPhone10,6"]}];
   });
   return profiles;
 }
@@ -213,7 +221,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
 }
 
 + (NSDictionary *)configurationByValidating:(id)value error:(NSError **)error {
-  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts",@"Localization"], @[@"UpdatedAt"]))
+  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts",@"Localization"], @[@"UpdatedAt",@"Advertising"]))
     return SHDWConfigurationInvalid(error);
   NSDictionary *localization = SHDWConfigurationLocalization(value[@"Localization"]);
   if (!localization) return SHDWConfigurationInvalid(error);
@@ -232,6 +240,9 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
              ![self.systemProfilesForCurrentDevice containsObject:[self systemProfileForConfiguration:value] ?: @{}]) {
     return SHDWConfigurationInvalid(error);
   }
+  id advertising=value[@"Advertising"];
+  if (advertising && (!SHDWConfigurationKeys(advertising,@[@"Mode"],@[]) ||
+      ![@[@"system",@"zero",@"perApp"] containsObject:advertising[@"Mode"]])) return SHDWConfigurationInvalid(error);
   NSArray *radios=network[@"RadioTechnologies"];
   if (![radios isKindOfClass:NSArray.class] || radios.count > 2)
     return SHDWConfigurationInvalid(error);

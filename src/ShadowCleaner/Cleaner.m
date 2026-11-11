@@ -39,8 +39,9 @@ static NSMutableDictionary *keychainClassCounts;
 static pid_t keychainParent;
 static NSDictionary *failureDetails;
 
+static NSString *stateFailureCode;
 static void Fail(NSString *message) {
-    @throw [NSException exceptionWithName:@"CleanupFailure" reason:message userInfo:nil];
+    @throw [NSException exceptionWithName:@"CleanupFailure" reason:message userInfo:stateFailureCode?@{@"errorCode":stateFailureCode}:nil];
 }
 static void Require(BOOL condition, NSString *message) { if (!condition) Fail(message); }
 static NSString *Canonical(NSString *path) {
@@ -238,8 +239,10 @@ static NSString *ValidateBundleIdentity(NSDictionary *info, NSDictionary *entitl
     NSString *suffix = [@"." stringByAppendingString:identifier];
     Require([applicationID isKindOfClass:NSString.class] && [applicationID hasSuffix:suffix] && applicationID.length > suffix.length, @"Application identifier does not match its signed identity");
     NSString *prefix = [applicationID substringToIndex:applicationID.length - suffix.length];
-    Require(Identifier(prefix) && ![prefix containsString:@"."] && (!team || [team isEqual:prefix]), @"Extension signing team does not match the selected application");
-    return prefix;
+    Require(Identifier(prefix) && ![prefix containsString:@"."], @"Invalid signed application identifier prefix");
+    id signingTeam = entitlements[@"com.apple.developer.team-identifier"] ?: prefix;
+    Require(Identifier(signingTeam) && ![signingTeam containsString:@"."] && (!team || [team isEqual:signingTeam]), @"Extension signing team does not match the selected application");
+    return signingTeam;
 }
 static id RegisteredProxy(NSString *identifier, BOOL extension) {
     Class cls = NSClassFromString(extension ? @"LSPlugInKitProxy" : @"LSApplicationProxy");
@@ -275,6 +278,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     NSMutableSet *groups = [NSMutableSet new], *keychain = [NSMutableSet new];
     NSMutableArray *identifiers = [NSMutableArray new], *containers = [NSMutableArray new], *shared = [NSMutableArray new], *executables = [NSMutableArray new];
     NSMutableDictionary *groupURLs = [NSMutableDictionary new];
+    NSMutableSet *keychainPrefixes = [NSMutableSet new];
     NSString *team = nil;
     for (NSString *bundle in Bundles(app)) {
         NSDictionary *info = ReadPlist([bundle stringByAppendingPathComponent:@"Info.plist"]);
@@ -282,6 +286,8 @@ static NSDictionary *Resolve(NSString *identifier) {
         Require(BundleIdentifier(bid) && ![identifiers containsObject:bid], @"Invalid or duplicate extension identifier"); [identifiers addObject:bid];
         NSDictionary *entitlements = Entitlements(bundle);
         team = ValidateBundleIdentity(info, entitlements, identifier, team);
+        NSString *applicationID = entitlements[@"application-identifier"];
+        [keychainPrefixes addObject:[applicationID substringToIndex:applicationID.length - bid.length - 1]];
         struct stat executableStat;
         NSString *executable = [bundle stringByAppendingPathComponent:info[@"CFBundleExecutable"]];
         Require(!stat(executable.fileSystemRepresentation, &executableStat) && S_ISREG(executableStat.st_mode), @"Invalid executable identity");
@@ -360,6 +366,7 @@ static NSDictionary *Resolve(NSString *identifier) {
     }
     struct stat bundleStat; Require(!stat(app.fileSystemRepresentation, &bundleStat), @"Unreadable installed application");
     NSDictionary *target = @{@"bundleID":identifier, @"bundlePath":app, @"identifiers":identifiers, @"team":team,
+        @"keychainPrefixes":[[keychainPrefixes allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"containers":containers, @"executables":executables, @"appGroups":[[groups allObjects] sortedArrayUsingSelector:@selector(compare:)], @"keychainGroups":[[keychain allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"preservedSharedGroups":shared, @"sharedAppGroups":[[sharedGroups allObjects] sortedArrayUsingSelector:@selector(compare:)],
         @"sharedGroupOwners":sharedGroupOwners, @"broadAppGroupAccess":broadGroupAccess, @"sharedKeychainGroups":[[sharedKeys allObjects] sortedArrayUsingSelector:@selector(compare:)],
@@ -753,12 +760,18 @@ static NSDictionary *ExactEntitlements(NSDictionary *base, NSArray *groups) {
 static NSArray *ValidatedKeychainScope(NSDictionary *target) {
     NSString *team = target[@"team"];
     Require(Identifier(team) && ![team containsString:@"."], @"Keychain signing team is unavailable");
-    NSString *prefix = [team stringByAppendingString:@"."];
+    NSArray *prefixes = target[@"keychainPrefixes"] ?: @[team];
+    Require([prefixes isKindOfClass:NSArray.class] && prefixes.count > 0 && [NSSet setWithArray:prefixes].count == prefixes.count, @"Invalid signed keychain prefixes");
+    for (id prefix in prefixes) Require(Identifier(prefix) && ![prefix containsString:@"."], @"Invalid signed keychain prefix");
     NSArray *groups = StringList(target[@"keychainGroups"]);
     NSArray *appGroups = StringList(target[@"appGroups"]);
     for (NSString *group in groups) {
         NSString *lower = group.lowercaseString;
-        BOOL teamGroup = [group hasPrefix:prefix] && group.length > prefix.length;
+        BOOL teamGroup = NO;
+        for (NSString *value in prefixes) {
+            NSString *prefix = [value stringByAppendingString:@"."];
+            if ([group hasPrefix:prefix] && group.length > prefix.length) { teamGroup = YES; break; }
+        }
         BOOL appGroup = [appGroups containsObject:group];
         Require((teamGroup || appGroup) && ![lower hasPrefix:@"com.apple."] && ![lower hasPrefix:@"apple."] && ![lower isEqual:@"apple"] && ![lower hasPrefix:@"group.com.apple."] && ![lower hasPrefix:@"systemgroup."], @"Keychain group is outside the selected application's signing team");
     }
@@ -850,7 +863,7 @@ static int SessionLockForAccess(NSString *identifier, BOOL exclusive) {
     NSString *path = [SessionRoot stringByAppendingPathComponent:[Hash(@[identifier]) stringByAppendingString:@".lock"]];
     int fd = open(path.fileSystemRepresentation, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != 0 || st.st_nlink != 1) { if (fd >= 0) close(fd); Fail(@"Cannot open application operation session"); }
-    if (flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { close(fd); Fail(@"An operation is already running."); }
+    if (flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB)) { close(fd); stateFailureCode=@"busy"; Fail(@"An operation is already running."); }
     return fd;
 }
 static int SessionLock(NSString *identifier) { return SessionLockForAccess(identifier, YES); }
@@ -859,6 +872,51 @@ static void SaveSession(NSString *identifier, NSDictionary *session) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:session options:0 error:NULL];
     Require([data writeToFile:SessionPath(identifier) options:NSDataWritingAtomic error:NULL], @"Cannot save cleanup progress");
     Require(!chmod(SessionPath(identifier).fileSystemRepresentation, 0600), @"Cannot secure cleanup progress");
+}
+// Shared by the Manager's selected-step flow and the atomic backup/reset action.
+static NSUInteger CleanupRunStep(NSDictionary *target, NSString *argument, NSArray *queries) {
+    NSUInteger count = 0;
+#ifdef SHADOW_STATE_SUPPORT
+    if ([argument isEqual:@"files"]) ScopedWorker(target, @"state-fingerprint-reset-baseline", @{@"apply":@NO});
+#endif
+    if ([argument isEqual:@"keychain"]) { mutated = YES; Keychain(target, YES, YES); }
+    else {
+        // Synchronize known domains around deletion. Cache invalidation is domain-wide;
+        // the captured queries and final value checks retain container scope.
+        NSArray *preferenceQueries = ([argument isEqual:@"files"] || [argument isEqual:@"preferences"]) ?
+        PreferenceQueriesForStep(queries, argument) : nil;
+        if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
+        ContainerStep(target, argument, YES, &count); ExternalStep(target, argument, YES, &count);
+        if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
+        if ([argument isEqual:@"receipts"]) BundleReceipts(target, YES, &count);
+    }
+#ifdef SHADOW_STATE_SUPPORT
+    if ([argument isEqual:@"files"]) { mutated = YES; ScopedWorker(target, @"state-fingerprint-reset-baseline", @{@"apply":@YES}); }
+#endif
+    return count;
+}
+static void CleanupFinalize(NSDictionary *target, NSArray *steps) {
+    Require(TargetStopped(target), @"Target application restarted before final verification");
+    if ([steps containsObject:@"files"]) for (NSUInteger pass=0;pass<5;pass++) {
+        if(pass)usleep(250000);
+        Require(TargetStopped(target), @"Target application restarted during cleanup finalization");
+        FinalizeSnapshots(target,steps);
+    }
+}
+static NSDictionary *CleanupVerify(NSDictionary *target, NSArray *steps, NSArray *queries) {
+    Require(TargetStopped(target), @"Target application restarted before final verification");
+    NSMutableArray *failed=[NSMutableArray new]; __block NSDictionary *keychainCounts=@{};
+    VerifyCleanupSteps(target,steps,^(NSString *step){
+        @try {
+            if([step isEqual:@"keychain"]){keychainCounts=Keychain(target,NO,YES)[@"classCounts"];return;}
+            NSUInteger count=0;ContainerStep(target,step,NO,&count);ExternalStep(target,step,NO,&count);
+            if([step isEqual:@"receipts"])BundleReceipts(target,NO,&count);
+            Require(!count,@"Selected application data remained after cleanup");
+            if([step isEqual:@"files"]||[step isEqual:@"preferences"])PreferenceCache(PreferenceQueriesForStep(queries,step),YES,NO);
+        } @catch(NSException *exception){(void)exception;[failed addObject:step];}
+    });
+    remainingSteps=[failed copy];Require(!failed.count,@"Final verification found remaining selected application data");
+    return @{@"ok":@YES,@"recheckVerified":@YES,@"scope":@{@"steps":steps,@"preservedSharedGroups":target[@"preservedSharedGroups"],@"systemSharedCachesCovered":@NO,@"keychainClassCounts":keychainCounts}};
 }
 #ifdef SHADOW_STATE_SUPPORT
 #import "StateBackend.inc"
@@ -936,48 +994,16 @@ static NSDictionary *Execute(int argc, const char *argv[]) {
         NSArray *steps = session[@"steps"]; NSUInteger next = [session[@"next"] unsignedIntegerValue];
         if ([command isEqual:@"finalize"] || [command isEqual:@"recheck"]) {
             ValidateCompletedSession(session, scope[@"token"], [argument componentsSeparatedByString:@","], order);
-            Require(TargetStopped(target), @"Target application restarted before final verification");
             if ([command isEqual:@"finalize"]) {
-                if ([steps containsObject:@"files"]) {
-                    // Allow pending system snapshot writes to settle before the independent check.
-                    for (NSUInteger pass = 0; pass < 5; pass++) {
-                        if (pass) usleep(250000);
-                        Require(TargetStopped(target), @"Target application restarted during cleanup finalization");
-                        FinalizeSnapshots(target, steps);
-                    }
-                }
-                return @{@"ok":@YES, @"finalized":@YES};
+                CleanupFinalize(target, steps);
+                return @{@"ok":@YES,@"finalized":@YES};
             }
-            NSMutableArray *failed = [NSMutableArray new];
-            __block NSDictionary *keychainCounts = @{};
-            VerifyCleanupSteps(target, steps, ^(NSString *step) {
-                @try {
-                    if ([step isEqual:@"keychain"]) { keychainCounts = Keychain(target, NO, YES)[@"classCounts"]; return; }
-                    NSUInteger count = 0; ContainerStep(target, step, NO, &count); ExternalStep(target, step, NO, &count);
-                    if ([step isEqual:@"receipts"]) BundleReceipts(target, NO, &count);
-                    Require(!count, @"Selected application data remained after cleanup");
-                    if ([step isEqual:@"files"] || [step isEqual:@"preferences"])
-                        PreferenceCache(PreferenceQueriesForStep(session[@"preferenceQueries"], step), YES, NO);
-                } @catch (NSException *exception) { (void)exception; [failed addObject:step]; }
-            });
-            remainingSteps = [failed copy]; Require(!failed.count, @"Final verification found remaining selected application data");
-            return @{@"ok":@YES, @"recheckVerified":@YES, @"scope":@{@"steps":steps, @"preservedSharedGroups":target[@"preservedSharedGroups"], @"systemSharedCachesCovered":@NO, @"keychainClassCounts":keychainCounts}};
+            return CleanupVerify(target,steps,session[@"preferenceQueries"]);
         }
         Require([order containsObject:argument] && ![argument isEqual:@"fingerprint"], @"Invalid helper cleanup step");
         Require([session[@"token"] isEqual:scope[@"token"]] && NSDate.date.timeIntervalSince1970 - [session[@"created"] doubleValue] < 1800 && next < steps.count && [steps[next] isEqual:argument], @"Cleanup session expired or step is out of order");
         Require(TargetStopped(target), @"Target application restarted; cleanup stopped");
-        NSUInteger count = 0;
-        if ([argument isEqual:@"keychain"]) { mutated = YES; Keychain(target, YES, YES); }
-        else {
-            // Synchronize known domains around deletion. Cache invalidation is domain-wide;
-            // the captured queries and final value checks retain container scope.
-            NSArray *preferenceQueries = ([argument isEqual:@"files"] || [argument isEqual:@"preferences"]) ?
-                PreferenceQueriesForStep(session[@"preferenceQueries"], argument) : nil;
-            if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
-            ContainerStep(target, argument, YES, &count); ExternalStep(target, argument, YES, &count);
-            if (preferenceQueries) PreferenceCache(preferenceQueries, NO, YES);
-            if ([argument isEqual:@"receipts"]) BundleReceipts(target, YES, &count);
-        }
+        NSUInteger count = CleanupRunStep(target, argument, session[@"preferenceQueries"]);
         NSMutableDictionary *updated = [session mutableCopy]; updated[@"next"] = @(next + 1); SaveSession(identifier, updated);
         return @{@"ok":@YES, @"step":argument, @"removedEntries":@(count), @"executed":@YES, @"verified":@NO};
     } @finally { close(lock); }
@@ -988,7 +1014,7 @@ int CleanerMain(int argc, const char *argv[]) {
     @catch (NSException *exception) {
         BOOL recheck = argc >= 2 && !strcmp(argv[1], "recheck");
         result = @{@"ok":@NO, @"error":exception.reason ?: @"Cleanup failed", @"partial":@(mutated || recheck),
-            @"details":failureDetails ?: @{}, @"remainingSteps":remainingSteps ?: @[], @"step":recheck ? @"recheck" : argc == 5 && !strcmp(argv[1], "run") ? [NSString stringWithUTF8String:argv[4]] : @""}; status = 1;
+            @"errorCode":exception.userInfo[@"errorCode"] ?: @"operation_failed", @"sourceDomain":exception.name,@"sourceCode":@1, @"details":failureDetails ?: @{}, @"remainingSteps":remainingSteps ?: @[], @"step":recheck ? @"recheck" : argc == 5 && !strcmp(argv[1], "run") ? [NSString stringWithUTF8String:argv[4]] : @""}; status = 1;
     }
     NSData *data = [NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingSortedKeys error:NULL];
     if (data) { fwrite(data.bytes, 1, data.length, stdout); fputc('\n', stdout); }

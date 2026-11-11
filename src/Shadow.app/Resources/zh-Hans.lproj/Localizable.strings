@@ -294,3 +294,16 @@
 "App group being checked" = "待核实的应用分组";
 
 "Keychain group being checked" = "待核实的钥匙串分组";
+
+"Controlled by phone" = "由手机控制";
+
+"Controlled by RV" = "由 RV 控制";
+
+"Search backups" = "搜索备份";
+"Search titles and notes" = "搜索标题、备注";
+"No matching backups" = "没有匹配的备份";
+
+"Follow system" = "跟随系统";
+"Advertising tracking" = "广告跟踪";
+"Advertising fingerprint" = "广告指纹";
+"Disable tracking" = "关闭跟踪";

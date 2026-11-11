@@ -2,7 +2,7 @@ include ../../build-support/build-lanes.mk
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = ShadowManager
-ShadowManager_FILES = $(wildcard App/*.m Screens/*/*.m Views/*.m Services/*.m Appearance/*.m)
+ShadowManager_FILES = ../../sdk/AppState/SHDWAppStateClient.m $(wildcard App/*.m Screens/*/*.m Views/*.m Services/*.m Appearance/*.m)
 ShadowManager_FRAMEWORKS = UIKit Foundation QuartzCore
 ShadowManager_EXTRA_FRAMEWORKS = Shadow
 ShadowManager_PRIVATE_FRAMEWORKS = MobileCoreServices

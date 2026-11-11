@@ -24,3 +24,6 @@ __pycache__/
 # Private harness checkout mount (sibling shadow-private repo). Never
 # committed; never force-add. Maintainer-local notes live there too.
 private/
+
+# Theos source-directory stamp when compiling the shared SDK.
+/sdk/AppState/.stamp

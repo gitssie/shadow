@@ -96,7 +96,7 @@ static void Query(NSDictionary *script, void (^check)(SHDWIPSnapshot *, NSError 
 }
 static void Switch(NSDictionary *script, NSInteger errorCode, void (^check)(SHDWIPSnapshot *, SHDWIPSnapshot *)) {
     Reset(script); TestService *service = [TestService new]; __block BOOL done = NO; __block NSUInteger calls = 0;
-    [service startWithURL:Action() progress:^(SHDWIPSwitchPhase phase, SHDWIPSnapshot *snapshot) {
+    [service startWithURL:Action() baseline:nil progress:^(SHDWIPSwitchPhase phase, SHDWIPSnapshot *snapshot) {
         Require(NSThread.isMainThread, @"switch progress main"); if (phase == SHDWIPSwitchPhaseRequesting) Require(snapshot.ip || snapshot.ipv4, @"requesting supplies baseline");
     } completion:^(SHDWIPSnapshot *before, SHDWIPSnapshot *current, NSError *error) {
         Require(NSThread.isMainThread, @"switch completion main"); calls++;
@@ -125,6 +125,24 @@ int main(void) { @autoreleasepool {
 
     Require([[[TestService new] productionTiming] isEqual:@[@15,@120,@120]],@"production timing: 15-second rounds and 120-second operation/query budgets");
     for (NSString *name in @[@"monitor",@"baseline",@"query",@"partialprovider",@"action500"]) RevisionCase(name);
+    // Opening the dialog already acquired the baseline: switching must reuse it.
+    Reset(Simple(@[IP(@"192.0.2.1"),IP(@"192.0.2.2")],@[Raw(@"192.0.2.1"),Raw(@"192.0.2.2")],@[@{}]));
+    TestService *dialogService = [TestService new];
+    __block BOOL dialogDone = NO; __block SHDWIPSnapshot *displayed;
+    [dialogService queryWithProgress:nil completion:^(SHDWIPSnapshot *snapshot, NSError *error) {
+        Require(!error && requests.count == 2, @"dialog opening queries each provider once");
+        displayed = snapshot; dialogDone = YES;
+    }];
+    Await(&dialogDone); dialogDone = NO;
+    [dialogService startWithURL:Action() baseline:displayed progress:^(SHDWIPSwitchPhase phase, SHDWIPSnapshot *snapshot) {
+        if (phase == SHDWIPSwitchPhaseRequesting)
+            Require(snapshot == displayed && requests.count == 2, @"reuse displayed baseline without a second pre-switch lookup");
+    } completion:^(SHDWIPSnapshot *before, SHDWIPSnapshot *after, NSError *error) {
+        Require(!error && before == displayed && [after.ip isEqual:@"192.0.2.2"], @"compare post-switch observation with displayed original");
+        Require(requests.count == 5 && Actions() == 1, @"opening pair, selected action, post-switch pair only");
+        dialogDone = YES;
+    }];
+    Await(&dialogDone); Quiescent(1);
     NSDate *queryStarted=NSDate.date;
     Query(Simple(@[@{@"error":@(NSURLErrorServerCertificateUntrusted),@"repeat":@YES}],@[@{@"status":@429,@"repeat":@YES}],@[]),^(SHDWIPSnapshot *snapshot,NSError *error){Require(!snapshot && error.code==SHDWIPSwitchErrorUnconfirmed && -queryStarted.timeIntervalSinceNow>=.27,@"initial query remains unconfirmed until total 120-second budget");});
     // Each round uses exactly two providers; ipwho's IP and region stay together.
@@ -153,16 +171,16 @@ int main(void) { @autoreleasepool {
     // Full-budget unconfirmed result can be followed by observation only, never another action.
     Reset(Simple(@[@{@"body":@{@"success":@YES,@"ip":@"192.0.2.1"},@"repeat":@YES}],@[@{@"body":@"192.0.2.1",@"repeat":@YES}],@[@{}]));
     TestService *service=[TestService new];__block BOOL done=NO;__block NSUInteger calls=0;__block SHDWIPSnapshot *baseline;
-    [service startWithURL:Action() progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require(error.code==SHDWIPSwitchErrorUnconfirmed && before && after,@"deadline is unconfirmed with last observation");baseline=before;calls++;done=YES;}];Await(&done);Require(Actions()==1,@"deadline action once");Quiescent(calls);
+    [service startWithURL:Action() baseline:nil progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require(error.code==SHDWIPSwitchErrorUnconfirmed && before && after,@"deadline is unconfirmed with last observation");baseline=before;calls++;done=YES;}];Await(&done);Require(Actions()==1,@"deadline action once");Quiescent(calls);
     routes[@"who"]=[@[IP(@"192.0.2.2")] mutableCopy];routes[@"v4"]=[@[Raw(@"192.0.2.2")] mutableCopy];done=NO;
     [service queryWithProgress:nil completion:^(SHDWIPSnapshot *snapshot,NSError *error){Require(!error && [SHDWIPSwitchService hasIPChangeFrom:baseline to:snapshot],@"manual query compares original baseline");done=YES;}];Await(&done);Require(Actions()==1,@"manual query cannot reactuate");Quiescent(1);
     Reset(Simple(@[@{@"hang":@YES}],@[@{@"hang":@YES}],@[]));done=NO;calls=0;
-    [service startWithURL:Action() progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require([error.domain isEqual:NSURLErrorDomain] && error.code==NSURLErrorCancelled,@"cancel result");calls++;done=YES;}];Pump(.008);[service cancel];[service cancel];Await(&done);Require(Actions()==0 && !service.running,@"cancel before baseline cannot trigger action");Quiescent(calls);
+    [service startWithURL:Action() baseline:nil progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require([error.domain isEqual:NSURLErrorDomain] && error.code==NSURLErrorCancelled,@"cancel result");calls++;done=YES;}];Pump(.008);[service cancel];[service cancel];Await(&done);Require(Actions()==0 && !service.running,@"cancel before baseline cannot trigger action");Quiescent(calls);
     Reset(Simple(@[IP(@"192.0.2.1")],@[Raw(@"192.0.2.1")],@[@{}]));done=NO;calls=0;
-    [service startWithURL:Action() progress:^(SHDWIPSwitchPhase phase,SHDWIPSnapshot *snapshot){if(phase==SHDWIPSwitchPhaseWaitingForNetwork)[service cancel];} completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require(error.code==NSURLErrorCancelled && before && after,@"cancel retains observation");calls++;done=YES;}];Await(&done);Require(Actions()==1,@"cancel monitoring never resends");Quiescent(calls);
+    [service startWithURL:Action() baseline:nil progress:^(SHDWIPSwitchPhase phase,SHDWIPSnapshot *snapshot){if(phase==SHDWIPSwitchPhaseWaitingForNetwork)[service cancel];} completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require(error.code==NSURLErrorCancelled && before && after,@"cancel retains observation");calls++;done=YES;}];Await(&done);Require(Actions()==1,@"cancel monitoring never resends");Quiescent(calls);
     Reset(Simple(@[IP(@"192.0.2.10"),IP(@"192.0.2.11")],@[Raw(@"192.0.2.10"),Raw(@"192.0.2.11")],@[@{}]));done=NO;
-    [service startWithURL:Action() progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require(!error && [before.ip isEqual:@"192.0.2.10"] && [after.ip isEqual:@"192.0.2.11"],@"reuse acquires new baseline");done=YES;}];Await(&done);Require(Actions()==1,@"retry new run single action");Quiescent(1);
-    for(NSString *value in @[@"file:///tmp/switch",@"https://user:pass@action.invalid/",@"https://action.invalid/#fragment",@"https:/missing-host"]){__block BOOL rejected=NO;[service startWithURL:[NSURL URLWithString:value] progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){rejected=error!=nil;}];Require(rejected,@"invalid action URL rejected");}
+    [service startWithURL:Action() baseline:nil progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){Require(!error && [before.ip isEqual:@"192.0.2.10"] && [after.ip isEqual:@"192.0.2.11"],@"reuse acquires new baseline");done=YES;}];Await(&done);Require(Actions()==1,@"retry new run single action");Quiescent(1);
+    for(NSString *value in @[@"file:///tmp/switch",@"https://user:pass@action.invalid/",@"https://action.invalid/#fragment",@"https:/missing-host"]){__block BOOL rejected=NO;[service startWithURL:[NSURL URLWithString:value] baseline:nil progress:nil completion:^(SHDWIPSnapshot *before,SHDWIPSnapshot *after,NSError *error){rejected=error!=nil;}];Require(rejected,@"invalid action URL rejected");}
     puts("IP snapshot/switch fixtures passed (two provider doubles; no live requests).");
 } return 0; }
 """
