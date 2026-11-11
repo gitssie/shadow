@@ -142,5 +142,9 @@ The optional AppState check also runs verify-state-transition-wait.py. It extrac
 the production native wait method and uses real monotonic time to confirm the
 three-second and one-second minimum waits, with controlled process/authority
 loss during waiting. The storage fixture separately traces real archive
-capture/restore/synchronization/hash calls and injects interrupted waits, restarted
-targets and data reappearing after clear. No installed app or phone is touched.
+capture/restore/synchronization calls and injects interrupted waits, restarted
+targets and data reappearing after clear. It also changes 12 shared-memory header
+bytes after extraction and confirms restore and pending finalization do not
+rehash live container files. New captures omit per-file digests and repeated
+post-pack validation, while whole-archive digests and legacy checksum reading
+remain covered. Saved archive integrity checks before restore remain enabled. No installed app or phone is touched.

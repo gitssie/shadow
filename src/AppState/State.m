@@ -522,10 +522,10 @@ static void CollectAbandonedSnapshots(int parent) {
         NSString *archive = [[directory.path stringByAppendingPathComponent:stage] stringByAppendingPathComponent:@"data.tar.zst"];
         SHDWStateProgress progress = [self archiveProgressForPhase:@"backup"];
         NSDictionary *archiveInfo = [SHDWStateArchive captureRoots:context[@"roots"] payloads:@{} toPath:archive progress:progress error:error];
-        if (!archiveInfo || ![self validateArchiveOwnership:archiveInfo error:error] || ![SHDWStateArchive verifyPath:archive info:archiveInfo progress:progress error:error]) return nil;
+        if (!archiveInfo || ![self validateArchiveOwnership:archiveInfo error:error]) return nil;
         NSString *stateArchive = [[directory.path stringByAppendingPathComponent:stage] stringByAppendingPathComponent:@"state.tar.zst"];
         NSDictionary *stateArchiveInfo = [SHDWStateArchive captureRoots:@{} payloads:@{ IdentityPayload: identityData, KeychainPayload: keychainData, PreferencesPayload: preferencesData } toPath:stateArchive progress:progress error:error];
-        if (!stateArchiveInfo || ![SHDWStateArchive verifyPath:stateArchive info:stateArchiveInfo progress:progress error:error]) return nil;
+        if (!stateArchiveInfo) return nil;
         NSDictionary *live = [self fingerprint:context error:error]; NSArray *again = [self.backend captureKeychainForTarget:context[@"target"] error:error];
         if (!live || !again || !Same(preferences, [self.backend capturePreferencesForTarget:context[@"target"] error:error]) || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || !Same(live[@"resetBaseline"], identity[@"resetBaseline"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
         NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": backupDate, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo, @"stateArchiveInfo": stateArchiveInfo } mutableCopy];
@@ -951,7 +951,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 // This path never clears or restores application state. It only
                 // verifies the already committed state before releasing pending.
                 if (![self.backend flushPreferencesForTarget:target error:error] ||
-                    ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:[self archiveProgressForPhase:@"restore"] error:error] || ![self verifyRestoredPayloads:payloads context:context directory:directory identifiers:ids error:error] ||
+                    ![self verifyRestoredPayloads:payloads context:context directory:directory identifiers:ids error:error] ||
                     ![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:[self archiveProgressForPhase:@"restore"] error:error] ||
                     ![self verifyRestoredFingerprint:payloads[@"fingerprint"] context:context error:error]) return nil;
             } else {
@@ -989,12 +989,11 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 }
                 NSString *archive = [[directory.path stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[canonical stringByAppendingPathComponent:@"data.tar.zst"]];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![SHDWStateArchive restorePath:archive info:manifest[@"archiveInfo"] roots:roots progress:progress error:error]) return nil;
-                // Make restored bytes durable before the settling interval and
-                // the unchanged complete metadata/content verification.
+                // Make restored bytes durable before settling and replaying preferences.
+                // Live files may change after extraction; archive integrity was checked above.
                 if (![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:progress error:error] ||
                     ![self.backend waitForStoppedTarget:target duration:1.0 error:error] ||
-                    ![self guard:context directory:directory refresh:YES error:error] ||
-                    ![SHDWStateArchive verifyRoots:roots info:manifest[@"archiveInfo"] progress:progress error:error]) return nil;
+                    ![self guard:context directory:directory refresh:YES error:error]) return nil;
                 [self event:@"restore" stage:@"preferences"];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restorePreferences:payloads[@"preferences"] target:target error:error] || ![self.backend flushPreferencesForTarget:target error:error]) return nil;
                 if (![self verifyRestoredPayloads:payloads context:context directory:directory identifiers:ids error:error]) return nil;

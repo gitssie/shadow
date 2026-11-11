@@ -235,6 +235,8 @@ static void ExternalTests(NSString *base){
 Check(Reject(^{StateExternalCommand(bundle,@"capabilities",@{@"unexpected":@1});}),@"unknown external key accepted");
     SavedOnlyFixture *saved=[SavedOnlyFixture new];NSError *savedError=nil;
     Check([StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalDelete",@{@"idfv":uuid},&savedError)[@"deleted"]boolValue]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalVerify",@{@"idfv":uuid},&savedError)[@"verified"]boolValue]&&saved.deletes==1&&saved.verifications==1,@"saved operations require live device backend");
+    NSDictionary *deleted=StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalDelete",@{@"idfv":uuid.lowercaseString},&savedError);
+    Check([deleted[@"deleted"]isEqual:@YES]&&[deleted[@"idfv"]isEqual:uuid],@"delete terminal omitted canonical snapshot identity");
     Check([StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalClaim",@{@"idfv":uuid},&savedError)[@"owner"]isEqual:@"rv"]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalRelease",@{@"idfv":uuid},&savedError)[@"owner"]isEqual:@"phone"]&&[StateSavedAction((SHDWAppStateStore *)saved,bundle,@"externalOwnership",@{@"idfv":uuid},&savedError)[@"owner"]isEqual:@"phone"],@"ownership helper action mapping failed");
     Check(Reject(^{StateExternalCommand(bundle,@"exportState",@{@"idfv":uuid,@"part":@"manifest",@"requester":@"invalid"});}),@"invalid requester reached storage");
     stateInitiatingParent=getppid();NSMutableArray *frames=[NSMutableArray new];SHDWStateProgress progress=StateProgressHandler(^(NSDictionary *frame){[frames addObject:frame];});

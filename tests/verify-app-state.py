@@ -146,8 +146,26 @@ static NSError *Problem(NSString *message) { return [NSError errorWithDomain:@"f
 - (BOOL)restoreFingerprint:(NSDictionary *)fingerprint target:(NSDictionary *)target error:(NSError **)error { (void)target;(void)error;if(self.failFingerprintRestore){if(error)*error=Problem(@"fingerprint write failed");return NO;}Check(self.stopped,@"fingerprint restore before stop");[self.calls addObject:@"restore-fingerprint"];NSMutableDictionary *value=[fingerprint mutableCopy];value[@"locked"]=@YES;self.fingerprint=value;return YES; }
 @end
 
+// Model existing backups independently of the new capture format.
+static NSDictionary *LegacyChecksums(NSDictionary *info,NSDictionary *roots,NSDictionary *payloads) {
+    NSMutableDictionary *legacy=[info mutableCopy];[legacy removeObjectForKey:@"fileChecksums"];
+    NSMutableArray *entries=[NSMutableArray new];
+    for(NSDictionary *original in info[@"entries"]) {
+        NSMutableDictionary *entry=[original mutableCopy];NSString *path=entry[@"path"];
+        if([entry[@"type"]isEqual:@"file"]) {
+            NSData *payload=payloads[path];
+            if(payload)entry[@"sha256"]=DigestData(payload);
+            else for(NSString *prefix in roots)if([path hasPrefix:[prefix stringByAppendingString:@"/"]]) {
+                entry[@"sha256"]=Digest([roots[prefix] stringByAppendingPathComponent:[path substringFromIndex:prefix.length+1]]);break;
+            }
+            Check(entry[@"sha256"]!=nil,@"legacy checksum fixture path");
+        }
+        [entries addObject:entry];
+    }
+    legacy[@"entries"]=entries;return legacy;
+}
 static NSDictionary *RehashInfo(NSDictionary *original, NSString *path, NSArray *entries) {
-    NSMutableDictionary *info=[original mutableCopy];struct stat st;Check(!stat(path.fileSystemRepresentation,&st),@"stat archive");info[@"sha256"]=Digest(path);info[@"archiveSize"]=@(st.st_size);info[@"entries"]=entries;return info;
+    NSMutableDictionary *info=[original mutableCopy];[info removeObjectForKey:@"fileChecksums"];struct stat st;Check(!stat(path.fileSystemRepresentation,&st),@"stat archive");info[@"sha256"]=Digest(path);info[@"archiveSize"]=@(st.st_size);info[@"entries"]=entries;return info;
 }
 static NSDictionary *Entry(NSString *path, NSString *type, NSData *data, NSString *link) {
     NSMutableDictionary *entry=[@{@"path":path,@"type":type,@"mode":@0644,@"uid":@(getuid()),@"gid":@(getgid()),@"mtime":@0,@"mtimeNsec":@0,@"birthtime":@0,@"birthtimeNsec":@0} mutableCopy];
@@ -166,7 +184,7 @@ static void ArchiveTests(NSString *base) {
     NSDictionary *equalDates=Times([source stringByAppendingPathComponent:@"equal-dates"]),*newerDates=Times([source stringByAppendingPathComponent:@"newer-birth"]),*sameSecondDates=Times([source stringByAppendingPathComponent:@"same-second-birth"]);Check([equalDates[@"birthtime"] isEqual:equalDates[@"mtime"]]&&[equalDates[@"birthtimeNsec"] isEqual:equalDates[@"mtimeNsec"]],@"filesystem did not retain equal creation/modification fixture");Check([newerDates[@"birthtime"] longLongValue]>[newerDates[@"mtime"] longLongValue],@"filesystem did not retain creation newer than modification fixture");Check([sameSecondDates[@"birthtime"] isEqual:sameSecondDates[@"mtime"]]&&[sameSecondDates[@"birthtimeNsec"] longValue]>[sameSecondDates[@"mtimeNsec"] longValue],@"filesystem did not retain same-second distinct nanosecond fixture");
     NSDictionary *outsideBefore=Tree(outside);
     NSArray *historical=@[@"Documents/text",@"Documents",@"Library/Preferences/value",@"Library/Preferences",@"Library",@"binary",@"empty",@"external-link",@"relative-link",@"absolute-internal"];NSUInteger historicalIndex=0;for(NSString *name in historical)HistoricalTimes([source stringByAppendingPathComponent:name],978307200+(time_t)historicalIndex++);NSDictionary *sourceRootTimes=HistoricalTimes(source,946684800);NSDictionary *destinationRootTimes=HistoricalTimes(destination,1104537600);NSDictionary *olderDates=Times([source stringByAppendingPathComponent:@"Documents/text"]);Check([olderDates[@"birthtime"] longLongValue]<[olderDates[@"mtime"] longLongValue],@"filesystem did not retain historical creation before modification fixture");NSDictionary *historicalBefore=Tree(source);
-    NSDictionary *roots=@{@"containers/data":source};NSError *error=nil;NSDictionary *info=[SHDWStateArchive captureRoots:roots payloads:@{@"payloads/test":[NSData dataWithBytes:bytes length:sizeof(bytes)]} toPath:archive progress:nil error:&error];Check(info!=nil,[NSString stringWithFormat:@"capture real archive: %@",error]);Check([info[@"compression"] isEqual:@"zstd"],@"archive compression");Check([SHDWStateArchive verifyPath:archive info:info progress:nil error:&error],@"verify real archive");Check([SHDWStateArchive verifyRoots:roots info:info progress:nil error:&error],@"verify full source hashes");NSDictionary *payloads=[SHDWStateArchive readPayloadsAtPath:archive info:info names:@[@"payloads/test"] error:&error];Check([payloads[@"payloads/test"] isEqual:[NSData dataWithBytes:bytes length:sizeof(bytes)]],@"binary payload roundtrip");
+    NSDictionary *roots=@{@"containers/data":source};NSError *error=nil;NSDictionary *info=[SHDWStateArchive captureRoots:roots payloads:@{@"payloads/test":[NSData dataWithBytes:bytes length:sizeof(bytes)]} toPath:archive progress:nil error:&error];Check(info!=nil,[NSString stringWithFormat:@"capture real archive: %@",error]);Check([info[@"fileChecksums"]isEqual:@"none"]&&[info[@"sha256"]isEqual:Digest(archive)],@"new archive retains whole digest without file checksums");for(NSDictionary *entry in info[@"entries"])Check(!entry[@"sha256"],@"new capture calculated a file digest");Check([SHDWStateArchive verifyPath:archive info:info progress:nil error:&error],@"new no-file-checksum archive verifies");info=LegacyChecksums(info,roots,@{@"payloads/test":[NSData dataWithBytes:bytes length:sizeof(bytes)]});Check([info[@"compression"] isEqual:@"zstd"],@"archive compression");Check([SHDWStateArchive verifyPath:archive info:info progress:nil error:&error],@"verify real archive");Check([SHDWStateArchive verifyRoots:roots info:info progress:nil error:&error],@"verify full source hashes");NSDictionary *payloads=[SHDWStateArchive readPayloadsAtPath:archive info:info names:@[@"payloads/test"] error:&error];Check([payloads[@"payloads/test"] isEqual:[NSData dataWithBytes:bytes length:sizeof(bytes)]],@"binary payload roundtrip");
     Check([SHDWStateArchive restorePath:archive info:info roots:@{@"containers/data":destination} progress:nil error:&error],[NSString stringWithFormat:@"restore real archive: %@",error]);Check([ContentTree(source) isEqual:ContentTree(destination)],@"all restored regular files and symlinks equal including original creation and nanosecond modification dates");Check(SameBirth(destinationRootTimes,Times(destination)),@"restore overwrote destination container root creation time");Check([historicalBefore isEqual:Tree(source)]&&[sourceRootTimes isEqual:Times(source)],@"archive capture changed original dates");Check([outsideBefore isEqual:Tree(outside)],@"external symlink date restoration changed outside file");Check([SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:nil error:&error],@"verify restored hashes");ReplacePreservingMetadata(destination,@"Documents/text",Bytes(@"bravo"));Check(![SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:nil error:&error],@"same-size file corruption accepted");ReplacePreservingMetadata(destination,@"Documents/text",Bytes(@"alpha"));ReplacePreservingMetadata(destination,@"binary",[NSData dataWithBytes:"\1\1\2\0\xff\x80\0" length:7]);Check(![SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:nil error:&error],@"same-size binary corruption with unchanged timestamp accepted");ReplacePreservingMetadata(destination,@"binary",[NSData dataWithBytes:bytes length:sizeof(bytes)]);Put(destination,@"extra",Bytes(@"extra"));Check(![SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:nil error:&error],@"extra destination file accepted");
     Check([NSFileManager.defaultManager removeItemAtPath:[destination stringByAppendingPathComponent:@"extra"] error:NULL],@"remove extra-file fixture");Check([SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:nil error:&error],@"date-mutation baseline root verification");
     NSString *datePath=[destination stringByAppendingPathComponent:@"Documents/text"];NSDictionary *savedDates=Times(datePath);SetBirth(datePath,[savedDates[@"birthtime"] longLongValue]+20,[savedDates[@"birthtimeNsec"] longValue]);Check(![SHDWStateArchive verifyRoots:@{@"containers/data":destination} info:info progress:nil error:&error],@"changed current creation time was not detected");SetBirth(datePath,[savedDates[@"birthtime"] longLongValue],[savedDates[@"birthtimeNsec"] longValue]);for(NSString *name in historical){errno=0;Check(getxattr([destination stringByAppendingPathComponent:name].fileSystemRepresentation,"org.shadow.birthtime",NULL,0,0,XATTR_NOFOLLOW)==-1&&errno==ENOATTR,@"internal PAX creation annotation leaked into restored app xattrs");}
@@ -190,7 +208,8 @@ static void RestoredMtimeTests(NSString *base) {
     Check(!link([source stringByAppendingPathComponent:@"Documents/value"].fileSystemRepresentation,[source stringByAppendingPathComponent:@"hardlink"].fileSystemRepresentation),@"mtime hardlink fixture");
     NSError *error=nil;NSDictionary *roots=@{@"containers/data":destination};
     NSDictionary *info=[SHDWStateArchive captureRoots:@{@"containers/data":source} payloads:@{} toPath:archive progress:nil error:&error];
-    Check(info&&[SHDWStateArchive restorePath:archive info:info roots:roots progress:nil error:&error],@"restore mtime fixture");
+    Check(info!=nil,@"capture mtime fixture");info=LegacyChecksums(info,@{@"containers/data":source},@{});
+    Check([SHDWStateArchive restorePath:archive info:info roots:roots progress:nil error:&error],@"restore mtime fixture");
     NSString *archiveSHA=Digest(archive);
     for(NSNumber *nsec in @[@0,@987654321]) {
         for(NSString *name in @[@"Documents/value",@"Library/Caches/test.app/Cache.db-shm",@"Documents",@"Library/Caches/test.app",@"alias",@"hardlink"]) {
@@ -373,19 +392,18 @@ static void StatePreferenceReplayTests(NSString *base) {
             ReplacePreservingMetadata(data,@"Documents/value",Bytes(@"bravo"));corrupted=YES;
         }
     };
-    Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error] && corrupted && ![backend.calls containsObject:@"restore-preferences"],@"corrupt extracted data reached state replay before full raw verification");
+    Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil && corrupted && [backend.calls containsObject:@"restore-preferences"],@"changed extracted bytes blocked preference replay");
     store.progressHandler=nil;Reset(backend);
-    Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,[NSString stringWithFormat:@"updated state preference replay: %@",error]);
     Check([[NSDictionary dictionaryWithContentsOfFile:physical] isEqual:updated] && [sha isEqual:Digest(archive)],@"replay failed to install updated values with unchanged data archive");
     NSString *pending=[[root stringByAppendingPathComponent:BID]stringByAppendingPathComponent:@"pending.plist"];
     NSDictionary *manifest=[NSDictionary dictionaryWithContentsOfFile:SnapshotPath(root,A,@"manifest.plist")];
     NSDictionary *interrupted=@{@"format":manifest[@"format"],@"bundleID":BID,@"idfv":A,@"archiveSHA":manifest[@"archiveInfo"][@"sha256"],@"stateArchiveSHA":manifest[@"stateArchiveInfo"][@"sha256"],@"date":NSDate.date,@"phase":@"identity-committed"};
     Check([interrupted writeToFile:pending atomically:NO] && !chmod(pending.fileSystemRepresentation,0600),@"simulate finalization interruption");
     NSDictionary *before=Tree(data);Reset(backend);
-    Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"unverifiable post-replay raw baseline passed finalization");
-    Check([before isEqual:Tree(data)] && [NSFileManager.defaultManager fileExistsAtPath:pending],@"failed finalization changed data or dropped pending");
-    for(NSString *call in backend.calls)Check(![call hasPrefix:@"restore-"],@"failed finalization replayed state");
-    puts("app-state preference replay: immutable data, updated state and fail-closed post-replay finalization passed");
+    Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,@"post-replay file differences blocked finalization");
+    Check([before isEqual:Tree(data)] && ![NSFileManager.defaultManager fileExistsAtPath:pending],@"finalization changed data or retained pending");
+    for(NSString *call in backend.calls)Check(![call hasPrefix:@"restore-"],@"finalization replayed state");
+    puts("app-state preference replay: immutable archive, updated state and no-rehash post-replay finalization passed");
 }
 
 static void RestoreCurrentBackupTests(NSString *base) {
@@ -485,11 +503,13 @@ static void BackupResetTests(NSString *base) {
 
 // Instrument real archive boundaries, never substitute fake capture/restore/hash work.
 static NSMutableArray *TimingCalls;
+static BOOL TimingMutateRestoredCache;
 @interface SHDWStateArchive (TimingFixture)
 + (NSDictionary *)timingCapture:(NSDictionary *)roots payloads:(NSDictionary *)payloads toPath:(NSString *)path progress:(SHDWStateProgress)progress error:(NSError **)error;
 + (BOOL)timingRestore:(NSString *)path info:(NSDictionary *)info roots:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error;
 + (BOOL)timingSync:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error;
 + (BOOL)timingVerify:(NSDictionary *)roots info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error;
++ (BOOL)timingVerifyPath:(NSString *)path info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error;
 @end
 @implementation SHDWStateArchive (TimingFixture)
 + (NSDictionary *)timingCapture:(NSDictionary *)roots payloads:(NSDictionary *)payloads toPath:(NSString *)path progress:(SHDWStateProgress)progress error:(NSError **)error {
@@ -500,12 +520,22 @@ static NSMutableArray *TimingCalls;
 + (BOOL)timingRestore:(NSString *)path info:(NSDictionary *)info roots:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error {
     [TimingCalls addObject:@"archive:restore"];
     BOOL result=[self timingRestore:path info:info roots:roots progress:progress error:error];
+    if(result && TimingMutateRestoredCache) {
+        NSString *root=roots[@"containers/data"];
+        NSMutableData *cache=[Get(root,@"Library/Caches/Cache.db-shm") mutableCopy];
+        Check(cache.length==32,@"restored shared-memory fixture");
+        memset(cache.mutableBytes,0x7f,12);
+        ReplacePreservingMetadata(root,@"Library/Caches/Cache.db-shm",cache);
+    }
     [TimingCalls addObject:@"archive:restored"];return result;
 }
 + (BOOL)timingSync:(NSDictionary *)roots progress:(SHDWStateProgress)progress error:(NSError **)error {
     [TimingCalls addObject:@"archive:sync"];
     BOOL result=[self timingSync:roots progress:progress error:error];
     [TimingCalls addObject:@"archive:synced"];return result;
+}
++ (BOOL)timingVerifyPath:(NSString *)path info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error {
+    [TimingCalls addObject:@"archive:verify-path"];return [self timingVerifyPath:path info:info progress:progress error:error];
 }
 + (BOOL)timingVerify:(NSDictionary *)roots info:(NSDictionary *)info progress:(SHDWStateProgress)progress error:(NSError **)error {
     [TimingCalls addObject:@"archive:verify"];
@@ -515,6 +545,7 @@ static NSMutableArray *TimingCalls;
 static void TimingHooks(void) {
     static dispatch_once_t once;dispatch_once(&once, ^{
         Class cls=SHDWStateArchive.class;
+        method_exchangeImplementations(class_getClassMethod(cls,@selector(verifyPath:info:progress:error:)),class_getClassMethod(cls,@selector(timingVerifyPath:info:progress:error:)));
         method_exchangeImplementations(class_getClassMethod(cls,@selector(captureRoots:payloads:toPath:progress:error:)),class_getClassMethod(cls,@selector(timingCapture:payloads:toPath:progress:error:)));
         method_exchangeImplementations(class_getClassMethod(cls,@selector(restorePath:info:roots:progress:error:)),class_getClassMethod(cls,@selector(timingRestore:info:roots:progress:error:)));
         method_exchangeImplementations(class_getClassMethod(cls,@selector(synchronizeRoots:progress:error:)),class_getClassMethod(cls,@selector(timingSync:progress:error:)));
@@ -536,21 +567,30 @@ static void SettleTimingTests(NSString *base) {
     for(NSUInteger scenario=0;scenario<9;scenario++) {
         NSString *fixture=[base stringByAppendingPathComponent:[NSString stringWithFormat:@"settle-%lu",(unsigned long)scenario]],*root=[fixture stringByAppendingPathComponent:@"store"],*data=[fixture stringByAppendingPathComponent:@"live"];
         Mk(root);Check(!chmod(root.fileSystemRepresentation,0700),@"private timing store");Mk(data);Put(data,MCM,Bytes(@"metadata"));Put(data,@"Documents/value",Bytes(@"source"));
+        Put(data,@"Library/Caches/Cache.db-shm",[NSMutableData dataWithLength:32]);
         FakeBackend *backend=TimingBackend(data);NSError *error=nil;SHDWAppStateStore *store=[[SHDWAppStateStore alloc]initWithRoot:root backend:backend error:&error];Check(store!=nil,@"timing store");
         TimingCalls=backend.calls;Check([store backupBundle:BID metadata:nil error:&error]!=nil,@"timing source backup");
         OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"flush",@"capture-keychain",@"archive:capture",@"archive:captured"]);
+        Check(![backend.calls containsObject:@"archive:verify-path"],@"backup repeated archive verification");
         TimingCalls=nil;backend.fingerprint=FP(B,@"current",YES);Put(data,@"Documents/value",Bytes(@"current"));Reset(backend);
         if(scenario==8)backend.reappearWait=2;
         else if(scenario>=2){if(scenario<5)backend.failWait=scenario-1;else backend.restartWait=scenario-4;}
         BOOL save=scenario==1;TimingCalls=backend.calls;
         store.progressHandler=^(NSDictionary *event){if([event[@"stage"]isEqual:@"clear"])[backend.calls addObject:@"stage:clear"];};
-        NSDictionary *reply=[store restoreBundle:BID idfv:A saveCurrent:save error:&error];TimingCalls=nil;store.progressHandler=nil;
+        TimingMutateRestoredCache=scenario==0;
+        NSDictionary *reply=[store restoreBundle:BID idfv:A saveCurrent:save error:&error];TimingCalls=nil;TimingMutateRestoredCache=NO;store.progressHandler=nil;
         if(scenario<2) {
             Check(reply!=nil,[NSString stringWithFormat:@"settled restore %@",error]);
             if(save)OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:captured",@"wait:1",@"stage:clear"]);
             else OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"stage:clear"]);
-            OrderedCalls(backend.calls,@[@"stage:clear",@"archive:synced",@"wait:1",@"archive:restore",@"archive:restored",@"archive:synced",@"wait:1",@"archive:verify",@"restore-preferences"]);
+            OrderedCalls(backend.calls,@[@"stage:clear",@"archive:synced",@"wait:1",@"archive:restore",@"archive:restored",@"archive:synced",@"wait:1",@"restore-preferences"]);
+            Check(![backend.calls containsObject:@"archive:verify"],@"restore rehashed live container files");
             Check([Get(data,@"Documents/value")isEqual:Bytes(@"source")],@"settled restore contents");
+            if(scenario==0) {
+                NSMutableData *changed=[NSMutableData dataWithLength:32];memset(changed.mutableBytes,0x7f,12);
+                Check([Get(data,@"Library/Caches/Cache.db-shm") isEqual:changed],@"restore rewrote changed shared-memory header");
+                Check([backend.fingerprint[@"data"][@"VendorIdentifier"]isEqual:A],@"shared-memory change blocked fingerprint commit");
+            }
             if(!save) {
                 NSDictionary *manifest=[NSDictionary dictionaryWithContentsOfFile:SnapshotPath(root,A,@"manifest.plist")];
                 NSString *pending=[[root stringByAppendingPathComponent:BID]stringByAppendingPathComponent:@"pending.plist"];
@@ -558,7 +598,8 @@ static void SettleTimingTests(NSString *base) {
                 Check([continuation writeToFile:pending atomically:NO]&&!chmod(pending.fileSystemRepresentation,0600),@"timing finalization fixture");
                 Reset(backend);TimingCalls=backend.calls;
                 Check([store restoreBundle:BID idfv:A saveCurrent:NO error:&error]!=nil,@"settled verify-only finalization");TimingCalls=nil;
-                OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:verify"]);
+                OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"capture-keychain"]);
+                Check(![backend.calls containsObject:@"archive:verify"],@"finalization rehashed live container files");
                 Check(![backend.calls containsObject:@"archive:restore"]&&![backend.calls containsObject:@"archive:capture"],@"finalization replayed capture or restore");
             }
 
@@ -567,7 +608,7 @@ static void SettleTimingTests(NSString *base) {
             Check(!reply&&error!=nil,@"settle failure/restart continued restoration");
             Check(![backend.calls containsObject:@"restore-preferences"]&&! [backend.calls containsObject:@"restore-fingerprint"],@"settle failure reached preference/identity commit");
             if(failed<=2)Check(![backend.calls containsObject:@"archive:restore"],@"failed settle reached archive restore");
-            else Check([backend.calls containsObject:@"archive:restored"]&&![backend.calls containsObject:@"archive:verify"],@"post-restore wait failure reached hash verification");
+            else Check([backend.calls containsObject:@"archive:restored"]&&![backend.calls containsObject:@"archive:verify"],@"post-restore wait failure reached file verification");
             NSString *pending=[[root stringByAppendingPathComponent:BID]stringByAppendingPathComponent:@"pending.plist"];
             if(failed==1)Check([Get(data,@"Documents/value")isEqual:Bytes(@"current")]&&![NSFileManager.defaultManager fileExistsAtPath:pending],@"pre-mutation settle failure changed current data");
             else Check([NSFileManager.defaultManager fileExistsAtPath:pending]&&[error.userInfo[@"stateMayBePartial"]boolValue],@"mutated settle failure dropped recovery pending");
@@ -586,7 +627,7 @@ static void SettleTimingTests(NSString *base) {
     OrderedCalls(backend.calls,@[@"stop",@"wait:3",@"archive:captured",@"wait:1"]);
     Check([store recheckBundle:BID idfv:B error:&error],@"failed reset settle lost completed backup");
 
-    puts("settle timing: real capture/clear/sync/restore/hash boundaries, save-current/reset sequencing and interrupted/restarted waits retain recovery passed");
+    puts("settle timing: real capture/clear/sync/restore boundaries, changed shared-memory headers, no live-file rehash, save-current/reset sequencing and interrupted/restarted waits retain recovery passed");
 }
 
 static void StateTests(NSString *base) {

@@ -285,7 +285,7 @@ static NSDictionary *StateSavedAction(SHDWAppStateStore *store,NSString *bundle,
     if([action isEqual:@"externalClaim"])return [store claimBundle:bundle idfv:request[@"idfv"] error:error];
     if([action isEqual:@"externalRelease"])return [store releaseBundle:bundle idfv:request[@"idfv"] error:error];
     if([action isEqual:@"externalOwnership"])return [store ownershipBundle:bundle idfv:request[@"idfv"] error:error];
-    if([action isEqual:@"externalDelete"])return [store deleteBundle:bundle idfv:request[@"idfv"] error:error]?@{@"deleted":@YES}:nil;
+    if([action isEqual:@"externalDelete"])return [store deleteBundle:bundle idfv:request[@"idfv"] error:error]?@{@"deleted":@YES,@"idfv":[[NSUUID alloc]initWithUUIDString:request[@"idfv"]].UUIDString}:nil;
     return [store recheckBundle:bundle idfv:request[@"idfv"] error:error]?@{@"verified":@YES}:nil;
 }
 static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action, NSDictionary *request) {
@@ -388,7 +388,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
         }
         else if ([action isEqual:@"restore"]) result = [store restoreBundle:identifier idfv:request[@"idfv"] saveCurrent:[request[@"saveCurrent"] boolValue] error:&error];
         else if ([action isEqual:@"edit"]) { if ([store editBundle:identifier idfv:request[@"idfv"] metadata:request[@"metadata"] error:&error]) result = @{@"edited":@YES}; }
-        else if ([action isEqual:@"delete"]) { if ([store deleteBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"deleted":@YES}; }
+        else if ([action isEqual:@"delete"]) { if ([store deleteBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"deleted":@YES,@"idfv":[[NSUUID alloc]initWithUUIDString:request[@"idfv"]].UUIDString}; }
         else if ([store recheckBundle:identifier idfv:request[@"idfv"] error:&error]) result = @{@"verified":@YES};
         if (!result) return StateErrorTerminal(error);
         return @{@"ok":@YES, @"result":[StateEncode(result) base64EncodedStringWithOptions:0]};
