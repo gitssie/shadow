@@ -128,8 +128,10 @@ static NSString *SHDWConfigurationNativeString(const char *name) {
     return SHDWConfigurationInvalid(error);
   NSDictionary *system=value[@"System"], *network=value[@"Network"], *receipts=value[@"Receipts"];
   if (!SHDWConfigurationKeys(system,@[@"Mode"],@[@"ProfileID"]) ||
-      !SHDWConfigurationKeys(network,@[@"RadioTechnologies"],@[]) ||
+      !SHDWConfigurationKeys(network,@[@"RadioTechnologies"],@[@"Transport"]) ||
       !SHDWConfigurationKeys(receipts,@[@"InterceptEnabled"],@[])) return SHDWConfigurationInvalid(error);
+  if (network[@"Transport"] && ![@[@"native", @"safari184_ios"] containsObject:network[@"Transport"]])
+    return SHDWConfigurationInvalid(error);
   if ([system[@"Mode"] isEqual:@"native"]) {
     if (system[@"ProfileID"]) return SHDWConfigurationInvalid(error);
   } else if (![system[@"Mode"] isEqual:@"profile"] ||

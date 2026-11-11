@@ -1,4 +1,5 @@
 include build-support/build-lanes.mk
+include build-support/curl-impersonate.mk
 
 # Package metadata + maintainer scripts live under packaging/layout/ (kept out
 # of the project root). Local to this Makefile: the subprojects keep their own
@@ -20,6 +21,11 @@ include $(THEOS_MAKE_PATH)/aggregate.mk
 # The rootless scheme stages the whole layout/ under /var/jb. Select the
 # matching ruleset-watcher plist after staging, before packaging.
 before-package::
+ifeq ($(SHADOW_CURL_IMPERSONATE),1)
+	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/lib/shadow/curl" "$(THEOS_STAGING_DIR)/usr/share/doc/shadow-curl"$(ECHO_END)
+	$(ECHO_NOTHING)cp "$(SHADOW_CURL_ROOT)/libcurl-impersonate.4.dylib" "$(THEOS_STAGING_DIR)/usr/lib/shadow/curl/"$(ECHO_END)
+	$(ECHO_NOTHING)cp "$(SHADOW_CURL_ROOT)"/LICENSE* "$(THEOS_STAGING_DIR)/usr/share/doc/shadow-curl/"$(ECHO_END)
+endif
 ifneq ($(SHADOW_LANE),rootful-legacy)
 	$(ECHO_NOTHING)chmod 4755 "$(THEOS_STAGING_DIR)/usr/libexec/shadow-cleaner"$(ECHO_END)
 endif

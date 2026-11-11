@@ -139,7 +139,9 @@
         } else if (network) {
             NSMutableArray *technologies = [NSMutableArray new];
             for (NSString *value in @[@"4g", @"5g"]) if ([selection containsObject:value]) [technologies addObject:value];
-            latest[@"Network"] = @{@"RadioTechnologies": technologies};
+            NSMutableDictionary *networkConfiguration = [latest[@"Network"] mutableCopy] ?: [NSMutableDictionary new];
+            networkConfiguration[@"RadioTechnologies"] = technologies;
+            latest[@"Network"] = networkConfiguration;
         } else {
             NSString *identifier = selection.anyObject ?: @"native";
             latest[@"System"] = [identifier isEqual:@"native"] ? @{@"Mode": @"native"} : @{@"Mode": @"profile", @"ProfileID": identifier};

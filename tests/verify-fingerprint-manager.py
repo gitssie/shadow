@@ -23,6 +23,8 @@ source = r'''
 #import <CoreFoundation/CoreFoundation.h>
 #import <Shadow/FingerprintState.h>
 #import <Shadow/FingerprintOwner.h>
+#import <Shadow/FingerprintAdvertising.h>
+#import <Shadow/FingerprintVolumeTime.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -85,16 +87,20 @@ source += r'''
 @interface FailingDefaults : NSObject
 @property(nonatomic, strong) NSMutableDictionary *values;
 @property(nonatomic) NSUInteger failures;
+@property(nonatomic) BOOL pendingWrite;
 - (BOOL)synchronize;
 - (id)objectForKey:(NSString *)key;
 - (void)setObject:(id)value forKey:(NSString *)key;
 - (void)removeObjectForKey:(NSString *)key;
 @end
 @implementation FailingDefaults
-- (BOOL)synchronize { if (self.failures) { self.failures--; return NO; } return YES; }
+- (BOOL)synchronize {
+  if (self.pendingWrite && self.failures) { self.failures--; return NO; }
+  self.pendingWrite = NO; return YES;
+}
 - (id)objectForKey:(NSString *)key { return self.values[key]; }
-- (void)setObject:(id)value forKey:(NSString *)key { self.values[key] = value; }
-- (void)removeObjectForKey:(NSString *)key { [self.values removeObjectForKey:key]; }
+- (void)setObject:(id)value forKey:(NSString *)key { self.values[key] = value; self.pendingWrite = YES; }
+- (void)removeObjectForKey:(NSString *)key { [self.values removeObjectForKey:key]; self.pendingWrite = YES; }
 @end
 int main(int argc, const char **argv) { @autoreleasepool {
   if (argc == 2 && !strcmp(argv[1], "--migration-write")) {

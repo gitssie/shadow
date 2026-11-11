@@ -32,6 +32,7 @@ hook_start = fingerprint.index("%hook NSProcessInfo", memory_group) + len("%hook
 physical = fingerprint[hook_start:fingerprint.index("%end", hook_start)]
 physical = physical.replace("%orig", "[self nativePhysicalMemory]")
 hooks = function(fingerprint, "static BOOL shdw_map_app_caller(") + "\n"
+hooks += function(fingerprint, "static BOOL shdw_fingerprint_kernel_caller(") + "\n"
 hooks += function(fingerprint, "BOOL shdw_fingerprint_sysctl_query(") + "\n"
 hooks += function(fingerprint, "BOOL shdw_fingerprint_sysctl_mib_query(") + "\n"
 hooks += function(fingerprint, "void shdw_fingerprint_sysctl_value(") + "\n"

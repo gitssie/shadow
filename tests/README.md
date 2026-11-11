@@ -33,6 +33,23 @@ make -C tests test
 sh tests/MaintainerScriptTests.sh
 ```
 
+The optional `make -C tests verify-curl-transport` requires macOS Foundation and
+the pinned headers prepared by `scripts/prepare-curl-impersonate.sh`. It runs the
+production transport adapter with a deterministic curl engine and protocol client
+under AddressSanitizer and UndefinedBehaviorSanitizer. It covers request headers
+and bodies, redirect body removal/replacement, cookie controls, decoded response
+metadata, trust/stream exclusions, cancellation, and error mapping. It does not
+establish TLS wire behavior; that requires a device and a real endpoint.
+
+The experimental adapter is packaged with
+`SHADOW_CURL_IMPERSONATE=1 ./build.sh rootless` after dependency preparation. It
+uses curl-impersonate v2.3.2's `safari184_ios` preset when the application's saved
+`Network.Transport` is `safari184_ios`; absent or `native` keeps native networking.
+Eligible foreground NSURLSession HTTPS requests use the adapter. Background
+sessions, arbitrary body streams, authentication challenge delegates, explicit
+ATS requirements needing native trust, and WKWebView remain on their native path.
+The optional engine currently supports the rootless lane only.
+
 The Makefile's `test` target does not include the maintainer-script checks.
 
 The optional `make -C tests settings-behavior` compiles and executes the actual

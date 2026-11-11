@@ -1,6 +1,7 @@
 #import "UniversalHooks.h"
 #import "../../policy/FingerprintPolicy.h"
 #import "../../policy/NetworkUserAgentCache.h"
+#import "../../policy/CurlTransport.h"
 #import "../../../Shadow.framework/Fingerprint/DiagnosticsInternal.h"
 #include <dlfcn.h>
 #include <objc/runtime.h>
@@ -105,6 +106,7 @@ static NSString *shdw_network_default_user_agent(id supplied, BOOL present) {
 
 static NSURLSessionConfiguration *shdw_network_configuration(NSURLSessionConfiguration *configuration) {
     if(!configuration) return configuration;
+    configuration = SHDWCurlTransportConfiguration(configuration);
     NSDictionary *headers = configuration.HTTPAdditionalHeaders;
     NSString *key;
     id supplied = shdw_network_user_agent_header(headers, &key);
@@ -120,6 +122,7 @@ static NSURLSessionConfiguration *shdw_network_configuration(NSURLSessionConfigu
 NSURLRequest *shdw_fingerprint_network_request(NSURLSession *session, NSURLRequest *request, const void *caller) {
     if(!request || !shdw_fingerprint_is_enabled() || !shdw_caller_is_external(caller)) return request;
     SHADOW_INTERNAL_SCOPE {
+        request = SHDWCurlTransportRequest(request, session);
         NSString *key;
         id supplied = shdw_network_user_agent_header(request.allHTTPHeaderFields, &key);
         if(!key) supplied = shdw_network_user_agent_header(session.configuration.HTTPAdditionalHeaders, &key);
@@ -250,6 +253,7 @@ static NSURLSession *shdw_network_session_delegate(id self, SEL selector,
 
 void shdw_universal_fingerprint_network_prepare(SHDWHookSession *hooks) {
     if(!hooks || !shdw_fingerprint_is_enabled()) return;
+    SHDWCurlTransportPrepare();
     shdw_network_prepare_user_agent_source();
     shdw_universal_bundle_metadata(hooks);
     shdw_universal_url_session(hooks);

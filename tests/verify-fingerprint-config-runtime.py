@@ -105,6 +105,11 @@ int main(void) { @autoreleasepool {
   assert(!strcmp(value.version, nativeSystem[@"Kernel"] ? [nativeSystem[@"Kernel"] UTF8String] : "native-kernel"));
   assert(!strcmp(value.nodename, "iPhone") && !strcmp(value.machine, "iPhone9,2"));
   NSMutableDictionary *chosen = [fixture mutableCopy];
+  chosen[@"Network"] = @{@"RadioTechnologies":@[@"4g",@"5g"],@"Transport":@"safari184_ios"};
+  assert([SHDWFingerprintConfiguration configurationByValidating:chosen error:NULL]);
+  chosen[@"Network"] = @{@"RadioTechnologies":@[],@"Transport":@"safari184"};
+  assert(![SHDWFingerprintConfiguration configurationByValidating:chosen error:NULL]);
+  chosen[@"Network"] = @{@"RadioTechnologies":@[@"4g",@"5g"]};
   chosen[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.1_22H31"};
   fixture = [chosen copy];
   assert([SHDWFingerprintOSVersionString() isEqual:@"18.7.1"]);

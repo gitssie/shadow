@@ -46,6 +46,9 @@ static NSDictionary *nativeBundleInfo(void) { return metadataFixture; }
 static id nativeBundleValue(NSString *key) { return metadataFixture[key]; }
 #define isCallerExternal() (external && !depth)
 static BOOL enabled=YES, external=YES, available=YES, installs=YES;
+static void SHDWCurlTransportPrepare(void) {}
+static NSURLSessionConfiguration *SHDWCurlTransportConfiguration(NSURLSessionConfiguration *configuration) { return configuration; }
+static NSURLRequest *SHDWCurlTransportRequest(NSURLRequest *request, id session) { (void)session;return request; }
 static NSString *release=@"24.6.0", *nativeValue;
 static BOOL sourcePublicationSucceeds;
 static BOOL SHDWNetworkReplaceUserAgentCache(const void *getter,NSString *native,NSString *updated) {

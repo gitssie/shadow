@@ -121,6 +121,11 @@ verify-fingerprint:
 
 .PHONY: verify-fingerprint
 
+verify-curl-transport:
+	python3 verify-curl-transport.py
+
+.PHONY: verify-curl-transport
+
 verify-cleanup:
 	python3 verify-reset-baseline.py
 	python3 verify-documents-reset.py
