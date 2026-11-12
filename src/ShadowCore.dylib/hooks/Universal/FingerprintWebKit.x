@@ -2,11 +2,13 @@
 #import <WebKit/WebKit.h>
 #import <objc/message.h>
 #import "../../policy/FingerprintPolicy.h"
+#import "../../policy/FingerprintStorage.h"
+#import "../../policy/WebUserAgent.h"
+#import "../../policy/WebLocalization.h"
+#include <errno.h>
 
 static unsigned shdw_webkit_install_state;
 static char shdw_webkit_candidate_key, shdw_webkit_worlds_key, shdw_webkit_installing_key, shdw_webkit_script_world_key, shdw_webkit_policy_script_key;
-static NSString *(*shdw_webkit_user_agent)(id, SEL);
-static void (*shdw_webkit_set_user_agent)(id, SEL, NSString *);
 static void (*shdw_webkit_remove_scripts)(id, SEL);
 static void (*shdw_webkit_add_script)(id, SEL, WKUserScript *);
 static id (*shdw_webkit_configuration)(id, SEL);
@@ -14,9 +16,6 @@ static void (*shdw_webkit_evaluate)(id, SEL, NSString *, void (^)(id, NSError *)
 static void (*shdw_webkit_evaluate_world)(id, SEL, NSString *, WKFrameInfo *, WKContentWorld *, void (^)(id, NSError *));
 
 %group shadowhook_fingerprint_webkit
-@protocol SHDWFingerprintWebView <NSObject>
-- (NSString *)_userAgent;
-@end
 
 static id shdw_fingerprint_webkit_world(id world) {
     if(!world) return [NSNull null];
@@ -108,16 +107,23 @@ static void __attribute__((unused)) shdw_fingerprint_webkit_clipboard_install(WK
     if(configuration) shdw_fingerprint_webkit_controller_install(configuration.userContentController, nil);
 }
 
+static void shdw_fingerprint_webkit_prepare_user_agent(void) {
+    if(!shdw_fingerprint_is_enabled()) return;
+    int saved = errno;
+    SHADOW_INTERNAL_SCOPE {
+        NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
+        if([configuration[@"System"][@"Mode"] isEqual:@"profile"])
+            SHDWWebUserAgentInstall(SHDWFingerprintOSVersionString());
+        SHDWFingerprintInstallWebLocalization();
+    }
+    errno = saved;
+}
+
 static void shdw_fingerprint_webkit_apply(WKWebView *view) {
     if(!view || !shdw_fingerprint_is_enabled() || !objc_getAssociatedObject(view, &shdw_webkit_candidate_key)) return;
     SHADOW_INTERNAL_SCOPE {
         // if(shdw_webkit_configuration)
         //     shdw_fingerprint_webkit_clipboard_install(shdw_webkit_configuration(view, @selector(configuration)));
-        if(!shdw_webkit_user_agent || !shdw_webkit_set_user_agent) return;
-        NSString *native = shdw_webkit_user_agent(view, @selector(_userAgent));
-        NSString *adjusted = SHDWFingerprintUserAgent(native);
-        if(adjusted && ![adjusted isEqualToString:native])
-            shdw_webkit_set_user_agent(view, @selector(setCustomUserAgent:), adjusted);
     }
 }
 
@@ -132,6 +138,7 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     BOOL applies = shdw_fingerprint_is_enabled() && shdw_fingerprint_app_caller(caller);
     // if(applies) shdw_fingerprint_webkit_clipboard_install(configuration);
+    shdw_fingerprint_webkit_prepare_user_agent();
     WKWebView *view = %orig(frame, configuration);
     if(view && applies) {
         objc_setAssociatedObject(view, &shdw_webkit_candidate_key, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -142,21 +149,13 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
 - (instancetype)initWithCoder:(NSCoder *)coder {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     BOOL applies = shdw_fingerprint_is_enabled() && shdw_fingerprint_app_caller(caller);
+    shdw_fingerprint_webkit_prepare_user_agent();
     WKWebView *view = %orig(coder);
     if(view && applies) {
         objc_setAssociatedObject(view, &shdw_webkit_candidate_key, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         shdw_fingerprint_webkit_apply(view);
     }
     return view;
-}
-- (void)setCustomUserAgent:(NSString *)userAgent {
-    BOOL applies = shdw_fingerprint_is_enabled() && objc_getAssociatedObject(self, &shdw_webkit_candidate_key);
-    NSString *adjusted = userAgent;
-    if(applies) {
-        SHADOW_INTERNAL_SCOPE { adjusted = SHDWFingerprintUserAgent(userAgent); }
-    }
-    %orig(adjusted);
-    if(applies && !userAgent.length) shdw_fingerprint_webkit_apply(self);
 }
 - (WKNavigation *)loadRequest:(NSURLRequest *)request {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
@@ -300,23 +299,29 @@ static void __attribute__((unused)) shdw_fingerprint_webkit_clipboard_prepare(Cl
 
 void shdw_universal_fingerprint_webkit_prepare(SHDWHookSession *hooks) {
     if(!shdw_fingerprint_is_enabled() || !hooks) return;
+    shdw_fingerprint_webkit_prepare_user_agent();
     Class webViewClass = objc_getClass("WKWebView");
     Class controllerClass = objc_getClass("WKUserContentController");
     Class scriptClass = objc_getClass("WKUserScript");
     if(!webViewClass || !controllerClass || !scriptClass ||
        !class_getInstanceMethod(controllerClass, @selector(removeAllUserScripts)) ||
-       !class_getInstanceMethod(controllerClass, @selector(addUserScript:)) ||
-       !class_getInstanceMethod(webViewClass, @selector(_userAgent)) ||
-       !class_getInstanceMethod(webViewClass, @selector(setCustomUserAgent:))) return;
+       !class_getInstanceMethod(controllerClass, @selector(addUserScript:))) {
+        static unsigned scheduled;
+        unsigned initial = 0;
+        if(__atomic_compare_exchange_n(&scheduled, &initial, 1, NO, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            [hooks performWhenTargetAvailable:^BOOL(SHDWHookSession *available) {
+                if(!objc_getClass("WKWebView") || !objc_getClass("WKUserContentController") || !objc_getClass("WKUserScript")) return NO;
+                shdw_universal_fingerprint_webkit_prepare(available);
+                return __atomic_load_n(&shdw_webkit_install_state, __ATOMIC_ACQUIRE) != 0;
+            }];
+        }
+        return;
+    }
     unsigned expected = 0;
     if(!__atomic_compare_exchange_n(&shdw_webkit_install_state, &expected, 1, NO,
        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
     SHDWHookSession *previous = SHDWHookSessionSetCurrent(hooks);
     @try {
-        shdw_webkit_user_agent = (NSString *(*)(id, SEL))method_getImplementation(
-            class_getInstanceMethod(webViewClass, @selector(_userAgent)));
-        shdw_webkit_set_user_agent = (void (*)(id, SEL, NSString *))method_getImplementation(
-            class_getInstanceMethod(webViewClass, @selector(setCustomUserAgent:)));
         Method configurationMethod = class_getInstanceMethod(webViewClass, @selector(configuration));
         if(configurationMethod)
             shdw_webkit_configuration = (id (*)(id, SEL))method_getImplementation(configurationMethod);

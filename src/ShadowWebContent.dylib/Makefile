@@ -4,6 +4,8 @@ include ../../build-support/hookkit.mk
 
 TWEAK_NAME = ShadowWebContent
 ShadowWebContent_FILES = Entry.m ../Localization/Bootstrap.m ../Localization/Environment.m ../Localization/WebTimeZone.m ../Localization/FunctionHook.m
+ShadowWebContent_FILES += UserAgentSource.mm ../WebUserAgent/Bootstrap.m
+ShadowWebContent_CCFLAGS += -std=c++17
 ShadowWebContent_FRAMEWORKS = Foundation CoreFoundation
 ShadowWebContent_EXTRA_FRAMEWORKS = HookKit
 ShadowWebContent_CFLAGS = -fobjc-arc -fvisibility=hidden $(SHADOW_HOOKKIT_CFLAGS)

@@ -62,7 +62,12 @@ device verification; a successful TLS endpoint capture does not establish them.
 Preset default HTTP headers are disabled. The adapter preserves request/session
 header values after the existing CFNetwork and WebKit User-Agent system-profile
 policies apply. Explicit non-default App User-Agent values remain unchanged.
-The TLS preset does not select the User-Agent OS version.
+The TLS preset does not select the User-Agent OS version. WebKit default UA
+versions come from its native version-string generation entrypoint, before page
+creation; Shadow does not call `setCustomUserAgent:`. App-provided custom UAs
+keep their native priority. The matching WebContent launch snapshot covers
+worker fallback generation. Host checks exercise the C++ return bridge and
+bootstrap ownership; runtime entrypoints still require device verification.
 The optional engine currently supports the rootless lane only.
 
 The Makefile's `test` target does not include the maintainer-script checks.

@@ -1,4 +1,4 @@
-"""Exercise production UA policy and extracted WKWebView hooks with native doubles."""
+"""Verify WebKit custom-UA isolation and preserved dormant clipboard helpers."""
 from pathlib import Path
 import subprocess
 import re
@@ -23,12 +23,20 @@ def function(source, signature):
     return source[start:end]
 
 
-# Production keeps the native UA hooks and retains clipboard implementation dormant.
+# Production changes the native version source, never a WebView custom-UA value.
 production = re.sub(r"//[^\n]*", "", fingerprint)
+assert "setCustomUserAgent" not in production
+assert "shdw_webkit_user_agent" not in production and "shdw_webkit_set_user_agent" not in production
+assert "SHDWFingerprintUserAgent(" not in production
+assert "@selector(_userAgent)" not in production
 prepare = function(production, "void shdw_universal_fingerprint_webkit_prepare(")
 assert re.findall(r"%init\((\w+)[,)]", prepare) == [
     "shadowhook_fingerprint_webkit"]
 assert "shdw_fingerprint_webkit_clipboard_prepare(" not in prepare
+assert prepare.index("shdw_fingerprint_webkit_prepare_user_agent(") < prepare.index("Class webViewClass")
+for signature in ("- (instancetype)initWithFrame:", "- (instancetype)initWithCoder:"):
+    constructor = function(production, signature)
+    assert constructor.index("shdw_fingerprint_webkit_prepare_user_agent(") < constructor.index("%orig")
 clipboard_prepare = function(production, "static void __attribute__((unused)) shdw_fingerprint_webkit_clipboard_prepare(")
 assert set(re.findall(r"%init\(([^,]+),", clipboard_prepare)) == {
     "shadowhook_fingerprint_webkit_script", "shadowhook_fingerprint_webkit_script_world",
@@ -48,8 +56,14 @@ fingerprint = fingerprint.replace("// if(applies) shdw_fingerprint_webkit_clipbo
 
 prefix = r'''
 #import <Foundation/Foundation.h>
+static BOOL nativeSystemMode;
+static unsigned sourceInstallCalls, sourceCallsAtNativeInit;
+static NSString *sourceInstalledVersion;
+BOOL SHDWWebUserAgentInstall(NSString *version) { sourceInstallCalls++;sourceInstalledVersion=[version copy];return YES; }
+void SHDWFingerprintInstallWebLocalization(void) {}
 NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
     (void)bundleID;
+    if(nativeSystemMode)return @{@"System":@{@"Mode":@"native"}};
     return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
 }
 
@@ -168,6 +182,7 @@ typedef NS_ENUM(NSInteger, WKUserScriptInjectionTime) { WKUserScriptInjectionTim
 - (instancetype)initNativeWithCoder:(NSCoder *)coder;
 - (NSString *)_userAgent;
 - (void)nativeSetCustomUserAgent:(NSString *)value;
+- (void)setCustomUserAgent:(NSString *)value;
 - (WKNavigation *)nativeReload;
 - (WKNavigation *)nativeGoBack;
 - (WKNavigation *)nativeJavaScriptNavigation;
@@ -182,7 +197,6 @@ typedef NS_ENUM(NSInteger, WKUserScriptInjectionTime) { WKUserScriptInjectionTim
 - (void)callAsyncJavaScript:(NSString *)source arguments:(NSDictionary *)arguments inFrame:(WKFrameInfo *)frame inContentWorld:(WKContentWorld *)world completionHandler:(void (^)(id, NSError *))completion;
 - (instancetype)initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration;
 - (instancetype)initWithCoder:(NSCoder *)coder;
-- (void)setCustomUserAgent:(NSString *)value;
 - (WKNavigation *)loadRequest:(NSURLRequest *)request;
 - (WKNavigation *)loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL;
 - (WKNavigation *)loadFileURL:(NSURL *)URL allowingReadAccessToURL:(NSURL *)readAccessURL;
@@ -210,6 +224,7 @@ static BOOL initFails;
 }
 - (instancetype)initNativeWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration {
     (void)frame; (void)configuration;
+    sourceCallsAtNativeInit=sourceInstallCalls;
     if(initFails) return nil;
     self = [super init];
     if(self) {
@@ -232,6 +247,7 @@ static BOOL initFails;
     self.nativeWrites++;
     self.storedCustomUA = value;
 }
+- (void)setCustomUserAgent:(NSString *)value { [self nativeSetCustomUserAgent:value]; }
 - (WKNavigation *)recordNavigation:(NSArray *)arguments {
     self.scriptsAtNavigation = self.configuration.userContentController.userScripts.count;
     self.navigationArguments = arguments;
@@ -253,8 +269,6 @@ static void (*shdw_webkit_evaluate_world)(id, SEL, NSString *, WKFrameInfo *, WK
 static void (*shdw_webkit_remove_scripts)(id, SEL);
 static void (*shdw_webkit_add_script)(id, SEL, WKUserScript *);
 static id (*shdw_webkit_configuration)(id, SEL);
-static NSString *(*shdw_webkit_user_agent)(id, SEL);
-static void (*shdw_webkit_set_user_agent)(id, SEL, NSString *);
 @interface SubclassWebView : WKWebView
 @property(nonatomic) unsigned overrideWrites;
 @end
@@ -266,9 +280,6 @@ static void (*shdw_webkit_set_user_agent)(id, SEL, NSString *);
 '''
 
 suffix = r'''
-static NSString *mapped(NSString *input) {
-    return [input stringByReplacingOccurrencesOfString:@"OS 16_3 like" withString:@"OS 18_7_1 like"];
-}
 static void verify_policy(void) {
     assert(!SHDWFingerprintUserAgent(nil));
     for(NSString *unchanged in @[@"", @"Probe/4.2", @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
@@ -311,9 +322,7 @@ static void verify_clipboard_install(void) {
         shdw_webkit_configuration = NULL;
         shdw_fingerprint_webkit_apply(view); assert(controller.userScripts.count == 1);
         shdw_webkit_configuration = configurationGetter;
-        NSString *(*getter)(id, SEL) = shdw_webkit_user_agent; shdw_webkit_user_agent = NULL;
         shdw_fingerprint_webkit_apply(view);
-        shdw_webkit_user_agent = getter;
         assert(controller.userScripts.count == 1 && controller.existingHandler == handler);
         assert([controller.userScripts.firstObject.source isEqualToString:SHDWFingerprintWebClipboardScript()]);
         WKUserScript *appScript;
@@ -352,46 +361,40 @@ static void verify_navigation(void) {
         assert(view.scriptsAtNavigation == (gate ? 0 : 1));
         assert(result == view.navigationResult);
         assert([view.navigationArguments isEqualToArray:expected[method]]);
-        assert([view.navigationUA isEqualToString:gate ? nativeUA : mapped(nativeUA)]);
+        assert([view.navigationUA isEqualToString:nativeUA]);
+        assert(!view.nativeReads && !view.nativeWrites);
         assert((objc_getAssociatedObject(view, &shdw_webkit_candidate_key) != nil) == !gate);
         appCaller = YES; shdw_fingerprint_enabled = YES; fakeCaller = (void *)1;
     }
     SubclassWebView *subclass = [[SubclassWebView alloc] initWithCoder:nil];
-    assert(!subclass.overrideWrites && [subclass.storedCustomUA isEqualToString:mapped(nativeUA)]);
+    assert(!subclass.overrideWrites && !subclass.storedCustomUA && !subclass.nativeReads && !subclass.nativeWrites);
     [subclass setCustomUserAgent:nil];
-    assert(subclass.overrideWrites == 1 && [subclass.storedCustomUA isEqualToString:mapped(nativeUA)]);
+    assert(subclass.overrideWrites == 1 && !subclass.storedCustomUA && subclass.nativeWrites == 1);
 }
 static void verify_hooks(void) {
+    unsigned before=sourceInstallCalls;
+    shdw_fingerprint_enabled=NO;shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
+    shdw_fingerprint_enabled=YES;nativeSystemMode=YES;shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
+    nativeSystemMode=NO;shdw_fingerprint_webkit_prepare_user_agent();
+    assert(sourceInstallCalls==before+1 && [sourceInstalledVersion isEqual:@"18.7.1"]);
     for(unsigned coder = 0; coder < 2; coder++) {
+        before=sourceInstallCalls;
         WKWebView *view = newView(coder);
-        assert(view && [view.storedCustomUA isEqualToString:mapped(nativeUA)]);
-        assert(view.nativeReads && view.nativeWrites);
+        assert(sourceInstallCalls>before && sourceCallsAtNativeInit==sourceInstallCalls);
+        assert(view && !view.storedCustomUA && !view.nativeReads && !view.nativeWrites);
         assert(objc_getAssociatedObject(view, &shdw_webkit_candidate_key));
-        NSString *custom = @"Mozilla/5.0 (iPad; CPU OS 16_3 like Mac OS X) AppleWebKit/605.1.15 Version/16.3 Safari/604.1 App/7";
-        [view setCustomUserAgent:custom];
-        assert([view.storedCustomUA isEqualToString:mapped(custom)]);
-        NSString *unrelated = @"MyApp/1.0 desktop-client";
-        [view setCustomUserAgent:unrelated]; assert([view.storedCustomUA isEqualToString:unrelated]);
-        [view setCustomUserAgent:nil]; assert([view.storedCustomUA isEqualToString:mapped(nativeUA)]);
-        [view setCustomUserAgent:@""]; assert([view.storedCustomUA isEqualToString:mapped(nativeUA)]);
-        appCaller = NO;
-        [view setCustomUserAgent:custom];
-        assert([view.storedCustomUA isEqualToString:mapped(custom)]);
-        appCaller = YES;
-        shdw_fingerprint_enabled = NO;
-        [view setCustomUserAgent:custom]; assert([view.storedCustomUA isEqualToString:custom]);
-        shdw_fingerprint_enabled = YES;
-        [view setCustomUserAgent:nil];
-        unsigned writes = view.nativeWrites;
-        shdw_fingerprint_webkit_apply(view); assert(view.nativeWrites == writes);
-        NSString *(*getter)(id, SEL) = shdw_webkit_user_agent;
-        void (*setter)(id, SEL, NSString *) = shdw_webkit_set_user_agent;
-        unsigned reads = view.nativeReads;
-        shdw_webkit_user_agent = NULL;
-        shdw_fingerprint_webkit_apply(view); assert(view.nativeReads == reads);
-        shdw_webkit_user_agent = getter; shdw_webkit_set_user_agent = NULL;
-        shdw_fingerprint_webkit_apply(view); assert(view.nativeReads == reads);
-        shdw_webkit_set_user_agent = setter;
+        NSArray *customValues = @[@"Mozilla/5.0 (iPad; CPU OS 16_3 like Mac OS X) AppleWebKit/605.1.15 Version/16.3 Safari/604.1 App/7",
+            @"MyApp/1.0 desktop-client", @"", NSNull.null];
+        for(id value in customValues) {
+            NSString *custom = value == NSNull.null ? nil : value;
+            [view setCustomUserAgent:custom];
+            assert(view.storedCustomUA == custom);
+            unsigned writes = view.nativeWrites;
+            shdw_fingerprint_webkit_apply(view);
+            [view loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.test/"]]];
+            assert(view.storedCustomUA == custom && view.nativeWrites == writes && !view.nativeReads);
+            assert([view.navigationUA isEqualToString:custom.length ? custom : nativeUA]);
+        }
         assert(!internalDepth);
     }
     for(unsigned gate = 0; gate < 3; gate++) {
@@ -403,7 +406,7 @@ static void verify_hooks(void) {
             assert(!view.configuration.userContentController.userScripts.count);
             assert(!view.storedCustomUA && !view.nativeReads && !view.nativeWrites);
             assert(!objc_getAssociatedObject(view, &shdw_webkit_candidate_key));
-            [view setCustomUserAgent:nativeUA]; assert([view.storedCustomUA isEqualToString:nativeUA]);
+            [view setCustomUserAgent:nativeUA]; assert(view.storedCustomUA == nativeUA && view.nativeWrites == 1);
         }
         appCaller = YES; shdw_fingerprint_enabled = YES; fakeCaller = (void *)1;
     }
@@ -411,11 +414,11 @@ static void verify_hooks(void) {
     for(NSString *unrelated in @[@"Desktop App/9", @""]) {
         nativeUA = unrelated;
         WKWebView *view = newView(NO);
-        assert(!view.storedCustomUA && view.nativeReads == 1 && !view.nativeWrites);
+        assert(!view.storedCustomUA && !view.nativeReads && !view.nativeWrites);
     }
     nativeUA = nil;
     WKWebView *view = newView(NO);
-    assert(!view.storedCustomUA && view.nativeReads == 1 && !view.nativeWrites);
+    assert(!view.storedCustomUA && !view.nativeReads && !view.nativeWrites);
     nativeUA = savedNative;
     initFails = YES; assert(!newView(NO) && !newView(YES)); initFails = NO;
     assert(!internalDepth);
@@ -526,17 +529,16 @@ int main(void) { @autoreleasepool {
     shdw_webkit_remove_scripts = (void (*)(id, SEL))class_getMethodImplementation([WKUserContentController class], @selector(nativeRemoveAllUserScripts));
     shdw_webkit_add_script = (void (*)(id, SEL, WKUserScript *))class_getMethodImplementation([WKUserContentController class], @selector(nativeAddUserScript:));
     shdw_webkit_configuration = (id (*)(id, SEL))class_getMethodImplementation([WKWebView class], @selector(configuration));
-    shdw_webkit_user_agent = (NSString *(*)(id, SEL))class_getMethodImplementation([WKWebView class], @selector(_userAgent));
-    shdw_webkit_set_user_agent = (void (*)(id, SEL, NSString *))class_getMethodImplementation([WKWebView class], @selector(nativeSetCustomUserAgent:));
     shdw_webkit_evaluate = (void (*)(id, SEL, NSString *, void (^)(id, NSError *)))class_getMethodImplementation([WKWebView class], @selector(nativeEvaluateJavaScript:completionHandler:));
     shdw_webkit_evaluate_world = (void (*)(id, SEL, NSString *, WKFrameInfo *, WKContentWorld *, void (^)(id, NSError *)))class_getMethodImplementation([WKWebView class], @selector(nativeEvaluateJavaScript:inFrame:inContentWorld:completionHandler:));
     verify_policy(); verify_hooks(); verify_navigation(); verify_clipboard_install(); verify_worlds(); verify_script_order();
-    puts("fingerprint WebKit: native UA active, injection calls disabled, dormant clipboard tests passed");
+    puts("fingerprint WebKit: zero custom-UA writes, explicit App UA passthrough, native navigation values and dormant clipboard tests passed");
 } }
 '''
 
 # Compile the production helpers and Logos bodies without linking WebKit.
 helper = "\n".join(function(fingerprint, signature) for signature in (
+    "static void shdw_fingerprint_webkit_prepare_user_agent(",
     "static id shdw_fingerprint_webkit_world(",
     "static id shdw_fingerprint_webkit_script_world(",
     "static void shdw_fingerprint_webkit_controller_install(",
@@ -553,8 +555,6 @@ if "--without-clipboard-install" in sys.argv:
 if "--without-navigation-selection" in sys.argv:
     original = function(helper, "static void shdw_fingerprint_webkit_select(")
     helper = helper.replace(original, "static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) { (void)view; (void)caller; }")
-if "--with-dynamic-ua-dispatch" in sys.argv:
-    helper = helper.replace("shdw_webkit_user_agent(view, @selector(_userAgent))", "[view _userAgent]")
 start = fingerprint.index("%group shadowhook_fingerprint_webkit")
 start = fingerprint.index("%hook WKWebView", start) + len("%hook WKWebView")
 body = fingerprint[start:fingerprint.index("%end", start)]
@@ -564,7 +564,6 @@ body += fingerprint[eval_start:fingerprint.index("%end", eval_start)]
 replacements = {
     "initWithFrame:": ("%orig(frame, configuration)", "[self initNativeWithFrame:frame configuration:configuration]"),
     "initWithCoder:": ("%orig(coder)", "[self initNativeWithCoder:coder]"),
-    "setCustomUserAgent:": ("%orig(adjusted)", "[self nativeSetCustomUserAgent:adjusted]"),
     "loadRequest:": ("%orig(request)", "[self nativeLoadRequest:request]"),
     "loadHTMLString:": ("%orig(string, baseURL)", "[self nativeLoadHTMLString:string baseURL:baseURL]"),
     "loadFileURL:": ("%orig(URL, readAccessURL)", "[self nativeLoadFileURL:URL allowingReadAccessToURL:readAccessURL]"),

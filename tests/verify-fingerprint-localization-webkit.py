@@ -20,10 +20,23 @@ static void Check(BOOL value, const char *message) {
 }
 static NSDictionary *Resolved;
 static NSString *TransportProfile;
+static NSString *SystemMode = @"native", *OSVersion = @"18.7.1";
+#if SHADOW_CURL_IMPERSONATE
 static BOOL SupportsPolicy = YES;
 static BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) { (void)policy; return SupportsPolicy; }
+#endif
 static NSDictionary *SHDWFingerprintConfig(NSString *bundle) {
-    (void)bundle;return @{@"Network":@{@"Transport":TransportProfile ?: @"native"}};
+    (void)bundle;return @{@"Network":@{@"Transport":TransportProfile ?: @"native"}, @"System":@{@"Mode":SystemMode}};
+}
+static NSString *SHDWFingerprintOSVersionString(void) { return OSVersion; }
+BOOL SHDWWebUserAgentVersionIsValid(NSString *version) {
+    return [version isKindOfClass:NSString.class] && [version isEqual:@"18.7.1"];
+}
+static NSUInteger UserAgentInstalls;
+static NSString *InstalledUserAgentVersion;
+BOOL SHDWWebUserAgentInstall(NSString *version) {
+    Check(SHDWWebUserAgentVersionIsValid(version), "invalid UA version reached installer");
+    UserAgentInstalls++; InstalledUserAgentVersion = [version copy]; errno = EINVAL; return YES;
 }
 static BOOL Internal, MissingSymbol, RejectHook;
 static NSUInteger SymbolLookups, HookCalls, OriginalCalls;
@@ -100,7 +113,7 @@ static BOOL FixtureApplyEnvironment(NSDictionary *snapshot) {
     if (FailEnvironment) { errno = ENOMEM; return NO; }
     return SHDWLocalizationApplyEnvironment(snapshot);
 }
-static BOOL ExpectCustom;
+static BOOL ExpectCustom, ExpectUserAgent;
 static void NativeSetHandler(xpc_connection_t connection, xpc_handler_t handler) {
     Check(errno == EDOM && connection == ExpectedConnection, "setter connection or errno changed");
     SetterCalls++; CapturedHandler = [handler copy]; errno = EINTR;
@@ -108,6 +121,7 @@ static void NativeSetHandler(xpc_connection_t connection, xpc_handler_t handler)
 static void NativeEvent(xpc_object_t event) {
     Check(errno == ERANGE && event == ExpectedEvent, "event identity or errno changed");
     NativeCalls++;
+    Check(!ExpectUserAgent || (UserAgentInstalls && [InstalledUserAgentVersion isEqual:@"18.7.1"]), "UA source not installed before native event");
     Check(!strcmp(getenv("TZ"), ExpectCustom ? "America/New_York" : "Etc/UTC"), "environment not established before original handler");
     errno = ENOTTY;
 }
@@ -255,6 +269,63 @@ static void ChildTests(NSString *mode) {
     Check(NativeCalls == 3 && CopyCalls == copies + 1 && EnvironmentCalls == applications && TimeZoneCalls == zones, "successful child snapshot changed");
     puts("native WebContent child event handler tests passed");
 }
+static void UserAgentParentTests(void) {
+    Resolved = @{@"OverridesSystem":@NO};
+    SystemMode = @"native";
+    SHDWFingerprintInstallWebLocalization();
+    Check(!HookCalls && !SymbolLookups, "native system mode activated UA bootstrap");
+    SystemMode = @"profile";
+    SHDWFingerprintInstallWebLocalization();
+    Check(HookCalls == 1, "UA-only profile did not install bootstrap with native localization");
+    xpc_object_t original = Message();
+    SetBootstrap(FixtureConnection("com.apple.WebKit.WebContent"), original);
+    Check(ReceivedMessage != original && !xpc_dictionary_get_value(original, "me.jjolano.shadow.web-user-agent.v1"), "UA bootstrap mutated original");
+    NSDictionary *snapshot = SHDWWebUserAgentSnapshot(ReceivedMessage, Event());
+    Check([snapshot[@"Version"] isEqual:@"18.7.1"] && [snapshot[@"Owner"] isEqual:@"local.sdkprobe.app"], "UA-only version or owner missing");
+    Check(!SHDWLocalizationSnapshot(ReceivedMessage, Event()), "UA-only launch acquired locale override");
+    xpc_object_t wrongOwner = Event();
+    xpc_dictionary_set_string(wrongOwner, "client-bundle-identifier", "different.app");
+    Check(!SHDWWebUserAgentSnapshot(ReceivedMessage, wrongOwner), "UA payload accepted wrong owner");
+    xpc_object_t wrongService = Event();
+    xpc_dictionary_set_string(wrongService, "service-name", "com.apple.WebKit.Networking");
+    Check(!SHDWWebUserAgentSnapshot(ReceivedMessage, wrongService), "UA payload accepted wrong service");
+    SetBootstrap(FixtureConnection("com.apple.WebKit.Networking"), original);
+    Check(ReceivedMessage == original, "UA-only profile modified Networking launch");
+    puts("UA-only native-localization parent bootstrap passed");
+}
+static void UserAgentChildTests(NSString *mode) {
+    setenv("TZ", "Etc/UTC", 1); tzset();
+    NSDictionary *before = [[NSUserDefaults.standardUserDefaults volatileDomainForName:NSArgumentDomain] copy];
+    [FixtureBundle mainBundle].bundleIdentifier = @"com.apple.WebKit.WebContent";
+    Install();
+    Check(HookCalls == 1 && !UserAgentInstalls && !CopyCalls, "child installed UA before validated bootstrap event");
+    ExpectedConnection = FixtureConnection("com.apple.WebKit.WebContent");
+    ExpectedEvent = Event();
+    CurrentBootstrap = SHDWWebUserAgentBootstrapMessage(Message(), @"18.7.1", @"local.sdkprobe.app");
+    ExpectUserAgent = [mode isEqual:@"ua-valid"] || [mode isEqual:@"ua-owner-conflict"];
+    if ([mode isEqual:@"ua-wrong-owner"]) xpc_dictionary_set_string(ExpectedEvent, "client-bundle-identifier", "other.app");
+    if ([mode isEqual:@"ua-wrong-service"]) xpc_dictionary_set_string(ExpectedEvent, "service-name", "com.apple.WebKit.Networking");
+    if ([mode isEqual:@"ua-native"]) CurrentBootstrap = Message();
+    errno = EDOM;
+    ((SetEventHandler)ChildReplacement)(ExpectedConnection, ^(xpc_object_t event) { NativeEvent(event); });
+    errno = ERANGE; CapturedHandler(ExpectedEvent);
+    Check(NativeCalls == 1 && CopyCalls == 1 && errno == ENOTTY, "UA child forwarding identity or errno changed");
+    Check(UserAgentInstalls == (ExpectUserAgent ? 1u : 0u), "unvalidated UA reached source installer");
+    Check(!EnvironmentCalls && !TimeZoneCalls && !strcmp(getenv("TZ"), "Etc/UTC"), "UA-only bootstrap changed localization");
+    Check([before isEqual:[NSUserDefaults.standardUserDefaults volatileDomainForName:NSArgumentDomain]], "UA-only bootstrap changed locale defaults");
+    if ([mode isEqual:@"ua-owner-conflict"]) {
+        CurrentBootstrap = SHDWWebUserAgentBootstrapMessage(Message(), @"18.7.1", @"other.app");
+        ExpectedEvent = Event();
+        xpc_dictionary_set_string(ExpectedEvent, "client-bundle-identifier", "other.app");
+        Check(SHDWWebUserAgentSnapshot(CurrentBootstrap, ExpectedEvent) != nil, "owner conflict fixture is not individually valid");
+        errno = ERANGE; CapturedHandler(ExpectedEvent);
+        Check(UserAgentInstalls == 1 && NativeCalls == 2 && CopyCalls == 2 && errno == ENOTTY,
+              "child changed frozen owner or failed to forward owner conflict");
+        Check(!EnvironmentCalls && !TimeZoneCalls, "owner conflict acquired localization side effects");
+    }
+    puts("UA child install ordering and owner isolation passed");
+}
+#if SHADOW_CURL_IMPERSONATE
 static void TransportParentTests(void) {
     Resolved = @{@"OverridesSystem":@NO}; TransportProfile = @"safari184_ios";
     SupportsPolicy = NO;
@@ -274,10 +345,16 @@ static void TransportParentTests(void) {
     Check(!xpc_dictionary_get_value(ReceivedMessage, "me.jjolano.shadow.transport.v1"), "transport payload reached rendering process");
     puts("native-localization transport bootstrap routing passed");
 }
+#endif
 int main(int argc, const char **argv) { @autoreleasepool {
     if (argc != 2) return 2;
     NSString *mode = @(argv[1]); if ([mode isEqual:@"parent"]) ParentTests();
-    else if ([mode isEqual:@"transport-parent"]) TransportParentTests(); else ChildTests(mode);
+    else if ([mode isEqual:@"ua-parent"]) UserAgentParentTests();
+    else if ([mode hasPrefix:@"ua-"]) UserAgentChildTests(mode);
+#if SHADOW_CURL_IMPERSONATE
+    else if ([mode isEqual:@"transport-parent"]) TransportParentTests();
+#endif
+    else ChildTests(mode);
 } return 0; }
 '''
 
@@ -292,12 +369,17 @@ with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as direc
     (temp / "Parent.inc").write_text(parent)
     (temp / "Child.inc").write_text(child)
     source, binary = temp / "main.m", temp / "check"
-    source.write_text('#import "Transport/Bootstrap.h"\n' + HARNESS)
-    subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-g",
-                    "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-framework", "Foundation", "-DSHADOW_CURL_IMPERSONATE=1",
-                    "-I", str(ROOT / "src"),
-                    "-I", str(ROOT / "src/Localization"), str(source), str(ROOT / "src/Localization/Environment.m"),
-                    str(ROOT / "src/Localization/Bootstrap.m"), str(ROOT / "src/Transport/Bootstrap.m"), "-o", str(binary)], check=True)
+    source.write_text('#import "Transport/Bootstrap.h"\n#import "WebUserAgent/Bootstrap.h"\n' + HARNESS)
     environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0", UBSAN_OPTIONS="halt_on_error=1")
-    for mode in ("parent", "transport-parent", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"):
-        subprocess.run([str(binary), mode], check=True, env=environment)
+    for curl_enabled in (0, 1):
+        subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-g",
+                        "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-framework", "Foundation", f"-DSHADOW_CURL_IMPERSONATE={curl_enabled}",
+                        "-I", str(ROOT / "src"),
+                        "-I", str(ROOT / "src/Localization"), str(source), str(ROOT / "src/Localization/Environment.m"),
+                        str(ROOT / "src/Localization/Bootstrap.m"), str(ROOT / "src/Transport/Bootstrap.m"),
+                        str(ROOT / "src/WebUserAgent/Bootstrap.m"), "-o", str(binary)], check=True)
+        modes = ["parent", "ua-parent", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
+        if curl_enabled:
+            modes.append("transport-parent")
+        for mode in modes:
+            subprocess.run([str(binary), mode], check=True, env=environment)

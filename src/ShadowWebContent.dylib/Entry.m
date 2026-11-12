@@ -4,6 +4,7 @@
 #import "../Localization/Environment.h"
 #import "../Localization/WebTimeZone.h"
 #import "../Localization/FunctionHook.h"
+#import "../WebUserAgent/Bootstrap.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <pthread.h>
@@ -19,6 +20,16 @@ static void SetHandler(xpc_connection_t connection, xpc_handler_t handler) {
     xpc_handler_t wrapped = handler ? ^(xpc_object_t event) {
         int eventErrno = errno;
         xpc_object_t bootstrap = xpc_copy_bootstrap ? xpc_copy_bootstrap() : nil;
+        NSDictionary *userAgent = SHDWWebUserAgentSnapshot(bootstrap, event);
+        if (userAgent) {
+            static pthread_mutex_t ownerLock = PTHREAD_MUTEX_INITIALIZER;
+            static NSString *owner;
+            pthread_mutex_lock(&ownerLock);
+            if (!owner) owner = [userAgent[@"Owner"] copy];
+            BOOL matches = [owner isEqualToString:userAgent[@"Owner"]];
+            pthread_mutex_unlock(&ownerLock);
+            if (matches) SHDWWebUserAgentInstall(userAgent[@"Version"]);
+        }
         NSDictionary *snapshot = SHDWLocalizationSnapshot(bootstrap, event);
         if (snapshot) {
             static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;

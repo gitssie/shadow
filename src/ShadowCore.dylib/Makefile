@@ -13,6 +13,8 @@ LIBRARY_NAME = ShadowCore
 
 ShadowCore_FILES = $(wildcard hooks/Universal/*.x) $(wildcard hooks/Adapters/*.x) hooks/Adapters/DeviceCheckHooks.m hooks/Universal/path_rewrite.c $(wildcard policy/*.m) shadowcore.x HookCoordinator.m SHDWHookSession.m HookAdapterBridge.m
 ShadowCore_FILES += ../Localization/Environment.m ../Localization/Bootstrap.m ../Localization/FunctionHook.m
+ShadowCore_FILES += ../WebUserAgent/Bootstrap.m policy/WebUserAgent.mm
+ShadowCore_CCFLAGS += -std=c++17
 ShadowCore_LIBRARIES = sandy
 ShadowCore_FRAMEWORKS = Foundation IOKit AdSupport
 ShadowCore_EXTRA_FRAMEWORKS = Shadow HookKit

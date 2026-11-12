@@ -3,7 +3,15 @@
 
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 bool SHDWLocalizationHookFunction(const char *symbol, void *target,
                                   void *replacement, void **original);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

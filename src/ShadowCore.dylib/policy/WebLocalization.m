@@ -2,6 +2,9 @@
 #import "FingerprintLocalization.h"
 #import "../../Localization/FunctionHook.h"
 #import "../../Localization/Bootstrap.h"
+#import "../../WebUserAgent/Bootstrap.h"
+#import "FingerprintStorage.h"
+#import "FingerprintPolicy.h"
 #if SHADOW_CURL_IMPERSONATE
 #import "../../Transport/Bootstrap.h"
 #import "FingerprintStorage.h"
@@ -15,6 +18,7 @@
 static void (*originalSetBootstrap)(xpc_connection_t, xpc_object_t);
 static NSString *ownerIdentifier;
 static NSDictionary *localizationSnapshot;
+static NSString *userAgentVersion;
 #if SHADOW_CURL_IMPERSONATE
 static NSString *transportProfile;
 #endif
@@ -28,6 +32,7 @@ static void SetBootstrap(xpc_connection_t connection, xpc_object_t bootstrap) {
             if (SHDWLocalizationIsWebContentService(xpc_connection_get_name(connection))) {
                 message = SHDWLocalizationBootstrapMessage(bootstrap,
                     localizationSnapshot, ownerIdentifier);
+                message = SHDWWebUserAgentBootstrapMessage(message, userAgentVersion, ownerIdentifier);
             }
 #if SHADOW_CURL_IMPERSONATE
             if (SHDWTransportIsNetworkingService(xpc_connection_get_name(connection)))
@@ -49,13 +54,19 @@ void SHDWFingerprintInstallWebLocalization(void) {
     if (__atomic_load_n(&ready, __ATOMIC_ACQUIRE)) return;
     NSDictionary *resolved = SHDWFingerprintLocalization();
     BOOL needsBootstrap = [resolved[@"OverridesSystem"] boolValue];
-#if SHADOW_CURL_IMPERSONATE
     SHADOW_INTERNAL_SCOPE {
         NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
+        if ([configuration[@"System"][@"Mode"] isEqual:@"profile"] &&
+            SHDWWebUserAgentVersionIsValid(SHDWFingerprintOSVersionString()))
+            userAgentVersion = [SHDWFingerprintOSVersionString() copy];
+#if SHADOW_CURL_IMPERSONATE
         if ([configuration[@"Network"][@"Transport"] isEqual:@"safari184_ios"] &&
             SHDWCurlTransportSupportsWebKitPolicy(NSBundle.mainBundle.infoDictionary[@"NSAppTransportSecurity"]))
             transportProfile = @"safari184_ios";
+#endif
     }
+    needsBootstrap |= userAgentVersion != nil;
+#if SHADOW_CURL_IMPERSONATE
     needsBootstrap |= transportProfile != nil;
 #endif
     if (!needsBootstrap) return;
