@@ -10,6 +10,7 @@ HARNESS = r'''
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <xpc/xpc.h>
+#import <Shadow/FingerprintConfiguration.h>
 #import "Bootstrap.h"
 #import "Environment.h"
 #include <dlfcn.h>
@@ -21,12 +22,15 @@ static void Check(BOOL value, const char *message) {
 static NSDictionary *Resolved;
 static NSString *TransportProfile;
 static NSString *SystemMode = @"native", *OSVersion = @"18.7.1";
+static id UserAgentOverride;
 #if SHADOW_CURL_IMPERSONATE
 static BOOL SupportsPolicy = YES;
 static BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) { (void)policy; return SupportsPolicy; }
 #endif
 static NSDictionary *SHDWFingerprintConfig(NSString *bundle) {
-    (void)bundle;return @{@"Network":@{@"Transport":TransportProfile ?: @"native"}, @"System":@{@"Mode":SystemMode}};
+    (void)bundle;NSMutableDictionary *configuration=[@{@"Network":@{@"Transport":TransportProfile ?: @"native"}, @"System":@{@"Mode":SystemMode}} mutableCopy];
+    if(UserAgentOverride)configuration[@"WebKit"]=@{@"OverrideUserAgent":UserAgentOverride};
+    return configuration;
 }
 static NSString *SHDWFingerprintOSVersionString(void) { return OSVersion; }
 BOOL SHDWWebUserAgentVersionIsValid(NSString *version) {
@@ -293,6 +297,32 @@ static void UserAgentParentTests(void) {
     Check(ReceivedMessage == original, "UA-only profile modified Networking launch");
     puts("UA-only native-localization parent bootstrap passed");
 }
+static void UserAgentDisabledParentTests(NSString *mode) {
+    BOOL locale = [mode isEqual:@"ua-disabled-locale"];
+    BOOL transport = [mode isEqual:@"ua-disabled-transport"];
+    SystemMode = @"profile"; UserAgentOverride = @NO;
+    Resolved = locale ? Custom() : @{@"OverridesSystem":@NO};
+    TransportProfile = transport ? @"safari184_ios" : nil;
+    SHDWFingerprintInstallWebLocalization();
+    Check(HookCalls == ((locale || transport) ? 1u : 0u), "disabled UA changed independent bootstrap activation");
+    if (!locale && !transport) {
+        Check(!SymbolLookups, "disabled UA activated bootstrap with native locale/transport");
+        return;
+    }
+    xpc_object_t original = Message();
+    SetBootstrap(FixtureConnection("com.apple.WebKit.WebContent"), original);
+    Check(!SHDWWebUserAgentSnapshot(ReceivedMessage, Event()), "disabled UA sent child source override");
+    Check((SHDWLocalizationSnapshot(ReceivedMessage, Event()) != nil) == locale, "UA switch changed locale routing");
+#if SHADOW_CURL_IMPERSONATE
+    if (transport) {
+        SetBootstrap(FixtureConnection("com.apple.WebKit.Networking"), original);
+        xpc_object_t event = Event();
+        xpc_dictionary_set_string(event, "service-name", "com.apple.WebKit.Networking");
+        Check([SHDWTransportSnapshot(ReceivedMessage, event)[@"Profile"] isEqual:@"safari184_ios"], "disabled UA removed transport profile");
+    }
+#endif
+    puts("disabled UA preserves independent localization and transport passed");
+}
 static void UserAgentChildTests(NSString *mode) {
     setenv("TZ", "Etc/UTC", 1); tzset();
     NSDictionary *before = [[NSUserDefaults.standardUserDefaults volatileDomainForName:NSArgumentDomain] copy];
@@ -350,6 +380,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     if (argc != 2) return 2;
     NSString *mode = @(argv[1]); if ([mode isEqual:@"parent"]) ParentTests();
     else if ([mode isEqual:@"ua-parent"]) UserAgentParentTests();
+    else if ([mode hasPrefix:@"ua-disabled"]) UserAgentDisabledParentTests(mode);
     else if ([mode hasPrefix:@"ua-"]) UserAgentChildTests(mode);
 #if SHADOW_CURL_IMPERSONATE
     else if ([mode isEqual:@"transport-parent"]) TransportParentTests();
@@ -374,12 +405,12 @@ with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as direc
     for curl_enabled in (0, 1):
         subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-g",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-framework", "Foundation", f"-DSHADOW_CURL_IMPERSONATE={curl_enabled}",
-                        "-I", str(ROOT / "src"),
+                        "-I", str(ROOT / "src"), "-I", str(ROOT / "src/Shadow.framework/Headers"),
                         "-I", str(ROOT / "src/Localization"), str(source), str(ROOT / "src/Localization/Environment.m"),
                         str(ROOT / "src/Localization/Bootstrap.m"), str(ROOT / "src/Transport/Bootstrap.m"),
-                        str(ROOT / "src/WebUserAgent/Bootstrap.m"), "-o", str(binary)], check=True)
-        modes = ["parent", "ua-parent", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
+                        str(ROOT / "src/WebUserAgent/Bootstrap.m"), str(ROOT / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary)], check=True)
+        modes = ["parent", "ua-parent", "ua-disabled", "ua-disabled-locale", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
         if curl_enabled:
-            modes.append("transport-parent")
+            modes.extend(["transport-parent", "ua-disabled-transport"])
         for mode in modes:
             subprocess.run([str(binary), mode], check=True, env=environment)

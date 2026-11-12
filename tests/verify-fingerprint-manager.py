@@ -1,5 +1,6 @@
 """Execute the shared manager API and production Settings against an isolated suite."""
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,21 @@ framework = root / "src/Shadow.framework"
 def without_imports(path):
     return "\n".join(line for line in path.read_text().splitlines()
                      if not line.startswith("#import"))
+
+ui = (root / "src/Shadow.app/Screens/Fingerprint/FingerprintDetailViewController.m").read_text()
+assert "return section == 0 ? 8 : 2;" in ui
+ua_row = ui.split("else if (indexPath.row == 7) {", 1)[1].split("} else {", 1)[0]
+assert "overridesWebUserAgentForConfiguration:configuration" in ua_row
+assert "toggle.enabled = !locked" in ua_row
+assert '@"fingerprint.web-user-agent"' in ua_row
+assert "@selector(webUserAgentChanged:)" in ua_row
+assert "indexPath.row > 6) return;" in ui
+for language in ("en", "zh-Hans"):
+    strings = (root / f"src/Shadow.app/Resources/{language}.lproj/Localizable.strings").read_text()
+    assert '"Web UA" =' in strings
+assert "titleForFooterInSection" not in ui
+handler = re.search(r"- \(void\)webUserAgentChanged:\(UISwitch \*\)toggle \{.*?\n\}", ui, re.S)
+assert handler, "Manager must persist the WebView UA switch"
 
 source = r'''
 #import <Foundation/Foundation.h>
@@ -84,6 +100,77 @@ source += "\n" + without_imports(framework / "Fingerprint/Profile.m")
 source += "\n" + without_imports(framework / "Fingerprint/Configuration.m")
 source += "\n" + without_imports(framework / "Fingerprint/Store.m")
 source += r'''
+@interface UISwitch : NSObject
+@property(nonatomic) BOOL on;
+@end
+@implementation UISwitch
+@end
+@interface UAStoreDouble : NSObject
+@property(nonatomic, copy) NSDictionary *configuration;
++ (instancetype)sharedStore;
+- (NSDictionary *)configurationForApplication:(NSString *)identifier;
+@end
+@implementation UAStoreDouble
++ (instancetype)sharedStore { static UAStoreDouble *store; if (!store) store = [self new]; return store; }
+- (NSDictionary *)configurationForApplication:(NSString *)identifier { assert([identifier isEqual:@"ua.app"]); return self.configuration; }
+@end
+@interface UAControllerDouble : NSObject
+@property(nonatomic, copy) NSString *bundleIdentifier;
+@property(nonatomic) BOOL saveFails;
+- (BOOL)saveConfiguration:(NSDictionary *)configuration;
+- (void)webUserAgentChanged:(UISwitch *)toggle;
+@end
+@implementation UAControllerDouble
+- (BOOL)saveConfiguration:(NSDictionary *)configuration {
+    if (self.saveFails) return NO;
+    UAStoreDouble.sharedStore.configuration = configuration; return YES;
+}
+'''
+source += handler.group(0).replace("[SHDWFingerprintStore sharedStore]", "[UAStoreDouble sharedStore]")
+source += r'''
+@end
+static void verifyWebUserAgentManager(void) {
+    NSMutableDictionary *legacy = [[SHDWFingerprintConfiguration defaultConfiguration] mutableCopy];
+    assert([legacy[@"WebKit"][@"OverrideUserAgent"] isEqual:@YES]);
+    [legacy removeObjectForKey:@"WebKit"];
+    NSDictionary *normalized = [SHDWFingerprintConfiguration configurationByValidating:legacy error:NULL];
+    assert(normalized && [normalized[@"WebKit"][@"OverrideUserAgent"] isEqual:@YES]);
+    legacy[@"WebKit"] = @{};
+    normalized = [SHDWFingerprintConfiguration configurationByValidating:legacy error:NULL];
+    assert(normalized && [normalized[@"WebKit"][@"OverrideUserAgent"] isEqual:@YES]);
+    for (id invalid in @[NSNull.null, @"false", @[], @NO, @{@"Other":@YES},
+                         @{@"OverrideUserAgent":NSNull.null}, @{@"OverrideUserAgent":@"false"},
+                         @{@"OverrideUserAgent":@0}, @{@"OverrideUserAgent":@1}, @{@"OverrideUserAgent":@2}]) {
+        legacy[@"WebKit"] = invalid;
+        assert(![SHDWFingerprintConfiguration configurationByValidating:legacy error:NULL]);
+    }
+    for (NSNumber *enabled in @[@YES, @NO]) {
+        legacy[@"WebKit"] = @{@"OverrideUserAgent":enabled};
+        normalized = [SHDWFingerprintConfiguration configurationByValidating:legacy error:NULL];
+        assert(normalized && [normalized[@"WebKit"][@"OverrideUserAgent"] isEqual:enabled]);
+    }
+    assert([SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:@{}]);
+    assert([SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:@{@"WebKit":@{}}]);
+    assert(![SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:@{@"WebKit":@{@"OverrideUserAgent":@NO}}]);
+    UAStoreDouble *store = UAStoreDouble.sharedStore;
+    UAControllerDouble *controller = [UAControllerDouble new]; controller.bundleIdentifier = @"ua.app";
+    UISwitch *toggle = [UISwitch new];
+    NSDictionary *original = @{@"System":@{@"Mode":@"native"}, @"WebKit":@{@"FutureField":@"preserved", @"OverrideUserAgent":@YES}};
+    store.configuration = original; toggle.on = NO; [controller webUserAgentChanged:toggle];
+    assert([store.configuration[@"WebKit"][@"FutureField"] isEqual:@"preserved"]);
+    assert(![store.configuration[@"WebKit"][@"OverrideUserAgent"] boolValue]);
+    assert([store.configuration[@"System"] isEqual:original[@"System"]]);
+    assert([original[@"WebKit"][@"OverrideUserAgent"] boolValue]);
+    NSDictionary *beforeFailure = store.configuration;
+    controller.saveFails = YES; toggle.on = YES; [controller webUserAgentChanged:toggle];
+    assert(!toggle.on && store.configuration == beforeFailure);
+    controller.saveFails = NO; store.configuration = @{@"System":@{@"Mode":@"native"}};
+    toggle.on = NO; [controller webUserAgentChanged:toggle];
+    assert(![store.configuration[@"WebKit"][@"OverrideUserAgent"] boolValue]);
+    toggle.on = YES; [controller webUserAgentChanged:toggle];
+    assert([store.configuration[@"WebKit"][@"OverrideUserAgent"] boolValue]);
+    puts("fingerprint manager WebView UA: defaults, UI lock contract, field preservation, legacy save and rollback passed");
+}
 @interface FailingDefaults : NSObject
 @property(nonatomic, strong) NSMutableDictionary *values;
 @property(nonatomic) NSUInteger failures;
@@ -103,6 +190,7 @@ source += r'''
 - (void)removeObjectForKey:(NSString *)key { [self.values removeObjectForKey:key]; self.pendingWrite = YES; }
 @end
 int main(int argc, const char **argv) { @autoreleasepool {
+  verifyWebUserAgentManager();
   if (argc == 2 && !strcmp(argv[1], "--migration-write")) {
     NSUserDefaults *fixture = [[NSUserDefaults alloc] initWithSuiteName:@SHADOW_PREFS_PLIST];
     [fixture setPersistentDomain:@{
@@ -472,6 +560,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   NSMutableDictionary *chosen = [configuration mutableCopy];
   chosen[@"Network"] = @{@"RadioTechnologies":@[]};
   chosen[@"Receipts"] = @{@"InterceptEnabled":@NO};
+  chosen[@"WebKit"] = @{@"OverrideUserAgent":@NO};
   assert([store setEnabled:NO forApplication:@"config.legacy" error:&error]);
   assert([store setConfiguration:chosen forApplication:@"config.legacy" error:&error]);
   assert([[store profileForBundleIdentifier:@"config.legacy"] isEqual:a]);
@@ -479,6 +568,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([savedConfig[@"UpdatedAt"] doubleValue] > 0);
   assert([savedConfig[@"Network"][@"RadioTechnologies"] count] == 0);
   assert(![savedConfig[@"Receipts"][@"InterceptEnabled"] boolValue]);
+  assert(![SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:savedConfig]);
+  assert([savedConfig[@"WebKit"][@"OverrideUserAgent"] isEqual:@NO]);
   assert([store setLocked:YES forApplication:@"config.legacy" error:&error]);
   NSDictionary *lockedConfigApp = [defaults dictionaryForKey:@"config.legacy"];
   assert(![store setConfiguration:configuration forApplication:@"config.legacy" error:&error] && error.code == 6);

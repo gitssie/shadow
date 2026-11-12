@@ -57,6 +57,7 @@ fingerprint = fingerprint.replace("// if(applies) shdw_fingerprint_webkit_clipbo
 prefix = r'''
 #import <Foundation/Foundation.h>
 static BOOL nativeSystemMode;
+static id userAgentOverride;
 static unsigned sourceInstallCalls, sourceCallsAtNativeInit;
 static NSString *sourceInstalledVersion;
 BOOL SHDWWebUserAgentInstall(NSString *version) { sourceInstallCalls++;sourceInstalledVersion=[version copy];return YES; }
@@ -64,7 +65,9 @@ void SHDWFingerprintInstallWebLocalization(void) {}
 NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
     (void)bundleID;
     if(nativeSystemMode)return @{@"System":@{@"Mode":@"native"}};
-    return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
+    NSMutableDictionary *configuration=[@{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}} mutableCopy];
+    if(userAgentOverride)configuration[@"WebKit"]=@{@"OverrideUserAgent":userAgentOverride};
+    return configuration;
 }
 
 #import <Shadow/FingerprintConfiguration.h>
@@ -375,7 +378,15 @@ static void verify_hooks(void) {
     unsigned before=sourceInstallCalls;
     shdw_fingerprint_enabled=NO;shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
     shdw_fingerprint_enabled=YES;nativeSystemMode=YES;shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
-    nativeSystemMode=NO;shdw_fingerprint_webkit_prepare_user_agent();
+    nativeSystemMode=NO;userAgentOverride=@NO;
+    shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
+    for(unsigned coder=0;coder<2;coder++) {
+        WKWebView *nativeView=newView(coder);
+        assert(sourceInstallCalls==before && !nativeView.storedCustomUA && !nativeView.nativeWrites);
+    }
+    userAgentOverride=@YES;shdw_fingerprint_webkit_prepare_user_agent();
+    assert(sourceInstallCalls==before+1);before=sourceInstallCalls;
+    userAgentOverride=nil;shdw_fingerprint_webkit_prepare_user_agent();
     assert(sourceInstallCalls==before+1 && [sourceInstalledVersion isEqual:@"18.7.1"]);
     for(unsigned coder = 0; coder < 2; coder++) {
         before=sourceInstallCalls;

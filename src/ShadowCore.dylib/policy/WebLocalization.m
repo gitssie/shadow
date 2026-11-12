@@ -1,4 +1,5 @@
 #import "WebLocalization.h"
+#import <Shadow/FingerprintConfiguration.h>
 #import "FingerprintLocalization.h"
 #import "../../Localization/FunctionHook.h"
 #import "../../Localization/Bootstrap.h"
@@ -57,6 +58,7 @@ void SHDWFingerprintInstallWebLocalization(void) {
     SHADOW_INTERNAL_SCOPE {
         NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
         if ([configuration[@"System"][@"Mode"] isEqual:@"profile"] &&
+            [SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:configuration] &&
             SHDWWebUserAgentVersionIsValid(SHDWFingerprintOSVersionString()))
             userAgentVersion = [SHDWFingerprintOSVersionString() copy];
 #if SHADOW_CURL_IMPERSONATE

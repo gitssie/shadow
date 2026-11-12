@@ -162,7 +162,12 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   return @{@"Version":@1, @"System":system,
     @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},
     @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"perApp"},
+    @"WebKit":@{@"OverrideUserAgent":@YES},
     @"Localization":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"}};
+}
++ (BOOL)overridesWebUserAgentForConfiguration:(NSDictionary *)configuration {
+  id value = configuration[@"WebKit"][@"OverrideUserAgent"];
+  return !value || [value boolValue];
 }
 + (NSArray<NSDictionary *> *)allSystemProfiles {
   static NSArray<NSDictionary *> *profiles;
@@ -329,10 +334,17 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
 }
 
 + (NSDictionary *)configurationByValidating:(id)value error:(NSError **)error {
-  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts"], @[@"UpdatedAt",@"Advertising",@"Localization"]))
+  if (!SHDWConfigurationKeys(value, @[@"Version",@"System",@"Network",@"Receipts"], @[@"UpdatedAt",@"Advertising",@"Localization",@"WebKit"]))
     return SHDWConfigurationInvalid(error);
   NSDictionary *localization = SHDWConfigurationLocalization(value[@"Localization"]);
   if (!localization) return SHDWConfigurationInvalid(error);
+  id webKit = value[@"WebKit"];
+  if (webKit && !SHDWConfigurationKeys(webKit, @[], @[@"OverrideUserAgent"]))
+    return SHDWConfigurationInvalid(error);
+  id overrideUserAgent = webKit[@"OverrideUserAgent"];
+  if (overrideUserAgent && (![overrideUserAgent isKindOfClass:NSNumber.class] ||
+      CFGetTypeID((__bridge CFTypeRef)overrideUserAgent) != CFBooleanGetTypeID()))
+    return SHDWConfigurationInvalid(error);
   NSNumber *version = value[@"Version"], *updated = value[@"UpdatedAt"];
   if (![version isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)version) == CFBooleanGetTypeID() ||
       version.doubleValue != 1 || (updated && (![updated isKindOfClass:NSNumber.class] ||
@@ -366,6 +378,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
     return SHDWConfigurationInvalid(error);
   NSMutableDictionary *normalized = [value mutableCopy];
   normalized[@"Localization"] = localization;
+  normalized[@"WebKit"] = @{@"OverrideUserAgent":@([self overridesWebUserAgentForConfiguration:value])};
   return [NSPropertyListSerialization propertyListWithData:
     [NSPropertyListSerialization dataWithPropertyList:normalized format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil]
     options:NSPropertyListImmutable format:NULL error:nil];

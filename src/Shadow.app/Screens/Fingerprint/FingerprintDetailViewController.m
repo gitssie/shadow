@@ -64,7 +64,7 @@
 }
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.tableView reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 3; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return section == 0 ? 7 : 2; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return section == 0 ? 8 : 2; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil]; cell.selectionStyle = UITableViewCellSelectionStyleNone; cell.textLabel.textColor = SHDWInk(); cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; cell.detailTextLabel.font = cell.textLabel.font; cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     if (indexPath.section == 0) {
@@ -72,9 +72,9 @@
         NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
         BOOL locked = [store lockedForApplication:self.bundleIdentifier];
         NSDictionary *localization = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration];
-        NSArray *labels = @[@"iOS", SHDWText(@"Region"), SHDWText(@"Time zone"), SHDWText(@"Language"), SHDWText(@"Network"), SHDWText(@"Receipt interception"), SHDWText(@"Advertising tracking")];
+        NSArray *labels = @[@"iOS", SHDWText(@"Region"), SHDWText(@"Time zone"), SHDWText(@"Language"), SHDWText(@"Network"), SHDWText(@"Receipt interception"), SHDWText(@"Advertising tracking"), SHDWText(@"Web UA")];
         cell.textLabel.text = labels[indexPath.row];
-        cell.accessibilityIdentifier = @[@"fingerprint.system", @"fingerprint.region", @"fingerprint.time-zone", @"fingerprint.language", @"fingerprint.network", @"fingerprint.receipts-row", @"fingerprint.advertising-mode"][indexPath.row];
+        cell.accessibilityIdentifier = @[@"fingerprint.system", @"fingerprint.region", @"fingerprint.time-zone", @"fingerprint.language", @"fingerprint.network", @"fingerprint.receipts-row", @"fingerprint.advertising-mode", @"fingerprint.web-user-agent-row"][indexPath.row];
         if (indexPath.row == 0) {
             NSDictionary *profile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
             cell.detailTextLabel.text = profile[@"Version"] ?: UIDevice.currentDevice.systemVersion;
@@ -89,6 +89,11 @@
         } else if (indexPath.row == 6) {
             NSString *mode=configuration[@"Advertising"][@"Mode"] ?: @"perApp";
             cell.detailTextLabel.text=SHDWText([mode isEqual:@"zero"] ? @"Disable tracking" : [mode isEqual:@"system"] ? @"Follow system" : @"Advertising fingerprint");
+        } else if (indexPath.row == 7) {
+            UISwitch *toggle = [UISwitch new]; toggle.onTintColor = SHDWAccent();
+            toggle.on = [SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:configuration]; toggle.enabled = !locked;
+            toggle.accessibilityIdentifier = @"fingerprint.web-user-agent";
+            [toggle addTarget:self action:@selector(webUserAgentChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         } else {
             UISwitch *toggle = [UISwitch new]; toggle.onTintColor = SHDWAccent(); toggle.on = [configuration[@"Receipts"][@"InterceptEnabled"] boolValue]; toggle.enabled = !locked;
             toggle.accessibilityIdentifier = @"fingerprint.receipts"; [toggle addTarget:self action:@selector(receiptsChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
@@ -122,6 +127,13 @@
     BOOL saved = [[SHDWFingerprintStore sharedStore] setConfiguration:configuration forApplication:self.bundleIdentifier error:&error];
     if (!saved) SHDWShowError(self.navigationController.topViewController ?: self, error);
     [self.tableView reloadData]; return saved;
+}
+- (void)webUserAgentChanged:(UISwitch *)toggle {
+    NSMutableDictionary *configuration = [[[SHDWFingerprintStore sharedStore] configurationForApplication:self.bundleIdentifier] mutableCopy];
+    NSMutableDictionary *webKit = [configuration[@"WebKit"] mutableCopy] ?: [NSMutableDictionary new];
+    webKit[@"OverrideUserAgent"] = @(toggle.on);
+    configuration[@"WebKit"] = webKit;
+    if (![self saveConfiguration:configuration]) toggle.on = !toggle.on;
 }
 - (void)receiptsChanged:(UISwitch *)toggle {
     NSMutableDictionary *configuration = [[[SHDWFingerprintStore sharedStore] configurationForApplication:self.bundleIdentifier] mutableCopy];

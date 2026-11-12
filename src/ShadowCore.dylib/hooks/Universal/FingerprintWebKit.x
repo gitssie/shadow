@@ -4,6 +4,7 @@
 #import "../../policy/FingerprintPolicy.h"
 #import "../../policy/FingerprintStorage.h"
 #import "../../policy/WebUserAgent.h"
+#import <Shadow/FingerprintConfiguration.h>
 #import "../../policy/WebLocalization.h"
 #include <errno.h>
 
@@ -112,7 +113,8 @@ static void shdw_fingerprint_webkit_prepare_user_agent(void) {
     int saved = errno;
     SHADOW_INTERNAL_SCOPE {
         NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
-        if([configuration[@"System"][@"Mode"] isEqual:@"profile"])
+        if([configuration[@"System"][@"Mode"] isEqual:@"profile"] &&
+           [SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:configuration])
             SHDWWebUserAgentInstall(SHDWFingerprintOSVersionString());
         SHDWFingerprintInstallWebLocalization();
     }
