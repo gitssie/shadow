@@ -28,8 +28,9 @@ static NSString *xpcString(xpc_object_t value) {
 }
 
 xpc_object_t SHDWTransportBootstrapMessage(xpc_object_t original, NSString *profile, NSString *owner) {
+    NSString *selectedProfile = validatedString(profile);
     if (!original || xpc_get_type(original) != XPC_TYPE_DICTIONARY ||
-        ![validatedString(profile) isEqualToString:@"safari184_ios"]) return original;
+        !SHDWTransportProfileIsSupported(selectedProfile)) return original;
     NSString *identity = validatedString(owner);
     if (!identity) return original;
     xpc_object_t message = xpc_copy(original);
@@ -37,7 +38,7 @@ xpc_object_t SHDWTransportBootstrapMessage(xpc_object_t original, NSString *prof
     xpc_object_t payload = xpc_dictionary_create(NULL, NULL, 0);
     if (!payload) return original;
     xpc_dictionary_set_uint64(payload, "version", 1);
-    xpc_dictionary_set_string(payload, "profile", "safari184_ios");
+    xpc_dictionary_set_string(payload, "profile", selectedProfile.UTF8String);
     xpc_dictionary_set_string(payload, "owner-bundle-identifier", identity.UTF8String);
     xpc_dictionary_set_value(message, payloadKey, payload);
     return message;
@@ -56,6 +57,6 @@ NSDictionary *SHDWTransportSnapshot(xpc_object_t bootstrap, xpc_object_t event) 
     NSString *owner = xpcString(xpc_dictionary_get_value(payload, "owner-bundle-identifier"));
     NSString *profile = xpcString(xpc_dictionary_get_value(payload, "profile"));
     if (![message isEqualToString:@"bootstrap"] || !SHDWTransportIsNetworkingService(service.UTF8String) ||
-        !owner || ![owner isEqualToString:client] || ![profile isEqualToString:@"safari184_ios"]) return nil;
+        !owner || ![owner isEqualToString:client] || !SHDWTransportProfileIsSupported(profile)) return nil;
     return @{@"Profile":profile, @"Owner":owner};
 }

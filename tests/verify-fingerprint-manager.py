@@ -15,7 +15,12 @@ def without_imports(path):
                      if not line.startswith("#import"))
 
 ui = (root / "src/Shadow.app/Screens/Fingerprint/FingerprintDetailViewController.m").read_text()
-assert "return section == 0 ? 8 : 2;" in ui
+assert "return section == 0 ? 9 : 2;" in ui
+row_count = int(re.search(r"return section == 0 \? (\d+) : 2;", ui).group(1))
+label_expression = re.search(r"NSArray \*labels = (@\[.*?\]);", ui).group(1)
+identifier_expression = re.search(r"cell.accessibilityIdentifier = (@\[.*?\])\[indexPath.row\];", ui).group(1)
+assert 'SHDWText(@"TLS fingerprint")' in label_expression
+
 ua_row = ui.split("else if (indexPath.row == 7) {", 1)[1].split("} else {", 1)[0]
 assert "overridesWebUserAgentForConfiguration:configuration" in ua_row
 assert "toggle.enabled = !locked" in ua_row
@@ -26,6 +31,12 @@ for language in ("en", "zh-Hans"):
     strings = (root / f"src/Shadow.app/Resources/{language}.lproj/Localizable.strings").read_text()
     assert '"Web UA" =' in strings
 assert "titleForFooterInSection" not in ui
+tls_row = ui.split("else if (indexPath.row == 8) {", 1)[1].split("} else if", 1)[0]
+assert "usesCurlTransportForConfiguration:configuration" in tls_row
+assert "toggle.enabled = !locked" in tls_row
+assert '@"fingerprint.tls"' in tls_row and "@selector(tlsChanged:)" in tls_row
+tls_handler = re.search(r"- \(void\)tlsChanged:\(UISwitch \*\)toggle \{.*?\n\}", ui, re.S)
+assert tls_handler
 handler = re.search(r"- \(void\)webUserAgentChanged:\(UISwitch \*\)toggle \{.*?\n\}", ui, re.S)
 assert handler, "Manager must persist the WebView UA switch"
 
@@ -99,6 +110,12 @@ NSDictionary *SHDWFingerprintInputsForData(NSDictionary *data) {
 source += "\n" + without_imports(framework / "Fingerprint/Profile.m")
 source += "\n" + without_imports(framework / "Fingerprint/Configuration.m")
 source += "\n" + without_imports(framework / "Fingerprint/Store.m")
+source += "\nstatic void verifyManagerRowCatalog(void) {\n"
+source += "NSArray *labels = " + label_expression.replace("SHDWText(", "(") + ";\n"
+source += "NSArray *identifiers = " + identifier_expression + ";\n"
+source += f"assert(labels.count == {row_count} && identifiers.count == {row_count});\n"
+source += "for (NSUInteger row=0; row<labels.count; row++) { assert([labels[row] length]); assert([identifiers[row] length]); }\n"
+source += 'assert([labels[8] isEqual:@"TLS fingerprint"]); assert([identifiers[8] isEqual:@"fingerprint.tls-row"]);\n}\n'
 source += r'''
 @interface UISwitch : NSObject
 @property(nonatomic) BOOL on;
@@ -119,6 +136,7 @@ source += r'''
 @property(nonatomic) BOOL saveFails;
 - (BOOL)saveConfiguration:(NSDictionary *)configuration;
 - (void)webUserAgentChanged:(UISwitch *)toggle;
+- (void)tlsChanged:(UISwitch *)toggle;
 @end
 @implementation UAControllerDouble
 - (BOOL)saveConfiguration:(NSDictionary *)configuration {
@@ -126,6 +144,7 @@ source += r'''
     UAStoreDouble.sharedStore.configuration = configuration; return YES;
 }
 '''
+source += tls_handler.group(0).replace("[SHDWFingerprintStore sharedStore]", "[UAStoreDouble sharedStore]")
 source += handler.group(0).replace("[SHDWFingerprintStore sharedStore]", "[UAStoreDouble sharedStore]")
 source += r'''
 @end
@@ -169,6 +188,22 @@ static void verifyWebUserAgentManager(void) {
     assert(![store.configuration[@"WebKit"][@"OverrideUserAgent"] boolValue]);
     toggle.on = YES; [controller webUserAgentChanged:toggle];
     assert([store.configuration[@"WebKit"][@"OverrideUserAgent"] boolValue]);
+    NSDictionary *networkOriginal = @{@"Network":@{@"RadioTechnologies":@[@"5g"], @"FutureField":@"preserved"}, @"WebKit":@{@"OverrideUserAgent":@NO}};
+    store.configuration = networkOriginal; toggle.on = YES; [controller tlsChanged:toggle];
+    assert([store.configuration[@"Network"][@"Transport"] isEqual:@"auto"]);
+    assert([store.configuration[@"Network"][@"RadioTechnologies"] isEqual:networkOriginal[@"Network"][@"RadioTechnologies"]]);
+    assert([store.configuration[@"Network"][@"FutureField"] isEqual:@"preserved"]);
+    assert([store.configuration[@"WebKit"] isEqual:networkOriginal[@"WebKit"]]);
+    assert(!networkOriginal[@"Network"][@"Transport"]);
+    beforeFailure = store.configuration; controller.saveFails = YES;
+    toggle.on = NO; [controller tlsChanged:toggle];
+    assert(toggle.on && store.configuration == beforeFailure);
+    controller.saveFails = NO; toggle.on = NO; [controller tlsChanged:toggle];
+    assert([store.configuration[@"Network"][@"Transport"] isEqual:@"native"]);
+    assert(![SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:store.configuration]);
+    toggle.on = YES; [controller webUserAgentChanged:toggle];
+    assert([store.configuration[@"Network"][@"Transport"] isEqual:@"native"]);
+    puts("fingerprint manager TLS: field preservation, UA independence and rollback passed");
     puts("fingerprint manager WebView UA: defaults, UI lock contract, field preservation, legacy save and rollback passed");
 }
 @interface FailingDefaults : NSObject
@@ -190,6 +225,7 @@ static void verifyWebUserAgentManager(void) {
 - (void)removeObjectForKey:(NSString *)key { [self.values removeObjectForKey:key]; self.pendingWrite = YES; }
 @end
 int main(int argc, const char **argv) { @autoreleasepool {
+  verifyManagerRowCatalog();
   verifyWebUserAgentManager();
   if (argc == 2 && !strcmp(argv[1], "--migration-write")) {
     NSUserDefaults *fixture = [[NSUserDefaults alloc] initWithSuiteName:@SHADOW_PREFS_PLIST];
@@ -558,7 +594,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([registeredConfig[@"UpdatedAt"] doubleValue] > 0);
   assert(![store profileForBundleIdentifier:@"config.new"]);
   NSMutableDictionary *chosen = [configuration mutableCopy];
-  chosen[@"Network"] = @{@"RadioTechnologies":@[]};
+  chosen[@"Network"] = @{@"RadioTechnologies":@[], @"Transport":@"auto"};
   chosen[@"Receipts"] = @{@"InterceptEnabled":@NO};
   chosen[@"WebKit"] = @{@"OverrideUserAgent":@NO};
   assert([store setEnabled:NO forApplication:@"config.legacy" error:&error]);
@@ -567,6 +603,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   NSDictionary *savedConfig = [store configurationForApplication:@"config.legacy"];
   assert([savedConfig[@"UpdatedAt"] doubleValue] > 0);
   assert([savedConfig[@"Network"][@"RadioTechnologies"] count] == 0);
+  assert([SHDWFingerprintConfiguration usesCurlTransportForConfiguration:savedConfig]);
   assert(![savedConfig[@"Receipts"][@"InterceptEnabled"] boolValue]);
   assert(![SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:savedConfig]);
   assert([savedConfig[@"WebKit"][@"OverrideUserAgent"] isEqual:@NO]);

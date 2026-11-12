@@ -62,9 +62,9 @@ void SHDWFingerprintInstallWebLocalization(void) {
             SHDWWebUserAgentVersionIsValid(SHDWFingerprintOSVersionString()))
             userAgentVersion = [SHDWFingerprintOSVersionString() copy];
 #if SHADOW_CURL_IMPERSONATE
-        if ([configuration[@"Network"][@"Transport"] isEqual:@"safari184_ios"] &&
-            SHDWCurlTransportSupportsWebKitPolicy(NSBundle.mainBundle.infoDictionary[@"NSAppTransportSecurity"]))
-            transportProfile = @"safari184_ios";
+        if (SHDWCurlTransportSupportsWebKitPolicy(NSBundle.mainBundle.infoDictionary[@"NSAppTransportSecurity"]))
+            transportProfile = [SHDWFingerprintConfiguration curlTransportProfileForConfiguration:configuration
+                systemVersion:SHDWFingerprintOSVersionString()];
 #endif
     }
     needsBootstrap |= userAgentVersion != nil;

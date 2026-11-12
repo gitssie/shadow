@@ -131,6 +131,7 @@ verify-fingerprint:
 .PHONY: verify-fingerprint
 
 verify-curl-transport:
+	python3 verify-curl-profile-selection.py
 	python3 verify-curl-transport.py
 	python3 verify-curl-initialization.py
 	python3 verify-transport-bootstrap.py

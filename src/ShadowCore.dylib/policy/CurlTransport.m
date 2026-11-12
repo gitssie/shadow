@@ -1,4 +1,5 @@
 #import "CurlTransport.h"
+#import "../../Transport/Profiles.h"
 #import <Shadow/JBPath.h>
 
 #if SHADOW_CURL_IMPERSONATE
@@ -15,6 +16,7 @@ static NSString *const SHDWCurlBody = @"me.jjolano.shadow.transport.body";
 static NSString *const SHDWCurlTrustContext = @"me.jjolano.shadow.transport.webkit-trust";
 static NSString *const SHDWCurlSessionContext = @"me.jjolano.shadow.transport.session";
 static unsigned transportReady;
+static NSString *transportProfile;
 static struct {
     CURLcode (*initialize)(long);
     CURL *(*create)(void);
@@ -280,7 +282,7 @@ BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) {
     if (SHDWCurlStopped(self)) return;
     CURL *curl = engine.create();
     self.transfer = curl;
-    CURLcode result = curl ? engine.impersonate(curl, "safari184_ios", 0) : CURLE_OUT_OF_MEMORY;
+    CURLcode result = curl ? engine.impersonate(curl, transportProfile.UTF8String, 0) : CURLE_OUT_OF_MEMORY;
     struct curl_slist *headers = NULL;
     NSData *body = self.request.HTTPBody ?: (self.request.HTTPBodyStream ?
         [NSURLProtocol propertyForKey:SHDWCurlBody inRequest:self.request] : nil);
@@ -384,10 +386,13 @@ BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) {
 @end
 
 void SHDWCurlTransportPrepareProfile(NSString *profile) {
-    if (![profile isEqual:@"safari184_ios"]) return;
+    if (!SHDWTransportProfileIsSupported(profile)) return;
+    NSString *selectedProfile = [profile copy];
+    if (!SHDWTransportProfileIsSupported(selectedProfile)) return;
     static unsigned attempted;
     unsigned expected = 0;
     if (!__atomic_compare_exchange_n(&attempted, &expected, 1, NO, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    transportProfile = selectedProfile;
     void *image = dlopen(JBPath(@"/usr/lib/shadow/curl/libcurl-impersonate.4.dylib").fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
     if (!image) return;
 #define SHDW_CURL_SYMBOL(field, name) engine.field = dlsym(image, name); if (!engine.field) return
@@ -404,7 +409,7 @@ void SHDWCurlTransportPrepareProfile(NSString *profile) {
 #undef SHDW_CURL_SYMBOL
     if (engine.initialize(CURL_GLOBAL_DEFAULT) != CURLE_OK) return;
     CURL *probe = engine.create(); if (!probe) return;
-    BOOL available = engine.impersonate(probe, "safari184_ios", 0) == CURLE_OK;
+    BOOL available = engine.impersonate(probe, transportProfile.UTF8String, 0) == CURLE_OK;
     engine.destroy(probe);
     if (available) { __atomic_store_n(&transportReady, 1, __ATOMIC_RELEASE); [NSURLProtocol registerClass:SHDWSafari184Protocol.class]; }
 }

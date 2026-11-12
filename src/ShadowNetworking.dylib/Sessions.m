@@ -1,4 +1,5 @@
 #import "Sessions.h"
+#import "../Transport/Profiles.h"
 #import "../ShadowCore.dylib/SHDWHookSession.h"
 #import "../ShadowCore.dylib/policy/CurlTransport.h"
 #include <stdlib.h>
@@ -51,7 +52,7 @@ static BOOL InstallRequests(Class cls, SEL selector, BOOL completion) {
 }
 
 BOOL SHDWNetworkingInstall(NSDictionary *snapshot) {
-    if (![snapshot[@"Profile"] isEqual:@"safari184_ios"] || ![snapshot[@"Owner"] length]) return NO;
+    if (!SHDWTransportProfileIsSupported(snapshot[@"Profile"]) || ![snapshot[@"Owner"] length]) return NO;
     @synchronized(NSURLSession.class) {
         if (processSnapshot) return installSucceeded && [processSnapshot isEqual:snapshot];
         SHDWCurlTransportPrepareProfile(snapshot[@"Profile"]);

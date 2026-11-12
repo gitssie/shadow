@@ -68,8 +68,10 @@ static unsigned performed,destroyed,httpRequests;
 static BOOL redirectMode,cancelMode;
 static CURLcode transferResult;
 static CURL *create(void) { sentBody=NULL;sentSize=0;prerequisiteCallback=NULL;prerequisiteContext=NULL;return (CURL *)1; }
+static const char *expectedProfile="safari184_ios";
+static unsigned impersonations;
 static CURLcode impersonate(CURL *curl,const char *profile,int headers) {
-  assert(curl==(CURL *)1 && !strcmp(profile,"safari184_ios") && headers==0);return CURLE_OK;
+  assert(curl==(CURL *)1 && !strcmp(profile,expectedProfile) && headers==0);impersonations++;return CURLE_OK;
 }
 static CURLcode set(CURL *curl,CURLoption option,...) {
   assert(curl==(CURL *)1);va_list args;va_start(args,option);
@@ -180,7 +182,10 @@ static SHDWSafari184Protocol *protocol(NSURLRequest *request,NSURLSessionConfigu
   SHDWSafari184Protocol *p=[[SHDWSafari184Protocol alloc] initWithRequest:request cachedResponse:nil client:client];
   p.callbackLock=[NSRecursiveLock new];p.settings=settings;return p;
 }
-int main(void) { @autoreleasepool {
+int main(int argc,char **argv) { @autoreleasepool {
+  if(argc>1)expectedProfile=argv[1];
+  assert(SHDWTransportProfileIsSupported(@(expectedProfile)));
+  transportProfile=[@(expectedProfile) copy];
   engine.create=create;engine.impersonate=impersonate;engine.set=set;engine.perform=perform;engine.destroy=destroy;
   engine.append=append;engine.freeHeaders=freeHeaders;engine.error=errorText;engine.info=info;
   __atomic_store_n(&transportReady,1,__ATOMIC_RELEASE);
@@ -280,7 +285,7 @@ int main(void) { @autoreleasepool {
   session.delegateQueue.suspended=NO;[session.delegateQueue waitUntilAllOperationsAreFinished];trustTimeout=NO;
   assert(trustDelegate.sessionCalls==sessionCallsBefore && trustDelegate.taskCalls==taskCallsBefore);
   assert([client.events isEqual:eventsBefore] && !client.response && !client.data.length && httpRequests==requestsBefore);
-  assert(performed==destroyed);
+  assert(performed==destroyed && impersonations==performed && impersonations>0);
   puts("curl transport: request/body isolation, redirects, cookies, decoding, cancellation, pre-HTTP trust rejection and session-over-task auth precedence passed");
 } }
 '''
@@ -291,4 +296,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-curl-tests-") as temporary:
                     "-fsanitize=address,undefined", "-framework", "Foundation", "-framework", "CFNetwork", "-framework", "Security",
                     "-I", str(dependency / "include"), "-I", str(root / "src/Shadow.framework/Headers"),
                     "-I", str(root / "src/ShadowCore.dylib/policy"), str(source_path), "-o", str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    for profile in ("safari172_ios", "safari180_ios", "safari184_ios"):
+        subprocess.run([str(binary), profile], check=True)

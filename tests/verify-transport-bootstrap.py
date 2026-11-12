@@ -35,13 +35,21 @@ int main(void) { @autoreleasepool {
     assert(SHDWTransportBootstrapMessage(wrong,@"safari184_ios",@"test.Owner")==wrong);
     assert(SHDWTransportBootstrapMessage(original,nil,@"test.Owner")==original);
     assert(SHDWTransportBootstrapMessage(original,@"safari184_ios",nil)==original);
-    for(id profile in @[@"native",@"unknown",@"",@"safari184_ios\n",@1,NSNull.null])
+    for(id profile in @[@"native",@"auto",@"unknown",@"",@"safari184_ios\n",@1,NSNull.null])
         assert(SHDWTransportBootstrapMessage(original,profile,@"test.Owner")==original);
     NSString *longString=[@"a" stringByPaddingToLength:256 withString:@"a" startingAtIndex:0];
     NSString *nul=[[NSString alloc] initWithBytes:"test\0Owner" length:10 encoding:NSUTF8StringEncoding];
     NSString *multiByte=[@"é" stringByPaddingToLength:128 withString:@"é" startingAtIndex:0];
     for(id owner in @[@"",@1,NSNull.null,@"test\nOwner",@"test\tOwner",longString,nul,multiByte])
         assert(SHDWTransportBootstrapMessage(original,@"safari184_ios",owner)==original);
+    for (NSString *profile in @[@"safari172_ios", @"safari180_ios", @"safari184_ios"]) {
+        NSMutableString *mutableProfile=[profile mutableCopy];
+        xpc_object_t launchMessage=SHDWTransportBootstrapMessage(original,mutableProfile,@"test.Owner");
+        [mutableProfile setString:@"changed"];
+        NSDictionary *selected=SHDWTransportSnapshot(launchMessage,event());
+        assert([selected[@"Profile"] isEqual:profile]);
+        assert(!strcmp(xpc_dictionary_get_string(original,key),"prior"));
+    }
     NSMutableString *owner=[@"test.Owner" mutableCopy];
     xpc_object_t message=SHDWTransportBootstrapMessage(original,@"safari184_ios",owner);
     [owner setString:@"changed.Owner"];
@@ -83,7 +91,7 @@ int main(void) { @autoreleasepool {
     xpc_object_t bad=bootstrap();payload=xpc_dictionary_get_value(bad,key);
     xpc_dictionary_set_int64(payload,"version",1);assert(!SHDWTransportSnapshot(bad,event()));
     bad=bootstrap();xpc_dictionary_set_string(bad,key,"wrong");assert(!SHDWTransportSnapshot(bad,event()));
-    for(NSString *profile in @[@"native",@"unknown",@"",@"safari184_ios\n"]){
+    for(NSString *profile in @[@"native",@"auto",@"unknown",@"",@"safari184_ios\n"]){
         bad=bootstrap();payload=xpc_dictionary_get_value(bad,key);
         xpc_dictionary_set_string(payload,"profile",profile.UTF8String);assert(!SHDWTransportSnapshot(bad,event()));
     }

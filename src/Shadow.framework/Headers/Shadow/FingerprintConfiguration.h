@@ -3,6 +3,8 @@ NS_ASSUME_NONNULL_BEGIN
 __attribute__((visibility("default")))
 @interface SHDWFingerprintConfiguration : NSObject
 + (NSDictionary *)defaultConfiguration;
++ (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration;
++ (nullable NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(nullable NSString *)systemVersion;
 // Missing legacy fields retain the enabled WebKit default-UA policy.
 + (BOOL)overridesWebUserAgentForConfiguration:(NSDictionary *)configuration;
 // Linked selection presets; stored configurations retain their language semantics.

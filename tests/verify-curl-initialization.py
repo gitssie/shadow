@@ -20,7 +20,8 @@ source = r'''
 #include <string.h>
 #include "CurlTransport.h"
 static unsigned loads,lookups,initializations,creates,probes,destroys,reentries;
-static const char *mode="success",*missing;
+static const char *mode="success",*missing,*expectedProfile="safari184_ios";
+static NSMutableString *callerProfile;
 static CURLcode initialize(long flags) {
     assert(flags==CURL_GLOBAL_DEFAULT && !SHDWCurlTransportReady());initializations++;
     return !strcmp(mode,"init") ? CURLE_FAILED_INIT : CURLE_OK;
@@ -30,7 +31,7 @@ static CURL *create(void) {
     return !strcmp(mode,"create") ? NULL : (CURL *)1;
 }
 static CURLcode impersonate(CURL *curl,const char *profile,int defaultHeaders) {
-    assert(curl==(CURL *)1 && !strcmp(profile,"safari184_ios") && defaultHeaders==0);
+    assert(curl==(CURL *)1 && !strcmp(profile,expectedProfile) && defaultHeaders==0);
     assert(!SHDWCurlTransportReady());probes++;
     return !strcmp(mode,"preset") ? CURLE_BAD_FUNCTION_ARGUMENT : CURLE_OK;
 }
@@ -46,7 +47,10 @@ static void *openImage(const char *path,int flags) {
     assert(flags==(RTLD_NOW|RTLD_LOCAL) && !SHDWCurlTransportReady());loads++;
     assert(loads==1);
     // A blocking dispatch_once guard deadlocks here, inside the first load.
-    SHDWCurlTransportPrepareProfile(@"safari184_ios");reentries++;
+    [callerProfile setString:@"changed-after-snapshot"];
+    for (NSString *profile in @[@"safari172_ios",@"safari180_ios",@"safari184_ios"])
+        SHDWCurlTransportPrepareProfile(profile);
+    reentries++;
     assert(loads==1 && !SHDWCurlTransportReady() && !lookups && !initializations);
     return !strcmp(mode,"load") ? NULL : (void *)2;
 }
@@ -77,14 +81,18 @@ BOOL SHDWCurlEvaluateTrust(NSArray<NSData *> *certificates,NSString *host,NSInte
 }
 int main(int argc,char **argv) { @autoreleasepool {
     if(argc>1) mode=argv[1];
-    if(argc>2) missing=argv[2];
+    if(argc>2 && *argv[2]) missing=argv[2];
+    if(argc>3) expectedProfile=argv[3];
     assert(!SHDWCurlTransportReady());
     for(id profile in @[NSNull.null,@"native",@"unknown",@"",@"safari184_ios\n"]) {
         SHDWCurlTransportPrepareProfile(profile);assert(!loads && !SHDWCurlTransportReady());
     }
     SHDWCurlTransportPrepareProfile(nil);assert(!loads);
-    SHDWCurlTransportPrepareProfile(@"safari184_ios");
+    callerProfile=[@(expectedProfile) mutableCopy];
+    SHDWCurlTransportPrepareProfile(callerProfile);
     assert(loads==1 && reentries==1);
+    assert([callerProfile isEqual:@"changed-after-snapshot"]);
+    assert([transportProfile isEqual:@(expectedProfile)]);
     BOOL expected=!strcmp(mode,"success");assert(SHDWCurlTransportReady()==expected);
     if(expected) assert(lookups==10 && initializations==1 && creates==1 && probes==1 && destroys==1);
     if(missing) assert(!initializations && !creates && !probes && !destroys);
@@ -93,10 +101,12 @@ int main(int argc,char **argv) { @autoreleasepool {
     if(!strcmp(mode,"preset")) assert(initializations==1 && creates==1 && probes==1 && destroys==1);
     if(!strcmp(mode,"load")) assert(!lookups && !initializations);
     unsigned beforeLookups=lookups,beforeInitializations=initializations,beforeCreates=creates,beforeProbes=probes;
-    for(unsigned attempt=0;attempt<3;attempt++) SHDWCurlTransportPrepareProfile(@"safari184_ios");
+    for(unsigned attempt=0;attempt<3;attempt++)
+        for(NSString *profile in @[@"safari172_ios",@"safari180_ios",@"safari184_ios"])
+            SHDWCurlTransportPrepareProfile(profile);
     SHDWCurlTransportPrepareProfile(@"native");
     assert(loads==1 && reentries==1 && lookups==beforeLookups && initializations==beforeInitializations && creates==beforeCreates && probes==beforeProbes);
-    assert(SHDWCurlTransportReady()==expected);
+    assert(SHDWCurlTransportReady()==expected && [transportProfile isEqual:@(expectedProfile)]);
 } }
 '''
 with tempfile.TemporaryDirectory(prefix="shadow-curl-initialization-") as temporary:
@@ -107,10 +117,11 @@ with tempfile.TemporaryDirectory(prefix="shadow-curl-initialization-") as tempor
                     "-framework", "Security", "-I", str(dependency / "include"),
                     "-I", str(root / "src/Shadow.framework/Headers"),
                     "-I", str(root / "src/ShadowCore.dylib/policy"), str(test), "-o", str(binary)], check=True)
-    for mode in ("success", "load", "init", "create", "preset"):
-        subprocess.run([str(binary), mode], check=True, timeout=20)
-    for symbol in ("curl_global_init", "curl_easy_init", "curl_easy_impersonate", "curl_easy_setopt",
-                   "curl_easy_perform", "curl_easy_getinfo", "curl_easy_cleanup", "curl_slist_append",
-                   "curl_slist_free_all", "curl_easy_strerror"):
-        subprocess.run([str(binary), "missing", symbol], check=True, timeout=20)
-    print("curl initialization: reentrant load, ready publication, single attempt, unsupported profiles, all missing symbols and init/preset refusal passed")
+    for profile in ("safari172_ios", "safari180_ios", "safari184_ios"):
+        for mode in ("success", "load", "init", "create", "preset"):
+            subprocess.run([str(binary), mode, "", profile], check=True, timeout=20)
+        for symbol in ("curl_global_init", "curl_easy_init", "curl_easy_impersonate", "curl_easy_setopt",
+                       "curl_easy_perform", "curl_easy_getinfo", "curl_easy_cleanup", "curl_slist_append",
+                       "curl_slist_free_all", "curl_easy_strerror"):
+            subprocess.run([str(binary), "missing", symbol, profile], check=True, timeout=20)
+    print("curl initialization: all three presets, immutable profile freeze, conflicting/reentrant prepares, ready publication and every load/init/preset refusal passed")

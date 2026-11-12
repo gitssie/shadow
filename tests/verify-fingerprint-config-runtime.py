@@ -66,6 +66,23 @@ hostname_source = (root / "src/ShadowCore.dylib/hooks/Universal/libc_antidebuggi
 source += "\n" + hostname_source[hostname_source.index("int (*original_gethostname)"):hostname_source.index("int replaced_uname(")]
 source += r'''
 int main(void) { @autoreleasepool {
+  NSDictionary *transportAuto = @{@"Network":@{@"Transport":@"auto"}};
+  NSDictionary *transportLegacy = @{@"Network":@{@"Transport":@"safari184_ios"}};
+  for (NSDictionary *off in @[@{}, @{@"Network":@{}}, @{@"Network":@{@"Transport":@"native"}}, SHDWFingerprintConfiguration.defaultConfiguration]) {
+    assert(![SHDWFingerprintConfiguration usesCurlTransportForConfiguration:off]);
+    assert(![SHDWFingerprintConfiguration curlTransportProfileForConfiguration:off systemVersion:@"18.7"]);
+  }
+  for (NSDictionary *enabled in @[transportAuto, transportLegacy]) {
+    assert([SHDWFingerprintConfiguration usesCurlTransportForConfiguration:enabled]);
+    for (NSArray *pair in @[@[@"16.0.3",@"safari172_ios"], @[@"16.7.2",@"safari172_ios"],
+        @[@"17.7.2",@"safari172_ios"], @[@"18.0",@"safari180_ios"], @[@"18.0.1",@"safari180_ios"],
+        @[@"18.3",@"safari180_ios"], @[@"18.3.9",@"safari180_ios"], @[@"18.4",@"safari184_ios"],
+        @[@"18.4.0",@"safari184_ios"], @[@"18.10",@"safari184_ios"], @[@"18.7.8",@"safari184_ios"], @[@"19.0",@"safari184_ios"]])
+      assert([[SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:pair[0]] isEqual:pair[1]]);
+    for (id invalid in @[@"",@"18",@"18.",@".18",@"18..4",@"18.4.0.1",@"18.4beta",@" 18.4",@"18.4\n",@"１８.４",@"18.-4",@18,NSNull.null])
+      assert(![SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:invalid]);
+    assert(![SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:nil]);
+  }
   original_gethostname = nativeHostname;
   mappedHostname = YES; char hostname[128] = {0}; errno=EBUSY;
   assert(replaced_gethostname(hostname, 7) == 0);
@@ -106,6 +123,15 @@ int main(void) { @autoreleasepool {
   assert(!strcmp(value.version, nativeSystem[@"Kernel"] ? [nativeSystem[@"Kernel"] UTF8String] : "native-kernel"));
   assert(!strcmp(value.nodename, "iPhone") && !strcmp(value.machine, "iPhone9,2"));
   NSMutableDictionary *chosen = [fixture mutableCopy];
+  for (NSString *transport in @[@"native", @"auto", @"safari184_ios"]) {
+    chosen[@"Network"] = @{@"RadioTechnologies":@[@"5g"], @"Transport":transport};
+    NSDictionary *normalized = [SHDWFingerprintConfiguration configurationByValidating:chosen error:nil];
+    assert([normalized[@"Network"][@"Transport"] isEqual:transport]);
+  }
+  for (id invalidTransport in @[@"safari172_ios", @"safari180_ios", @"AUTO", @YES, @{}, NSNull.null]) {
+    chosen[@"Network"] = @{@"RadioTechnologies":@[@"5g"], @"Transport":invalidTransport};
+    assert(![SHDWFingerprintConfiguration configurationByValidating:chosen error:nil]);
+  }
   chosen[@"Network"] = @{@"RadioTechnologies":@[@"4g",@"5g"],@"Transport":@"safari184_ios"};
   assert([SHDWFingerprintConfiguration configurationByValidating:chosen error:NULL]);
   chosen[@"Network"] = @{@"RadioTechnologies":@[],@"Transport":@"safari184"};

@@ -19,6 +19,7 @@ source = r'''
 #include <assert.h>
 #import "Bootstrap.h"
 static unsigned hookCount, prepared, configured, captured, nativeRequests;
+static NSString *selectedProfile;
 static BOOL ready=YES, webKitBundle=YES;
 static NSURLSessionConfiguration *seenConfiguration;
 static NSURLRequest *seenRequest;
@@ -70,7 +71,7 @@ static NSBundle *testBundle(id cls,SEL sel,Class target) {
     }
     return originalBundle(cls,sel,target);
 }
-static void SHDWCurlTransportPrepareProfile(NSString *profile) { assert([profile isEqual:@"safari184_ios"]);prepared++; }
+static void SHDWCurlTransportPrepareProfile(NSString *profile) { assert([profile isEqual:selectedProfile]);prepared++; }
 static BOOL SHDWCurlTransportReady(void) { return ready; }
 static NSURLSessionConfiguration *SHDWCurlTransportConfiguration(NSURLSessionConfiguration *configuration) {
     configured++;NSURLSessionConfiguration *copy=[configuration copy];copy.timeoutIntervalForRequest=17;return copy;
@@ -100,9 +101,10 @@ static xpc_object_t event(const char *service,const char *owner) {
     xpc_dictionary_set_string(e,"service-name",service);
     xpc_dictionary_set_string(e,"client-bundle-identifier",owner);return e;
 }
-int main(void) { @autoreleasepool {
+int main(int argc,const char **argv) { @autoreleasepool {
+    selectedProfile = argc > 1 ? @(argv[1]) : @"safari184_ios";
     (void)FixtureInstall;
-    launchBootstrap=SHDWTransportBootstrapMessage(xpc_dictionary_create(NULL,NULL,0),@"safari184_ios",@"test.Owner");
+    launchBootstrap=SHDWTransportBootstrapMessage(xpc_dictionary_create(NULL,NULL,0),selectedProfile,@"test.Owner");
     nativeSetHandler=recordHandler;
     __block unsigned forwarded=0;
     __block BOOL expectInstalled=NO;
@@ -112,14 +114,14 @@ int main(void) { @autoreleasepool {
     errno=ERANGE;installedHandler(event("com.apple.WebKit.WebContent","test.Owner"));
     installedHandler(event("com.apple.WebKit.Networking","wrong.Owner"));
     assert(!hookCount && !prepared && forwarded==2);
-    ready=NO;assert(!SHDWNetworkingInstall(@{@"Profile":@"safari184_ios",@"Owner":@"test.Owner"}));assert(!hookCount);
+    ready=NO;assert(!SHDWNetworkingInstall(@{@"Profile":selectedProfile,@"Owner":@"test.Owner"}));assert(!hookCount);
     ready=YES;expectInstalled=YES;
     installedHandler(event("com.apple.WebKit.Networking","test.Owner"));
     assert(forwarded==3 && processSnapshot && hookCount==5);
     unsigned hooks=hookCount,preparations=prepared;
     installedHandler(event("com.apple.WebKit.Networking","test.Owner"));
     assert(hookCount==hooks && prepared==preparations);
-    assert(!SHDWNetworkingInstall(@{@"Profile":@"safari184_ios",@"Owner":@"other.Owner"}));
+    assert(!SHDWNetworkingInstall(@{@"Profile":selectedProfile,@"Owner":@"other.Owner"}));
     assert(hookCount==hooks && [processSnapshot[@"Owner"] isEqual:@"test.Owner"]);
     Method method=class_getClassMethod(NSBundle.class,@selector(bundleForClass:));
     originalBundle=(void *)method_setImplementation(method,(IMP)testBundle);
@@ -157,4 +159,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-networking-session-") as tempora
                     "-Wno-pointer-bool-conversion", "-fsanitize=address,undefined", "-framework", "Foundation",
                     "-I", str(root / "src/Transport"), str(test), str(root / "src/Transport/Bootstrap.m"),
                     "-o", str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    for profile in ("safari172_ios", "safari180_ios", "safari184_ios"):
+        subprocess.run([str(binary), profile], check=True)

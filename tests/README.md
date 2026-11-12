@@ -46,8 +46,13 @@ establish TLS wire behavior; that requires a device and a real endpoint.
 
 The experimental adapter is packaged with
 `SHADOW_CURL_IMPERSONATE=1 ./build.sh rootless` after dependency preparation. It
-uses curl-impersonate v2.3.2's `safari184_ios` preset when the application's saved
-`Network.Transport` is `safari184_ios`; absent or `native` keeps native networking.
+uses curl-impersonate v2.3.2. The Manager's TLS fingerprint switch saves
+`Network.Transport=auto`; absent or `native` keeps native networking. The legacy
+`safari184_ios` setting remains enabled and now follows automatic selection.
+Selection uses the saved system fingerprint version: below 18.0 selects
+`safari172_ios`, 18.0 through 18.3 selects `safari180_ios`, and 18.4 or later
+selects `safari184_ios`. These are available preset approximations. Both App
+and Networking processes freeze the selected preset at startup.
 Eligible foreground NSURLSession HTTPS requests use the adapter. The optional
 Networking component applies the same transport to supported WebKit sessions
 after receiving a matching launch snapshot. It forwards server-trust decisions

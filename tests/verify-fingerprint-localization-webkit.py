@@ -356,8 +356,11 @@ static void UserAgentChildTests(NSString *mode) {
     puts("UA child install ordering and owner isolation passed");
 }
 #if SHADOW_CURL_IMPERSONATE
-static void TransportParentTests(void) {
-    Resolved = @{@"OverridesSystem":@NO}; TransportProfile = @"safari184_ios";
+static void TransportParentTests(NSString *mode) {
+    Resolved = @{@"OverridesSystem":@NO}; TransportProfile = @"auto";
+    if ([mode isEqual:@"transport-172"]) OSVersion = @"17.2.1";
+    if ([mode isEqual:@"transport-180"]) OSVersion = @"18.3.1";
+    NSString *expectedProfile = [SHDWFingerprintConfiguration curlTransportProfileForConfiguration:SHDWFingerprintConfig(@"local.sdkprobe.app") systemVersion:OSVersion];
     SupportsPolicy = NO;
     SHDWFingerprintInstallWebLocalization();
     Check(HookCalls == 0, "unsupported trust policy activated transport bootstrap");
@@ -369,7 +372,7 @@ static void TransportParentTests(void) {
     SetBootstrap(network, original);
     xpc_object_t event = Event();
     xpc_dictionary_set_string(event, "service-name", "com.apple.WebKit.Networking");
-    Check([SHDWTransportSnapshot(ReceivedMessage, event)[@"Profile"] isEqual:@"safari184_ios"], "transport profile not delivered");
+    Check([SHDWTransportSnapshot(ReceivedMessage, event)[@"Profile"] isEqual:expectedProfile], "transport profile not delivered");
     Check(!xpc_dictionary_get_value(original, "me.jjolano.shadow.transport.v1"), "original launch message mutated");
     SetBootstrap(FixtureConnection("com.apple.WebKit.WebContent"), original);
     Check(!xpc_dictionary_get_value(ReceivedMessage, "me.jjolano.shadow.transport.v1"), "transport payload reached rendering process");
@@ -383,7 +386,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     else if ([mode hasPrefix:@"ua-disabled"]) UserAgentDisabledParentTests(mode);
     else if ([mode hasPrefix:@"ua-"]) UserAgentChildTests(mode);
 #if SHADOW_CURL_IMPERSONATE
-    else if ([mode isEqual:@"transport-parent"]) TransportParentTests();
+    else if ([mode hasPrefix:@"transport-"]) TransportParentTests(mode);
 #endif
     else ChildTests(mode);
 } return 0; }
@@ -411,6 +414,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as direc
                         str(ROOT / "src/WebUserAgent/Bootstrap.m"), str(ROOT / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary)], check=True)
         modes = ["parent", "ua-parent", "ua-disabled", "ua-disabled-locale", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
         if curl_enabled:
-            modes.extend(["transport-parent", "ua-disabled-transport"])
+            modes.extend(["transport-parent", "transport-172", "transport-180", "ua-disabled-transport"])
         for mode in modes:
             subprocess.run([str(binary), mode], check=True, env=environment)

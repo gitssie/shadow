@@ -160,10 +160,33 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
     }
   }
   return @{@"Version":@1, @"System":system,
-    @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},
+    @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"], @"Transport":@"native"},
     @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"perApp"},
     @"WebKit":@{@"OverrideUserAgent":@YES},
     @"Localization":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"}};
+}
++ (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration {
+  id transport = configuration[@"Network"][@"Transport"];
+  return [transport isEqual:@"auto"] || [transport isEqual:@"safari184_ios"];
+}
++ (NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(NSString *)systemVersion {
+  if (![self usesCurlTransportForConfiguration:configuration] || ![systemVersion isKindOfClass:NSString.class] ||
+      !systemVersion.length || systemVersion.length > 32) return nil;
+  NSArray<NSString *> *parts = [systemVersion componentsSeparatedByString:@"."];
+  if (parts.count < 2 || parts.count > 3) return nil;
+  NSUInteger numbers[3] = {0};
+  for (NSUInteger index = 0; index < parts.count; index++) {
+    NSString *part = parts[index];
+    if (!part.length) return nil;
+    for (NSUInteger offset = 0; offset < part.length; offset++) {
+      unichar digit = [part characterAtIndex:offset];
+      if (digit < '0' || digit > '9') return nil;
+      numbers[index] = MIN((NSUInteger)1000, numbers[index] * 10 + digit - '0');
+    }
+  }
+  if (numbers[0] < 18) return @"safari172_ios";
+  if (numbers[0] == 18 && numbers[1] < 4) return @"safari180_ios";
+  return @"safari184_ios";
 }
 + (BOOL)overridesWebUserAgentForConfiguration:(NSDictionary *)configuration {
   id value = configuration[@"WebKit"][@"OverrideUserAgent"];
@@ -354,7 +377,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   if (!SHDWConfigurationKeys(system,@[@"Mode"],@[@"ProfileID"]) ||
       !SHDWConfigurationKeys(network,@[@"RadioTechnologies"],@[@"Transport"]) ||
       !SHDWConfigurationKeys(receipts,@[@"InterceptEnabled"],@[])) return SHDWConfigurationInvalid(error);
-  if (network[@"Transport"] && ![@[@"native", @"safari184_ios"] containsObject:network[@"Transport"]])
+  if (network[@"Transport"] && ![@[@"native", @"auto", @"safari184_ios"] containsObject:network[@"Transport"]])
     return SHDWConfigurationInvalid(error);
   if ([system[@"Mode"] isEqual:@"native"]) {
     if (system[@"ProfileID"]) return SHDWConfigurationInvalid(error);

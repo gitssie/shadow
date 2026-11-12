@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "Profiles.h"
 #include <xpc/xpc.h>
 
 BOOL SHDWTransportIsNetworkingService(const char *service);
