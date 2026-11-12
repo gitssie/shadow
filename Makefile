@@ -12,6 +12,7 @@ SUBPROJECTS += src/Shadow.dylib
 SUBPROJECTS += src/ShadowCore.dylib
 SUBPROJECTS += src/ShadowSettings.bundle
 ifneq ($(SHADOW_LANE),rootful-legacy)
+SUBPROJECTS += src/ShadowWebContent.dylib
 SUBPROJECTS += src/Shadow.app
 SUBPROJECTS += src/ShadowCleaner
 endif

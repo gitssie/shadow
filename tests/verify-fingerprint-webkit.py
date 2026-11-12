@@ -26,7 +26,8 @@ def function(source, signature):
 # Production keeps the native UA hooks and retains clipboard implementation dormant.
 production = re.sub(r"//[^\n]*", "", fingerprint)
 prepare = function(production, "void shdw_universal_fingerprint_webkit_prepare(")
-assert re.findall(r"%init\(([^,]+),", prepare) == ["shadowhook_fingerprint_webkit"]
+assert re.findall(r"%init\((\w+)[,)]", prepare) == [
+    "shadowhook_fingerprint_webkit"]
 assert "shdw_fingerprint_webkit_clipboard_prepare(" not in prepare
 clipboard_prepare = function(production, "static void __attribute__((unused)) shdw_fingerprint_webkit_clipboard_prepare(")
 assert set(re.findall(r"%init\(([^,]+),", clipboard_prepare)) == {

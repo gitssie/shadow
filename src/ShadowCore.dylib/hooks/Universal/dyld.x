@@ -1497,6 +1497,9 @@ static void replaced_dyld_register_for_image_loads(void (*func)(const struct mac
 static void replaced_dyld_register_for_bulk_image_loads(void (*func)(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]));
 static void* replaced_dlsym(void* handle, const char* symbol);
 static int replaced_dladdr(const void* addr, Dl_info* info);
+static void* replaced_CFBundleGetFunctionPointerForName(CFBundleRef bundle, CFStringRef functionName);
+static void replaced_CFBundleGetFunctionPointersForNames(CFBundleRef bundle, CFArrayRef functionNames, void* ftbl[]);
+static void* replaced_CFBundleGetDataPointerForName(CFBundleRef bundle, CFStringRef symbolName);
 
 // dyld_process_state values (dyld_process_info.h is macOS-only; the ABI is a
 // plain enum — not_started=0, running=1, done=2). Defined here, before the
@@ -1536,6 +1539,9 @@ static int replaced_NSCreateObjectFileImageFromFile(const char* pathName, void* 
 // Sorted by name (strcmp order) for bsearch — keep it sorted when adding
 // entries, or lookups silently miss.
 static const shdw_sym_policy_entry_t shdw_sym_policy_table[] = {
+    { "CFBundleGetDataPointerForName", (void *)&replaced_CFBundleGetDataPointerForName },
+    { "CFBundleGetFunctionPointerForName", (void *)&replaced_CFBundleGetFunctionPointerForName },
+    { "CFBundleGetFunctionPointersForNames", (void *)&replaced_CFBundleGetFunctionPointersForNames },
     { "NSAddImage", (void *)&replaced_NSAddImage },
     { "NSCreateObjectFileImageFromFile", (void *)&replaced_NSCreateObjectFileImageFromFile },
     { "NSLookupSymbolInImage", (void *)&replaced_NSLookupSymbolInImage },
@@ -1714,6 +1720,8 @@ static void* replaced_dlsym(void* handle, const char* symbol) {
 
         if(!extra) extra = shdw_sym_policy_lookup_network(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_system_version(symbol);
+        if(!extra) extra = shdw_sym_policy_lookup_localization(symbol);
+        if(!extra) extra = shdw_sym_policy_lookup_web_localization(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_fingerprint(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_syscall(symbol);
 
@@ -1885,11 +1893,7 @@ static BOOL shdw_cfbundle_denied(CFBundleRef bundle) {
     return denied;
 }
 
-static void* shdw_cfbundle_attributed(void* addr, CFStringRef symbolName) {
-    if(addr && shdw_addr_is_restricted(addr)) {
-        return NULL;
-    }
-
+static void* shdw_cfbundle_symbol_replacement(CFStringRef symbolName) {
     if(symbolName) {
         char name[256];
 
@@ -1922,6 +1926,8 @@ static void* shdw_cfbundle_attributed(void* addr, CFStringRef symbolName) {
 
             if(!extra) extra = shdw_sym_policy_lookup_network(name);
             if(!extra) extra = shdw_sym_policy_lookup_system_version(name);
+            if(!extra) extra = shdw_sym_policy_lookup_localization(name);
+            if(!extra) extra = shdw_sym_policy_lookup_web_localization(name);
             if(!extra) extra = shdw_sym_policy_lookup_fingerprint(name);
             if(!extra) extra = shdw_sym_policy_lookup_syscall(name);
 
@@ -1931,7 +1937,15 @@ static void* shdw_cfbundle_attributed(void* addr, CFStringRef symbolName) {
         }
     }
 
-    return addr;
+    return NULL;
+}
+
+static void* shdw_cfbundle_attributed(void* addr, CFStringRef symbolName) {
+    if(!addr) return NULL;
+    void *replacement = shdw_cfbundle_symbol_replacement(symbolName);
+    if(addr && addr == replacement) return replacement;
+    if(addr && shdw_addr_is_restricted(addr)) return NULL;
+    return replacement ?: addr;
 }
 
 static void* (*original_CFBundleGetFunctionPointerForName)(CFBundleRef bundle, CFStringRef functionName);
@@ -3268,15 +3282,26 @@ void shdw_universal_dynamic_libraries_extra(SHDWHookSession* hooks) {
     }
 }
 
+static void shdw_install_cfbundle_lookup(SHDWHookSession *hooks, NSString *symbol,
+    void *function, void *replacement, void **original) {
+    if(![hooks hookFunction:function withReplacement:replacement outOldPtr:original] && !*original)
+        *original = function;
+    [hooks hookRebindSymbol:symbol withReplacement:replacement outOldPtr:NULL];
+}
+
 void shdw_universal_symlookup(SHDWHookSession* hooks) {
+    shdw_install_cfbundle_lookup(hooks, @"CFBundleGetFunctionPointerForName",
+        CFBundleGetFunctionPointerForName, replaced_CFBundleGetFunctionPointerForName,
+        (void **)&original_CFBundleGetFunctionPointerForName);
+    shdw_install_cfbundle_lookup(hooks, @"CFBundleGetFunctionPointersForNames",
+        CFBundleGetFunctionPointersForNames, replaced_CFBundleGetFunctionPointersForNames,
+        (void **)&original_CFBundleGetFunctionPointersForNames);
+    shdw_install_cfbundle_lookup(hooks, @"CFBundleGetDataPointerForName",
+        CFBundleGetDataPointerForName, replaced_CFBundleGetDataPointerForName,
+        (void **)&original_CFBundleGetDataPointerForName);
     if(![hooks hookFunction:dlsym withReplacement:replaced_dlsym outOldPtr:(void **) &original_dlsym]) {
         [hooks hookRebindSymbol:@"dlsym" withReplacement:replaced_dlsym outOldPtr:(void **) &original_dlsym];
     }
-
-    // CFBundle symbol-resolution wrappers.
-    [hooks hookFunction:CFBundleGetFunctionPointerForName withReplacement:replaced_CFBundleGetFunctionPointerForName outOldPtr:(void **) &original_CFBundleGetFunctionPointerForName];
-    [hooks hookFunction:CFBundleGetFunctionPointersForNames withReplacement:replaced_CFBundleGetFunctionPointersForNames outOldPtr:(void **) &original_CFBundleGetFunctionPointersForNames];
-    [hooks hookFunction:CFBundleGetDataPointerForName withReplacement:replaced_CFBundleGetDataPointerForName outOldPtr:(void **) &original_CFBundleGetDataPointerForName];
 }
 
 void shdw_universal_symaddrlookup(SHDWHookSession* hooks) {

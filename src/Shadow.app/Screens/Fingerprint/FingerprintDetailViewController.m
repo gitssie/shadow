@@ -4,30 +4,49 @@
 #import <Shadow/FingerprintConfiguration.h>
 
 // A selection stays local until Done; the store enforces the lock again on save.
-@interface SHDWConfigurationSelectionController : UITableViewController
+@interface SHDWConfigurationSelectionController : UITableViewController <UISearchResultsUpdating>
 @property(nonatomic, copy) NSArray<NSDictionary *> *options;
 @property(nonatomic, strong) NSMutableSet<NSString *> *selection;
 @property(nonatomic) BOOL multiple;
+@property(nonatomic) BOOL searchable;
+@property(nonatomic, copy) NSArray<NSDictionary *> *filteredOptions;
+@property(nonatomic, strong) UISearchController *searchController;
 @property(nonatomic, copy) BOOL (^saveSelection)(NSSet<NSString *> *selection);
 @end
 @implementation SHDWConfigurationSelectionController
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.backgroundColor = SHDWBackground(); self.tableView.rowHeight = 46;
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:SHDWText(@"Done") style:UIBarButtonItemStyleDone target:self action:@selector(done)];
+    self.filteredOptions = self.options;
+    if (self.searchable) {
+        self.searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
+        self.searchController.searchResultsUpdater = self; self.searchController.obscuresBackgroundDuringPresentation = NO;
+        self.searchController.searchBar.placeholder = SHDWText(@"Search");
+        self.navigationItem.searchController = self.searchController; self.navigationItem.hidesSearchBarWhenScrolling = NO;
+        self.definesPresentationContext = YES;
+    }
 }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.options.count; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.filteredOptions.count; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    NSDictionary *option = self.options[indexPath.row];
+    NSDictionary *option = self.filteredOptions[indexPath.row];
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
     cell.textLabel.text = option[@"Name"]; cell.textLabel.textColor = SHDWInk(); cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; cell.detailTextLabel.text = option[@"Detail"]; cell.tintColor = SHDWAccent();
     cell.accessoryType = [self.selection containsObject:option[@"ID"]] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     return cell;
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    NSString *identifier = self.options[indexPath.row][@"ID"];
+    NSString *identifier = self.filteredOptions[indexPath.row][@"ID"];
     if (!self.multiple) [self.selection removeAllObjects];
     if (self.multiple && [self.selection containsObject:identifier]) [self.selection removeObject:identifier]; else [self.selection addObject:identifier];
     [tableView reloadData];
+}
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
+    NSString *query = [searchController.searchBar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    self.filteredOptions = query.length ? [self.options filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *option, NSDictionary *bindings) {
+        for (NSString *key in @[@"Name", @"Detail", @"ID"]) if ([option[key] rangeOfString:query options:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch].location != NSNotFound && [option[key] length]) return YES;
+        return NO;
+    }]] : self.options;
+    [self.tableView reloadData];
 }
 - (void)done { if (self.saveSelection(self.selection)) [self.navigationController popViewControllerAnimated:YES]; }
 @end
@@ -52,15 +71,16 @@
         SHDWFingerprintStore *store = [SHDWFingerprintStore sharedStore];
         NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
         BOOL locked = [store lockedForApplication:self.bundleIdentifier];
+        NSDictionary *localization = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration];
         NSArray *labels = @[@"iOS", SHDWText(@"Region"), SHDWText(@"Time zone"), SHDWText(@"Language"), SHDWText(@"Network"), SHDWText(@"Receipt interception"), SHDWText(@"Advertising tracking")];
         cell.textLabel.text = labels[indexPath.row];
         cell.accessibilityIdentifier = @[@"fingerprint.system", @"fingerprint.region", @"fingerprint.time-zone", @"fingerprint.language", @"fingerprint.network", @"fingerprint.receipts-row", @"fingerprint.advertising-mode"][indexPath.row];
         if (indexPath.row == 0) {
             NSDictionary *profile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
             cell.detailTextLabel.text = profile[@"Version"] ?: UIDevice.currentDevice.systemVersion;
-        } else if (indexPath.row == 1) cell.detailTextLabel.text = [NSLocale.currentLocale objectForKey:NSLocaleCountryCode] ?: @"—";
-        else if (indexPath.row == 2) cell.detailTextLabel.text = NSTimeZone.systemTimeZone.name;
-        else if (indexPath.row == 3) cell.detailTextLabel.text = NSLocale.preferredLanguages.firstObject ?: @"—";
+        } else if (indexPath.row == 1) cell.detailTextLabel.text = localization[@"CountryCode"] ?: @"—";
+        else if (indexPath.row == 2) cell.detailTextLabel.text = localization[@"TimeZone"];
+        else if (indexPath.row == 3) cell.detailTextLabel.text = [localization[@"Languages"] firstObject] ?: @"—";
         else if (indexPath.row == 4) {
             NSArray *technologies = configuration[@"Network"][@"RadioTechnologies"];
             NSMutableArray *values = [NSMutableArray new];
@@ -73,7 +93,7 @@
             UISwitch *toggle = [UISwitch new]; toggle.onTintColor = SHDWAccent(); toggle.on = [configuration[@"Receipts"][@"InterceptEnabled"] boolValue]; toggle.enabled = !locked;
             toggle.accessibilityIdentifier = @"fingerprint.receipts"; [toggle addTarget:self action:@selector(receiptsChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
         }
-        if (indexPath.row == 0 || indexPath.row == 4 || indexPath.row == 6) {
+        if ((indexPath.row <= 4 && indexPath.row != 2) || indexPath.row == 6) {
             cell.accessoryType = locked ? UITableViewCellAccessoryNone : UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = locked ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
             cell.textLabel.textColor = locked ? UIColor.secondaryLabelColor : SHDWInk();
@@ -110,13 +130,14 @@
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section != 0 || (indexPath.row != 0 && indexPath.row != 4 && indexPath.row != 6)) return;
+    if (indexPath.section != 0 || indexPath.row == 2 || indexPath.row == 5 || indexPath.row > 6) return;
     SHDWFingerprintStore *store = [SHDWFingerprintStore sharedStore];
     if ([store lockedForApplication:self.bundleIdentifier]) return;
     NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
     SHDWConfigurationSelectionController *controller = [[SHDWConfigurationSelectionController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     controller.multiple = indexPath.row == 4;
-    controller.title = SHDWText(controller.multiple ? @"Network" : @"System version");
+    controller.title = SHDWText(@[@"System version", @"Region", @"Time zone", @"Language", @"Network", @"Receipt interception", @"Advertising tracking"][indexPath.row]);
+    NSString *localizationKey = indexPath.row == 1 ? @"Region" : indexPath.row == 3 ? @"Language" : nil;
     if (indexPath.row == 6) {
         controller.title=SHDWText(@"Advertising tracking");
         controller.options=@[@{@"ID":@"perApp",@"Name":SHDWText(@"Advertising fingerprint")},@{@"ID":@"zero",@"Name":SHDWText(@"Disable tracking")},@{@"ID":@"system",@"Name":SHDWText(@"Follow system")}];
@@ -124,6 +145,24 @@
     } else if (controller.multiple) {
         controller.options = @[@{@"ID": @"4g", @"Name": @"4G"}, @{@"ID": @"5g", @"Name": @"5G"}];
         controller.selection = [NSMutableSet setWithArray:configuration[@"Network"][@"RadioTechnologies"] ?: @[]];
+    } else if (localizationKey) {
+        controller.searchable = NO;
+        NSMutableDictionary *nativeConfiguration = [configuration mutableCopy];
+        nativeConfiguration[@"Localization"] = [SHDWFingerprintConfiguration localizationForRegion:@"native"];
+        NSDictionary *native = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:nativeConfiguration];
+        NSString *nativeValue = [localizationKey isEqual:@"Region"] ? native[@"CountryCode"] : [localizationKey isEqual:@"Language"] ? [native[@"Languages"] firstObject] : native[@"TimeZone"];
+        NSMutableArray *options = [NSMutableArray arrayWithObject:@{@"ID": @"native", @"Name": SHDWText(@"Use device system"), @"Detail": nativeValue ?: @"—"}];
+        NSLocale *displayLocale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US"];
+        for (NSString *region in [SHDWFingerprintConfiguration supportedLocalizationRegions]) {
+            NSDictionary *preset = [SHDWFingerprintConfiguration localizationForRegion:region];
+            NSString *identifier = preset[localizationKey];
+            NSString *detail = [localizationKey isEqual:@"Region"] ?
+                [displayLocale displayNameForKey:NSLocaleCountryCode value:identifier] :
+                [displayLocale displayNameForKey:NSLocaleIdentifier value:identifier];
+            [options addObject:@{@"ID":identifier, @"Name":identifier, @"Detail":detail ?: identifier}];
+        }
+        controller.options = options;
+        controller.selection = [NSMutableSet setWithObject:configuration[@"Localization"][localizationKey] ?: @"native"];
     } else {
         NSMutableArray *options = [NSMutableArray arrayWithObject:@{@"ID": @"native", @"Name": SHDWText(@"Use device system"), @"Detail": UIDevice.currentDevice.systemVersion}];
         for (NSDictionary *profile in [SHDWFingerprintConfiguration systemProfilesForCurrentDevice]) [options addObject:@{@"ID": profile[@"ID"], @"Name": profile[@"Version"], @"Detail": profile[@"Build"] ?: @""}];
@@ -142,6 +181,13 @@
             NSMutableDictionary *networkConfiguration = [latest[@"Network"] mutableCopy] ?: [NSMutableDictionary new];
             networkConfiguration[@"RadioTechnologies"] = technologies;
             latest[@"Network"] = networkConfiguration;
+        } else if (localizationKey) {
+            NSString *identifier = selection.anyObject ?: @"native";
+            NSDictionary *localization = [localizationKey isEqual:@"Region"] ?
+                [SHDWFingerprintConfiguration localizationForRegion:identifier] :
+                [SHDWFingerprintConfiguration localizationForLanguage:identifier];
+            if (!localization) return NO;
+            latest[@"Localization"] = localization;
         } else {
             NSString *identifier = selection.anyObject ?: @"native";
             latest[@"System"] = [identifier isEqual:@"native"] ? @{@"Mode": @"native"} : @{@"Mode": @"profile", @"ProfileID": identifier};

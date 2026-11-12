@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import lzma
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -68,12 +69,13 @@ with tempfile.TemporaryDirectory(prefix="shadow-pages-test-") as temporary:
     assert (output / "pool" / package.name).read_bytes() == package.read_bytes()
     assert (output / ".nojekyll").exists()
     assert metadata["packages"][0]["sha256"] == metadata["sha256"]
-    for lane, tag, destination in (("roothide", "test", temporary / "wrong"),
+    for lane, tag, destination in (("rootful-modern", "test", temporary / "wrong"),
                                    ("rootless", "../bad", temporary / "bad"),
                                    ("rootless", "test", output)):
         rejected(lambda: pages.render(package, lane, tag, destination))
 
-    hookkit_fields = dict(Package="me.jjolano.fmwk.hookkit", Version="3.0.5-1",
+    hookkit_version = re.search(r"me\.jjolano\.fmwk\.hookkit\s*\(=\s*([^\s)]+)\)", fields["Depends"]).group(1)
+    hookkit_fields = dict(Package="me.jjolano.fmwk.hookkit", Version=hookkit_version,
                           Architecture=fields["Architecture"], Maintainer="Shadow",
                           Description="HookKit framework")
     hookkit = build_package(temporary / "hookkit", hookkit_fields)

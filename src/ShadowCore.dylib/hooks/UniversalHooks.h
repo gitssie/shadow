@@ -16,6 +16,7 @@ BOOL shdw_fingerprint_sysctl_query(const char *name, void *value, size_t *length
 BOOL shdw_fingerprint_sysctl_mib_query(const int *mib, u_int count, void *value, size_t *length,
     void *newp, size_t newlen, const void *caller, int *result);
 void shdw_universal_fingerprint(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_localization(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_identity(SHDWHookSession *hooks, NSString *bundleID);
 void shdw_universal_fingerprint_identity_prepare(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_receipts(SHDWHookSession *hooks);
@@ -31,6 +32,8 @@ void shdw_universal_fingerprint_system_version_prepare(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_environment_prepare(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_environment_dlopen_completed(SHDWHookSession *hooks);
 void *shdw_sym_policy_lookup_system_version(const char *name);
+void *shdw_sym_policy_lookup_localization(const char *name);
+void *shdw_sym_policy_lookup_web_localization(const char *name);
 void shdw_universal_network_queries(SHDWHookSession *hooks);
 void shdw_universal_envvars_c(SHDWHookSession *hooks);
 void shdw_universal_envpolicy(SHDWHookSession *hooks);

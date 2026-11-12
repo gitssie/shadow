@@ -162,6 +162,7 @@
 "The restoration source changed." = "The restoration source changed.";
 "Application state operation failed" = "Application state operation failed";
 
+"Search" = "Search";
 
 "This backup belongs to the current IDFV and cannot be restored." = "This backup belongs to the current IDFV and cannot be restored.";
 "Back up before cleaning?" = "Back up before cleaning?";

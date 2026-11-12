@@ -52,6 +52,17 @@ The optional engine currently supports the rootless lane only.
 
 The Makefile's `test` target does not include the maintainer-script checks.
 
+The optional `make -C tests verify-fingerprint` requires macOS Foundation and
+Xcode command-line tools, and HookKit headers installed under `$THEOS` as
+resolved by `build-support/hookkit.mk`. It includes strict localization configuration and
+central native-value resolution, process-local environment changes, calendar
+consistency, and the native WebContent bootstrap, ownership checks, and function entrypoint adapter with HookKit doubles.
+Localization behavior checks use AddressSanitizer and UndefinedBehaviorSanitizer.
+They cover typed XPC payloads, missing and mismatched host identities, native
+pass-through, prepared continuation publication, safe provider fallback, hook activation failures, and isolation from persistent system preferences. These checks do not
+establish real WebContent sandbox access, iframe/Worker behavior, or UIKit
+rendering; those require device verification.
+
 The optional `make -C tests settings-behavior` compiles and executes the actual
 settings customization/reset helpers, local version reader, symbol guard, release
 parser, About getters, and Updates controller with Foundation and UI/network doubles.

@@ -507,6 +507,7 @@ void shdw_universal_fingerprint(SHDWHookSession *hooks) {
             owner:SHDWFingerprintOwnerIdentifier(shdw_fingerprint_bundle_id) enabled:shdw_fingerprint_enabled];
     }
     if(!shdw_fingerprint_enabled) return;
+    shdw_universal_fingerprint_localization(hooks);
     shdw_universal_fingerprint_interfaces(hooks);
     shdw_universal_url_resources(hooks);
     shdw_universal_file_attributes(hooks);
