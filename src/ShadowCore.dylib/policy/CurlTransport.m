@@ -6,6 +6,7 @@
 #import <CFNetwork/CFNetwork.h>
 #import "../../Transport/CurlTrust.h"
 #include <curl/curl.h>
+#include "../../Transport/CurlReference.h"
 #include <dlfcn.h>
 #include <math.h>
 #include <limits.h>
@@ -112,9 +113,30 @@ static id SHDWCurlHeaderValue(NSDictionary *headers, NSString *name) {
     return nil;
 }
 
-static NSString *SHDWCurlNativeUserAgent(void) {
-    CFStringRef (*copyUserAgent)(void) = dlsym(RTLD_DEFAULT, "_CFNetworkCopyDefaultUserAgentString");
-    return copyUserAgent ? CFBridgingRelease(copyUserAgent()) : nil;
+static NSString *SHDWCurlResponseHTTPVersion(CURL *transfer) {
+    long version = CURL_HTTP_VERSION_NONE;
+    if (!transfer || engine.info(transfer, CURLINFO_HTTP_VERSION, &version) != CURLE_OK) return nil;
+    switch (version) {
+        case CURL_HTTP_VERSION_1_0: return @"HTTP/1.0";
+        case CURL_HTTP_VERSION_1_1: return @"HTTP/1.1";
+        case CURL_HTTP_VERSION_2_0: return @"HTTP/2";
+        case CURL_HTTP_VERSION_3: return @"HTTP/3";
+        default: return nil;
+    }
+}
+
+static BOOL SHDWCurlHeaderFieldsContain(NSArray<NSArray *> *fields, NSString *name) {
+    for (NSArray *field in fields)
+        if ([field[0] isKindOfClass:NSString.class] && [field[0] caseInsensitiveCompare:name] == NSOrderedSame) return YES;
+    return NO;
+}
+
+static NSMutableArray<NSArray *> *SHDWCurlRequestHeaderFields(NSURLRequest *request) {
+    NSMutableArray<NSArray *> *fields = [NSMutableArray new];
+    // Preserve the source enumeration; dictionary APIs do not promise wire order.
+    NSDictionary *requestFields = request.allHTTPHeaderFields;
+    for (id name in requestFields) [fields addObject:@[name, requestFields[name]]];
+    return fields;
 }
 
 static BOOL SHDWCurlSameOrigin(NSURL *a, NSURL *b) {
@@ -239,7 +261,7 @@ BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) {
         for (NSString *name in self.responseHeaders.allKeys)
             if ([name caseInsensitiveCompare:@"Content-Encoding"] == NSOrderedSame ||
                 [name caseInsensitiveCompare:@"Content-Length"] == NSOrderedSame) [self.responseHeaders removeObjectForKey:name];
-    NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:self.status HTTPVersion:@"HTTP/2" headerFields:self.responseHeaders];
+    NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:self.status HTTPVersion:SHDWCurlResponseHTTPVersion(self.transfer) headerFields:self.responseHeaders];
     NSString *location = SHDWCurlHeaderValue(self.responseHeaders, @"Location");
     NSURL *redirect = location ? [NSURL URLWithString:location relativeToURL:self.request.URL].absoluteURL : nil;
     BOOL redirects = [@[@301,@302,@303,@307,@308] containsObject:@(self.status)] && redirect;
@@ -282,7 +304,7 @@ BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) {
     if (SHDWCurlStopped(self)) return;
     CURL *curl = engine.create();
     self.transfer = curl;
-    CURLcode result = curl ? engine.impersonate(curl, transportProfile.UTF8String, 0) : CURLE_OUT_OF_MEMORY;
+    CURLcode result = curl ? SHDWCurlApplyProfile(curl, transportProfile.UTF8String, engine.impersonate, engine.set) : CURLE_OUT_OF_MEMORY;
     struct curl_slist *headers = NULL;
     NSData *body = self.request.HTTPBody ?: (self.request.HTTPBodyStream ?
         [NSURLProtocol propertyForKey:SHDWCurlBody inRequest:self.request] : nil);
@@ -317,29 +339,19 @@ BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) {
             SHDW_CURL_SET(CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)body.length);
         } else if (self.request.HTTPBodyStream) result = CURLE_NOT_BUILT_IN;
         SHDW_CURL_SET(CURLOPT_CUSTOMREQUEST, method.UTF8String);
-        NSMutableDictionary *values = [self.settings.HTTPAdditionalHeaders mutableCopy] ?: [NSMutableDictionary new];
-        for (NSString *key in self.request.allHTTPHeaderFields) {
-            for (NSString *old in values.allKeys) if ([old caseInsensitiveCompare:key] == NSOrderedSame) [values removeObjectForKey:old];
-            values[key] = self.request.allHTTPHeaderFields[key];
-        }
-        if (!SHDWCurlHeaderValue(values, @"User-Agent")) {
-            NSString *native = SHDWCurlNativeUserAgent();
-            if (native) values[@"User-Agent"] = native;
-        }
-        if (self.request.HTTPShouldHandleCookies && self.settings.HTTPShouldSetCookies && !SHDWCurlHeaderValue(values,@"Cookie")) {
-            NSArray *cookies = [self.settings.HTTPCookieStorage cookiesForURL:self.request.URL];
-            [values addEntriesFromDictionary:[NSHTTPCookie requestHeaderFieldsWithCookies:cookies ?: @[]]];
-        }
-        for (NSString *name in values) {
-            NSString *value = [values[name] description];
-            if ([name rangeOfCharacterFromSet:NSCharacterSet.newlineCharacterSet].location != NSNotFound ||
+        NSMutableArray<NSArray *> *fields = SHDWCurlRequestHeaderFields(self.request);
+        for (NSArray *field in fields) {
+            id name = field[0];
+            NSString *value = [field[1] description];
+            if (![name isKindOfClass:NSString.class] || ![name length] ||
+                [name rangeOfCharacterFromSet:NSCharacterSet.newlineCharacterSet].location != NSNotFound ||
                 [value rangeOfCharacterFromSet:NSCharacterSet.newlineCharacterSet].location != NSNotFound) { result = CURLE_BAD_FUNCTION_ARGUMENT; break; }
             NSString *line = value.length ? [NSString stringWithFormat:@"%@: %@",name,value] : [name stringByAppendingString:@";"];
             struct curl_slist *next = engine.append(headers, line.UTF8String);
             if (!next) { result = CURLE_OUT_OF_MEMORY; break; } headers = next;
         }
         for (NSString *name in @[@"Accept", @"Accept-Encoding", @"Content-Type"]) {
-            if (SHDWCurlHeaderValue(values, name)) continue;
+            if (SHDWCurlHeaderFieldsContain(fields, name)) continue;
             struct curl_slist *next = engine.append(headers, [name stringByAppendingString:@":"].UTF8String);
             if (!next) { result = CURLE_OUT_OF_MEMORY; break; }
             headers = next;
@@ -409,7 +421,7 @@ void SHDWCurlTransportPrepareProfile(NSString *profile) {
 #undef SHDW_CURL_SYMBOL
     if (engine.initialize(CURL_GLOBAL_DEFAULT) != CURLE_OK) return;
     CURL *probe = engine.create(); if (!probe) return;
-    BOOL available = engine.impersonate(probe, transportProfile.UTF8String, 0) == CURLE_OK;
+    BOOL available = SHDWCurlApplyProfile(probe, transportProfile.UTF8String, engine.impersonate, engine.set) == CURLE_OK;
     engine.destroy(probe);
     if (available) { __atomic_store_n(&transportReady, 1, __ATOMIC_RELEASE); [NSURLProtocol registerClass:SHDWSafari184Protocol.class]; }
 }

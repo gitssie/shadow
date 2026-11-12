@@ -53,6 +53,11 @@ Selection uses the saved system fingerprint version: below 18.0 selects
 `safari172_ios`, 18.0 through 18.3 selects `safari180_ios`, and 18.4 or later
 selects `safari184_ios`. These are available preset approximations. Both App
 and Networking processes freeze the selected preset at startup.
+The explicit experimental value `Network.Transport=impit465` selects the
+issue #450 reference overrides independently of the saved system version.
+It is never selected by `auto` and is not evidence of a specific iOS version
+or WKWebView equivalence. The shared `CurlReference.h` helper applies the
+same options during readiness validation and on every transfer.
 Eligible foreground NSURLSession HTTPS requests use the adapter. The optional
 Networking component applies the same transport to supported WebKit sessions
 after receiving a matching launch snapshot. It forwards server-trust decisions
@@ -67,6 +72,13 @@ device verification; a successful TLS endpoint capture does not establish them.
 Preset default HTTP headers are disabled. The adapter preserves request/session
 header values after the existing CFNetwork and WebKit User-Agent system-profile
 policies apply. Explicit non-default App User-Agent values remain unchanged.
+Outgoing headers come only from the intercepted request, retaining its exposed
+dictionary enumeration without a second dictionary merge. The adapter does not
+merge session defaults or synthesize UA or Cookie headers. This does not recover
+original insertion order or guarantee the native CFNetwork wire order, neither
+of which is specified by `allHTTPHeaderFields`. Transport tests use controlled
+nonalphabetic dictionary enumeration to check this boundary independently of
+Foundation's current dictionary layout.
 The TLS preset does not select the User-Agent OS version. WebKit default UA
 versions come from its native version-string generation entrypoint, before page
 creation; Shadow does not call `setCustomUserAgent:`. App-provided custom UAs
@@ -74,6 +86,25 @@ keep their native priority. The matching WebContent launch snapshot covers
 worker fallback generation. Host checks exercise the C++ return bridge and
 bootstrap ownership; runtime entrypoints still require device verification.
 The optional engine currently supports the rootless lane only.
+
+`curl-reference-probe.c` is a standalone live experiment for the capture in
+[impit issue #450](https://github.com/apify/impit/issues/450), also used by
+[PR #465](https://github.com/apify/impit/pull/465). Compile it against the patched
+curl-impersonate headers for the intended device architecture; it loads the
+library dynamically. Invoke it as `probe library baseline|impit465 output.json`.
+Both modes use verified HTTPS directly to Peet, with preset default headers
+disabled. `impit465` applies explicit TLS and HTTP/2 overrides to the
+`safari184_ios` base. It does not register a Shadow profile or alter automatic
+selection. The capture's actual OS version and its equivalence to WKWebView
+are unverified; it is not an iOS 18.2 WKWebView reference.
+
+Run `python3 tests/compare-curl-reference.py output.json` on the returned report.
+The comparison checks hashes, raw fingerprint strings, ordered ciphers and
+extension payloads, and HTTP/2 fingerprint fields. It normalizes per-connection
+GREASE values and excludes the requested SNI and ephemeral key bytes; it is
+not a byte-for-byte comparison of encrypted traffic. Live reports can contain
+network identifiers and should remain outside the repository. This optional
+live check is not part of `make test`.
 
 The Makefile's `test` target does not include the maintainer-script checks.
 

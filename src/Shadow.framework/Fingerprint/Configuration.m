@@ -167,9 +167,10 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
 }
 + (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration {
   id transport = configuration[@"Network"][@"Transport"];
-  return [transport isEqual:@"auto"] || [transport isEqual:@"safari184_ios"];
+  return [transport isEqual:@"auto"] || [transport isEqual:@"safari184_ios"] || [transport isEqual:@"impit465"];
 }
 + (NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(NSString *)systemVersion {
+  if ([configuration[@"Network"][@"Transport"] isEqual:@"impit465"]) return @"impit465";
   if (![self usesCurlTransportForConfiguration:configuration] || ![systemVersion isKindOfClass:NSString.class] ||
       !systemVersion.length || systemVersion.length > 32) return nil;
   NSArray<NSString *> *parts = [systemVersion componentsSeparatedByString:@"."];
@@ -377,7 +378,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   if (!SHDWConfigurationKeys(system,@[@"Mode"],@[@"ProfileID"]) ||
       !SHDWConfigurationKeys(network,@[@"RadioTechnologies"],@[@"Transport"]) ||
       !SHDWConfigurationKeys(receipts,@[@"InterceptEnabled"],@[])) return SHDWConfigurationInvalid(error);
-  if (network[@"Transport"] && ![@[@"native", @"auto", @"safari184_ios"] containsObject:network[@"Transport"]])
+  if (network[@"Transport"] && ![@[@"native", @"auto", @"safari184_ios", @"impit465"] containsObject:network[@"Transport"]])
     return SHDWConfigurationInvalid(error);
   if ([system[@"Mode"] isEqual:@"native"]) {
     if (system[@"ProfileID"]) return SHDWConfigurationInvalid(error);

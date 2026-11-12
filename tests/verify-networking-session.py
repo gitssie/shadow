@@ -159,5 +159,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-networking-session-") as tempora
                     "-Wno-pointer-bool-conversion", "-fsanitize=address,undefined", "-framework", "Foundation",
                     "-I", str(root / "src/Transport"), str(test), str(root / "src/Transport/Bootstrap.m"),
                     "-o", str(binary)], check=True)
-    for profile in ("safari172_ios", "safari180_ios", "safari184_ios"):
+    for profile in ("safari172_ios", "safari180_ios", "safari184_ios", "impit465"):
         subprocess.run([str(binary), profile], check=True)

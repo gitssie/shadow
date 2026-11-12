@@ -35,14 +35,14 @@ int main(void) { @autoreleasepool {
     assert(SHDWTransportBootstrapMessage(wrong,@"safari184_ios",@"test.Owner")==wrong);
     assert(SHDWTransportBootstrapMessage(original,nil,@"test.Owner")==original);
     assert(SHDWTransportBootstrapMessage(original,@"safari184_ios",nil)==original);
-    for(id profile in @[@"native",@"auto",@"unknown",@"",@"safari184_ios\n",@1,NSNull.null])
+    for(id profile in @[@"native",@"auto",@"unknown",@"",@"safari184_ios\n",@"impit465\n",@1,NSNull.null])
         assert(SHDWTransportBootstrapMessage(original,profile,@"test.Owner")==original);
     NSString *longString=[@"a" stringByPaddingToLength:256 withString:@"a" startingAtIndex:0];
     NSString *nul=[[NSString alloc] initWithBytes:"test\0Owner" length:10 encoding:NSUTF8StringEncoding];
     NSString *multiByte=[@"é" stringByPaddingToLength:128 withString:@"é" startingAtIndex:0];
     for(id owner in @[@"",@1,NSNull.null,@"test\nOwner",@"test\tOwner",longString,nul,multiByte])
         assert(SHDWTransportBootstrapMessage(original,@"safari184_ios",owner)==original);
-    for (NSString *profile in @[@"safari172_ios", @"safari180_ios", @"safari184_ios"]) {
+    for (NSString *profile in @[@"safari172_ios", @"safari180_ios", @"safari184_ios", @"impit465"]) {
         NSMutableString *mutableProfile=[profile mutableCopy];
         xpc_object_t launchMessage=SHDWTransportBootstrapMessage(original,mutableProfile,@"test.Owner");
         [mutableProfile setString:@"changed"];

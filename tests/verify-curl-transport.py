@@ -18,7 +18,18 @@ source = r'''
 #include <assert.h>
 #include <stdarg.h>
 NSDictionary *SHDWFingerprintConfig(NSString *bundle) { (void)bundle;return @{}; }
+static NSString *constructedHTTPVersion;
+static NSInteger constructedStatusCode;
+@interface FixtureHTTPResponse : NSHTTPURLResponse @end
+@implementation FixtureHTTPResponse
+- (instancetype)initWithURL:(NSURL *)url statusCode:(NSInteger)status HTTPVersion:(NSString *)version headerFields:(NSDictionary *)fields {
+  constructedHTTPVersion=[version copy];constructedStatusCode=status;
+  return [super initWithURL:url statusCode:status HTTPVersion:version headerFields:fields];
+}
+@end
+#define NSHTTPURLResponse FixtureHTTPResponse
 #include "CurlTransport.m"
+#undef NSHTTPURLResponse
 NSString *JBPath(NSString *path) { return path; }
 @interface FixtureTrustSpace : NSURLProtectionSpace @end
 @implementation FixtureTrustSpace
@@ -65,15 +76,27 @@ static const void *sentBody;
 static curl_off_t sentSize;
 static long verifyPeer,verifyHost;
 static unsigned performed,destroyed,httpRequests;
+static unsigned referenceSets;
+static CURLoption failedOption;
 static BOOL redirectMode,cancelMode;
 static CURLcode transferResult;
-static CURL *create(void) { sentBody=NULL;sentSize=0;prerequisiteCallback=NULL;prerequisiteContext=NULL;return (CURL *)1; }
+static CURL *create(void) { referenceSets=0;sentBody=NULL;sentSize=0;prerequisiteCallback=NULL;prerequisiteContext=NULL;return (CURL *)1; }
 static const char *expectedProfile="safari184_ios";
 static unsigned impersonations;
 static CURLcode impersonate(CURL *curl,const char *profile,int headers) {
-  assert(curl==(CURL *)1 && !strcmp(profile,expectedProfile) && headers==0);impersonations++;return CURLE_OK;
+  const char *base=!strcmp(expectedProfile,"impit465") ? "safari184_ios" : expectedProfile;
+  assert(curl==(CURL *)1 && !strcmp(profile,base) && headers==0);impersonations++;return CURLE_OK;
 }
 static CURLcode set(CURL *curl,CURLoption option,...) {
+  switch(option) {
+    case CURLOPT_SSL_CIPHER_LIST: case CURLOPT_SSL_EC_CURVES: case CURLOPT_TLS_KEY_SHARES_LIMIT:
+    case CURLOPT_SSLVERSION: case CURLOPT_SSL_SIG_HASH_ALGS: case CURLOPT_TLS_EXTENSION_ORDER:
+    case CURLOPT_SSL_PERMUTE_EXTENSIONS: case CURLOPT_TLS_GREASE: case CURLOPT_SSL_ENABLE_TICKET:
+    case CURLOPT_SSL_CERT_COMPRESSION: case CURLOPT_HTTP2_SETTINGS: case CURLOPT_HTTP2_WINDOW_UPDATE:
+    case CURLOPT_HTTP2_PSEUDO_HEADERS_ORDER: case CURLOPT_HTTP2_NO_PRIORITY: referenceSets++;break;
+    default: break;
+  }
+  if(failedOption && option==failedOption) return CURLE_UNKNOWN_OPTION;
   assert(curl==(CURL *)1);va_list args;va_start(args,option);
   if(option==CURLOPT_WRITEFUNCTION) writeCallback=va_arg(args,curl_write_callback);
   else if(option==CURLOPT_HEADERFUNCTION) headerCallback=va_arg(args,curl_write_callback);
@@ -97,14 +120,23 @@ static CURLcode set(CURL *curl,CURLoption option,...) {
 }
 static NSArray *capturedHeaders;
 static NSData *capturedBody;
+static long negotiatedHTTPVersion=CURL_HTTP_VERSION_2_0;
+static BOOL versionInfoError;
 static CURLcode info(CURL *curl,CURLINFO option,...) {
-  assert(curl==(CURL *)1 && option==CURLINFO_CERTINFO);
+  assert(curl==(CURL *)1);
+  if(option==CURLINFO_HTTP_VERSION) {
+    va_list args;va_start(args,option);long *value=va_arg(args,long *);va_end(args);
+    if(versionInfoError) return CURLE_BAD_FUNCTION_ARGUMENT;
+    *value=negotiatedHTTPVersion;return CURLE_OK;
+  }
+  assert(option==CURLINFO_CERTINFO);
   static struct curl_slist certificate={"Cert:-----BEGIN CERTIFICATE-----AQ==-----END CERTIFICATE-----",NULL};
   static struct curl_slist *certificates[]={&certificate};
   static struct curl_certinfo value={1,certificates};
   va_list args;va_start(args,option);*va_arg(args,struct curl_certinfo **)=&value;va_end(args);return CURLE_OK;
 }
 static CURLcode perform(CURL *curl) {
+  assert(referenceSets==(!strcmp(expectedProfile,"impit465") ? 14u : 0u));
   assert(curl==(CURL *)1 && verifyPeer==1 && verifyHost==2);performed++;
   capturedHeaders=nil;capturedBody=nil;
   if(prerequisiteCallback && prerequisiteCallback(prerequisiteContext,(char *)"127.0.0.1",(char *)"127.0.0.1",443,12345)!=CURL_PREREQFUNC_OK)
@@ -182,6 +214,90 @@ static SHDWSafari184Protocol *protocol(NSURLRequest *request,NSURLSessionConfigu
   SHDWSafari184Protocol *p=[[SHDWSafari184Protocol alloc] initWithRequest:request cachedResponse:nil client:client];
   p.callbackLock=[NSRecursiveLock new];p.settings=settings;return p;
 }
+@interface OrderedHeaders : NSDictionary
+@property(nonatomic,strong) NSArray *orderedKeys;
+@property(nonatomic,strong) NSDictionary *values;
+- (instancetype)initWithKeys:(NSArray *)keys values:(NSArray *)values;
+@end
+@implementation OrderedHeaders
+- (instancetype)initWithKeys:(NSArray *)keys values:(NSArray *)values {
+  if((self=[super init])) { self.orderedKeys=keys;self.values=[NSDictionary dictionaryWithObjects:values forKeys:keys]; }return self;
+}
+- (NSUInteger)count { return self.orderedKeys.count; }
+- (id)objectForKey:(id)key { return self.values[key]; }
+- (NSEnumerator *)keyEnumerator { return self.orderedKeys.objectEnumerator; }
+- (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state objects:(id __unsafe_unretained [])objects count:(NSUInteger)count {
+  return [self.orderedKeys countByEnumeratingWithState:state objects:objects count:count];
+}
+- (id)copyWithZone:(NSZone *)zone { (void)zone;return self; }
+@end
+@interface OrderedHeaderRequest : NSURLRequest
+@property(nonatomic,strong) NSDictionary *orderedHeaders;
+@property(nonatomic) BOOL useCookies;
+@end
+@implementation OrderedHeaderRequest
+- (NSDictionary *)allHTTPHeaderFields { return self.orderedHeaders; }
+- (BOOL)HTTPShouldHandleCookies { return self.useCookies; }
+- (id)copyWithZone:(NSZone *)zone { (void)zone;return self; }
+@end
+static void verifyHeaderOrder(void) {
+  NSURLSessionConfiguration *settings=NSURLSessionConfiguration.ephemeralSessionConfiguration;
+  settings.connectionProxyDictionary=@{@"HTTPEnable":@NO,@"HTTPSEnable":@NO,@"ProxyAutoConfigEnable":@NO};
+  settings.HTTPShouldSetCookies=NO;
+  settings.HTTPAdditionalHeaders=[[OrderedHeaders alloc] initWithKeys:@[@"X-Zero",@"x-rEQUEST",@"a-Default",@"USER-AGENT",@"COOKIE"]
+      values:@[@"z-default",@"must-not-win",@"a-default",@"Default/1",@"must-not-win"]];
+  OrderedHeaderRequest *request=[[OrderedHeaderRequest alloc] initWithURL:[NSURL URLWithString:@"https://ordered.test/"]];
+  request.orderedHeaders=[[OrderedHeaders alloc] initWithKeys:@[@"Z-Request",@"User-Agent",@"x-request",@"Cookie",@"A-Request",@"X-Empty"]
+      values:@[@"z",@"App/ordered",@"wins",@"explicit=1",@"a",@""]];
+  Client *client=[Client new];[protocol(request,settings,client) runTransfer];
+  assert(([client.events isEqual:@[@"response",@"data",@"finish"]]));
+  assert(([capturedHeaders isEqual:@[@"Z-Request: z",@"User-Agent: App/ordered",@"x-request: wins",@"Cookie: explicit=1",@"A-Request: a",@"X-Empty;",
+      @"Accept:",@"Accept-Encoding:",@"Content-Type:"]]));
+  // NSURLSession has already prepared the request. Missing fields stay missing,
+  // even with populated defaults and a populated cookie store.
+  settings.HTTPAdditionalHeaders=[[OrderedHeaders alloc] initWithKeys:@[@"Z-Default",@"A-Default",@"User-Agent",@"Cookie"] values:@[@"z",@"a",@"Default/2",@"default=1"]];
+  settings.HTTPShouldSetCookies=YES;request.useCookies=YES;
+  [settings.HTTPCookieStorage setCookie:[NSHTTPCookie cookieWithProperties:@{NSHTTPCookieName:@"stored",NSHTTPCookieValue:@"1",NSHTTPCookieDomain:@"ordered.test",NSHTTPCookiePath:@"/"}]];
+  request.orderedHeaders=[[OrderedHeaders alloc] initWithKeys:@[@"Z-Request",@"A-Request"] values:@[@"z",@"a"]];
+  NSArray *expected=@[@"Z-Request: z",@"A-Request: a",@"Accept:",@"Accept-Encoding:",@"Content-Type:"];
+  client=[Client new];[protocol(request,settings,client) runTransfer];
+  assert(([client.events isEqual:@[@"response",@"data",@"finish"]]));assert([capturedHeaders isEqual:expected]);
+  for(NSArray *pair in @[@[@"Bad\nName",@"value"],@[@"Good-Name",@"bad\r\nvalue"]]) {
+    request.orderedHeaders=[[OrderedHeaders alloc] initWithKeys:@[pair[0]] values:@[pair[1]]];
+    unsigned before=performed,closed=destroyed,requests=httpRequests;
+    client=[Client new];[protocol(request,settings,client) runTransfer];
+    assert(([client.events isEqual:@[@"error"]]));assert(!client.response && !client.data.length);
+    assert(performed==before && destroyed==closed+1 && httpRequests==requests);
+  }
+}
+static void verifyResponseVersion(void) {
+  assert(!SHDWCurlResponseHTTPVersion(NULL));
+  NSURLSessionConfiguration *settings=NSURLSessionConfiguration.ephemeralSessionConfiguration;
+  settings.connectionProxyDictionary=@{@"HTTPEnable":@NO,@"HTTPSEnable":@NO,@"ProxyAutoConfigEnable":@NO};
+  NSURLRequest *request=[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://origin.test/version"]];
+  NSArray *cases=@[@[@(CURL_HTTP_VERSION_1_0),@"HTTP/1.0"],@[@(CURL_HTTP_VERSION_1_1),@"HTTP/1.1"],
+      @[@(CURL_HTTP_VERSION_2_0),@"HTTP/2"],@[@(CURL_HTTP_VERSION_3),@"HTTP/3"],
+      @[@(CURL_HTTP_VERSION_NONE),NSNull.null],@[@987654,NSNull.null]];
+  for(NSArray *test in cases) {
+    negotiatedHTTPVersion=[test[0] longValue];
+    for(unsigned redirect=0;redirect<2;redirect++) {
+      redirectMode=redirect;constructedHTTPVersion=@"stale";constructedStatusCode=0;
+      Client *client=[Client new];[protocol(request,settings,client) runTransfer];
+      if(test[1]==NSNull.null) assert(!constructedHTTPVersion);
+      else assert([constructedHTTPVersion isEqual:test[1]]);
+      assert(constructedStatusCode==(redirect ? 307 : 200));
+      if(redirect) assert(([client.events isEqual:@[@"redirect"]]) && client.redirect);
+      else assert(([client.events isEqual:@[@"response",@"data",@"finish"]]) && client.response);
+    }
+  }
+  negotiatedHTTPVersion=CURL_HTTP_VERSION_2_0;versionInfoError=YES;
+  for(unsigned redirect=0;redirect<2;redirect++) {
+    redirectMode=redirect;constructedHTTPVersion=@"stale";
+    Client *client=[Client new];[protocol(request,settings,client) runTransfer];
+    assert(!constructedHTTPVersion && !client.error);
+  }
+  versionInfoError=NO;redirectMode=NO;
+}
 int main(int argc,char **argv) { @autoreleasepool {
   if(argc>1)expectedProfile=argv[1];
   assert(SHDWTransportProfileIsSupported(@(expectedProfile)));
@@ -195,6 +311,14 @@ int main(int argc,char **argv) { @autoreleasepool {
   Session *session=[Session new];session.configuration=settings;
   NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://origin.test/start"]];
   request.HTTPMethod=@"POST";request.HTTPBody=[@"payload" dataUsingEncoding:NSUTF8StringEncoding];
+  if(!strcmp(expectedProfile,"impit465")) {
+    failedOption=CURLOPT_SSL_EC_CURVES;
+    Client *rejected=[Client new];[protocol(request,settings,rejected) runTransfer];
+    assert(([rejected.events isEqual:@[@"error"]]));
+    assert(!performed && !httpRequests && destroyed==1 && impersonations==1 && referenceSets==2);
+    assert(!rejected.data.length && !rejected.response);
+    failedOption=0;destroyed=0;impersonations=0;
+  }
   [request setValue:@"App/1" forHTTPHeaderField:@"User-Agent"];
   assert(![SHDWSafari184Protocol canInitWithRequest:request]);
   NSURLRequest *prepared=SHDWCurlTransportRequest(request,(id)session);
@@ -203,15 +327,21 @@ int main(int argc,char **argv) { @autoreleasepool {
   Client *client=[Client new];[protocol(prepared,settings,client) runTransfer];
   assert(([client.events isEqual:@[@"response",@"data",@"finish"]]));
   assert([capturedBody isEqual:request.HTTPBody] && [capturedHeaders containsObject:@"User-Agent: App/1"]);
-  assert([capturedHeaders containsObject:@"Authorization: secret"] && [capturedHeaders containsObject:@"X-Config: preserved"]);
+  assert(![capturedHeaders containsObject:@"Authorization: secret"] && ![capturedHeaders containsObject:@"X-Config: preserved"]);
   assert([capturedHeaders containsObject:@"Accept:"] && [capturedHeaders containsObject:@"Accept-Encoding:"] && [capturedHeaders containsObject:@"Content-Type:"]);
   for (NSString *header in capturedHeaders) assert(![header.lowercaseString hasPrefix:@"sec-fetch-"] && ![header.lowercaseString hasPrefix:@"priority:"]);
   assert(!SHDWCurlHeaderValue(client.response.allHeaderFields,@"Content-Encoding") && !SHDWCurlHeaderValue(client.response.allHeaderFields,@"Content-Length"));
   assert([SHDWCurlHeaderValue(client.response.allHeaderFields,@"X-Test") isEqual:@"preserved"]);
+  BOOL storedResponseCookie=NO;
+  for(NSHTTPCookie *cookie in [settings.HTTPCookieStorage cookiesForURL:request.URL])
+    if([cookie.name isEqual:@"returned"] && [cookie.value isEqual:@"2"]) storedResponseCookie=YES;
+  assert(storedResponseCookie);
+  [request setValue:@"Request-secret" forHTTPHeaderField:@"Authorization"];
   request.HTTPShouldHandleCookies=NO;prepared=SHDWCurlTransportRequest(request,(id)session);
   [settings.HTTPCookieStorage setCookie:[NSHTTPCookie cookieWithProperties:@{NSHTTPCookieName:@"stored",NSHTTPCookieValue:@"1",NSHTTPCookieDomain:@"origin.test",NSHTTPCookiePath:@"/"}]];
   for(NSHTTPCookie *cookie in [settings.HTTPCookieStorage cookiesForURL:request.URL]) if([cookie.name isEqual:@"returned"]) [settings.HTTPCookieStorage deleteCookie:cookie];
   client=[Client new];[protocol(prepared,settings,client) runTransfer];
+  assert([capturedHeaders containsObject:@"Authorization: Request-secret"]);
   for(NSString *header in capturedHeaders) assert(![header.lowercaseString hasPrefix:@"cookie:"]);
   for(NSHTTPCookie *cookie in [settings.HTTPCookieStorage cookiesForURL:request.URL]) assert(![cookie.name isEqual:@"returned"]);
   session.delegate=[PinningDelegate new];
@@ -271,7 +401,7 @@ int main(int argc,char **argv) { @autoreleasepool {
   trustDelegate.reject=NO;client=[Client new];[protocol(webRequest,settings,client) runTransfer];
   assert(trustChecks==2 && trustDelegate.sessionCalls==2 && trustDelegate.taskCalls==0);
   assert(httpRequests==requestsBefore+1 && [capturedBody isEqual:request.HTTPBody]);
-  assert([capturedHeaders containsObject:@"Authorization: secret"]);
+  assert([capturedHeaders containsObject:@"Authorization: Request-secret"]);
   assert(([client.events isEqual:@[@"response",@"data",@"finish"]]));
   // Hold the queued challenge until the worker has already timed out and failed.
   session.delegateQueue.suspended=YES;trustTimeout=YES;
@@ -286,7 +416,9 @@ int main(int argc,char **argv) { @autoreleasepool {
   assert(trustDelegate.sessionCalls==sessionCallsBefore && trustDelegate.taskCalls==taskCallsBefore);
   assert([client.events isEqual:eventsBefore] && !client.response && !client.data.length && httpRequests==requestsBefore);
   assert(performed==destroyed && impersonations==performed && impersonations>0);
-  puts("curl transport: request/body isolation, redirects, cookies, decoding, cancellation, pre-HTTP trust rejection and session-over-task auth precedence passed");
+  verifyHeaderOrder();
+  verifyResponseVersion();
+  puts("curl transport: negotiated HTTP version including redirects, prepared request headers only, no supplementation, newline refusal and trust rejection passed");
 } }
 '''
 with tempfile.TemporaryDirectory(prefix="shadow-curl-tests-") as temporary:
@@ -296,5 +428,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-curl-tests-") as temporary:
                     "-fsanitize=address,undefined", "-framework", "Foundation", "-framework", "CFNetwork", "-framework", "Security",
                     "-I", str(dependency / "include"), "-I", str(root / "src/Shadow.framework/Headers"),
                     "-I", str(root / "src/ShadowCore.dylib/policy"), str(source_path), "-o", str(binary)], check=True)
-    for profile in ("safari172_ios", "safari180_ios", "safari184_ios"):
+    for profile in ("safari172_ios", "safari180_ios", "safari184_ios", "impit465"):
         subprocess.run([str(binary), profile], check=True)

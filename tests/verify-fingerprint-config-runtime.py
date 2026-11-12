@@ -68,6 +68,11 @@ source += r'''
 int main(void) { @autoreleasepool {
   NSDictionary *transportAuto = @{@"Network":@{@"Transport":@"auto"}};
   NSDictionary *transportLegacy = @{@"Network":@{@"Transport":@"safari184_ios"}};
+  NSDictionary *transportReference = @{@"Network":@{@"Transport":@"impit465"}};
+  assert([SHDWFingerprintConfiguration usesCurlTransportForConfiguration:transportReference]);
+  for (id version in @[@"16.3", @"18.2", @"18.7.8", @"", @"invalid", NSNull.null])
+    assert([[SHDWFingerprintConfiguration curlTransportProfileForConfiguration:transportReference systemVersion:version] isEqual:@"impit465"]);
+  assert([[SHDWFingerprintConfiguration curlTransportProfileForConfiguration:transportReference systemVersion:nil] isEqual:@"impit465"]);
   for (NSDictionary *off in @[@{}, @{@"Network":@{}}, @{@"Network":@{@"Transport":@"native"}}, SHDWFingerprintConfiguration.defaultConfiguration]) {
     assert(![SHDWFingerprintConfiguration usesCurlTransportForConfiguration:off]);
     assert(![SHDWFingerprintConfiguration curlTransportProfileForConfiguration:off systemVersion:@"18.7"]);
@@ -123,12 +128,12 @@ int main(void) { @autoreleasepool {
   assert(!strcmp(value.version, nativeSystem[@"Kernel"] ? [nativeSystem[@"Kernel"] UTF8String] : "native-kernel"));
   assert(!strcmp(value.nodename, "iPhone") && !strcmp(value.machine, "iPhone9,2"));
   NSMutableDictionary *chosen = [fixture mutableCopy];
-  for (NSString *transport in @[@"native", @"auto", @"safari184_ios"]) {
+  for (NSString *transport in @[@"native", @"auto", @"safari184_ios", @"impit465"]) {
     chosen[@"Network"] = @{@"RadioTechnologies":@[@"5g"], @"Transport":transport};
     NSDictionary *normalized = [SHDWFingerprintConfiguration configurationByValidating:chosen error:nil];
     assert([normalized[@"Network"][@"Transport"] isEqual:transport]);
   }
-  for (id invalidTransport in @[@"safari172_ios", @"safari180_ios", @"AUTO", @YES, @{}, NSNull.null]) {
+  for (id invalidTransport in @[@"safari172_ios", @"safari180_ios", @"impit465\n", @"IMPIT465", @"AUTO", @YES, @{}, NSNull.null]) {
     chosen[@"Network"] = @{@"RadioTechnologies":@[@"5g"], @"Transport":invalidTransport};
     assert(![SHDWFingerprintConfiguration configurationByValidating:chosen error:nil]);
   }
