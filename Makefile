@@ -13,6 +13,9 @@ SUBPROJECTS += src/ShadowCore.dylib
 SUBPROJECTS += src/ShadowSettings.bundle
 ifneq ($(SHADOW_LANE),rootful-legacy)
 SUBPROJECTS += src/ShadowWebContent.dylib
+ifeq ($(SHADOW_CURL_IMPERSONATE),1)
+SUBPROJECTS += src/ShadowNetworking.dylib
+endif
 SUBPROJECTS += src/Shadow.app
 SUBPROJECTS += src/ShadowCleaner
 endif

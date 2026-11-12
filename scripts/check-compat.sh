@@ -67,6 +67,12 @@ if [ "$PROFILE" != rootful-legacy ]; then
     [ -u "$CLEANER" ] || { echo "cleanup helper privilege bit is missing" >&2; exit 1; }
     [ -s "$APP_INFO" ] || { echo "manager app metadata is empty" >&2; exit 1; }
     BINARIES+=("$APP" "$CLEANER" "$LOCALE")
+    NETWORKING=$(find "$TMP" -type f -path '*/DynamicLibraries/ShadowNetworking.dylib' -print -quit)
+    if [ -n "$NETWORKING" ]; then
+        BINARIES+=("$NETWORKING")
+        CURL_ENGINE=$(find_one -type f -path '*/usr/lib/shadow/curl/libcurl-impersonate.4.dylib')
+        python3 "$ROOT/scripts/check-curl-impersonate.py" "$CURL_ENGINE"
+    fi
 fi
 "$(dirname "$0")/check-binary-compat.sh" "$PROFILE" "${BINARIES[@]}"
 

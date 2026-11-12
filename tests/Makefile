@@ -131,6 +131,10 @@ verify-fingerprint:
 
 verify-curl-transport:
 	python3 verify-curl-transport.py
+	python3 verify-curl-initialization.py
+	python3 verify-transport-bootstrap.py
+	python3 verify-curl-trust.py
+	python3 verify-networking-session.py
 
 .PHONY: verify-curl-transport
 

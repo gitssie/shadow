@@ -2,6 +2,11 @@
 #import "FingerprintLocalization.h"
 #import "../../Localization/FunctionHook.h"
 #import "../../Localization/Bootstrap.h"
+#if SHADOW_CURL_IMPERSONATE
+#import "../../Transport/Bootstrap.h"
+#import "FingerprintStorage.h"
+#import "CurlTransport.h"
+#endif
 #import <Shadow/Core.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -10,6 +15,9 @@
 static void (*originalSetBootstrap)(xpc_connection_t, xpc_object_t);
 static NSString *ownerIdentifier;
 static NSDictionary *localizationSnapshot;
+#if SHADOW_CURL_IMPERSONATE
+static NSString *transportProfile;
+#endif
 static unsigned ready;
 
 static void SetBootstrap(xpc_connection_t connection, xpc_object_t bootstrap) {
@@ -21,6 +29,10 @@ static void SetBootstrap(xpc_connection_t connection, xpc_object_t bootstrap) {
                 message = SHDWLocalizationBootstrapMessage(bootstrap,
                     localizationSnapshot, ownerIdentifier);
             }
+#if SHADOW_CURL_IMPERSONATE
+            if (SHDWTransportIsNetworkingService(xpc_connection_get_name(connection)))
+                message = SHDWTransportBootstrapMessage(message, transportProfile, ownerIdentifier);
+#endif
         }
     }
     errno = saved;
@@ -36,7 +48,17 @@ void *shdw_sym_policy_lookup_web_localization(const char *name) {
 void SHDWFingerprintInstallWebLocalization(void) {
     if (__atomic_load_n(&ready, __ATOMIC_ACQUIRE)) return;
     NSDictionary *resolved = SHDWFingerprintLocalization();
-    if (![resolved[@"OverridesSystem"] boolValue]) return;
+    BOOL needsBootstrap = [resolved[@"OverridesSystem"] boolValue];
+#if SHADOW_CURL_IMPERSONATE
+    SHADOW_INTERNAL_SCOPE {
+        NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
+        if ([configuration[@"Network"][@"Transport"] isEqual:@"safari184_ios"] &&
+            SHDWCurlTransportSupportsWebKitPolicy(NSBundle.mainBundle.infoDictionary[@"NSAppTransportSecurity"]))
+            transportProfile = @"safari184_ios";
+    }
+    needsBootstrap |= transportProfile != nil;
+#endif
+    if (!needsBootstrap) return;
     SHADOW_INTERNAL_SCOPE {
         ownerIdentifier = [NSBundle.mainBundle.bundleIdentifier copy];
         localizationSnapshot = [resolved copy];

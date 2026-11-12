@@ -36,18 +36,32 @@ sh tests/MaintainerScriptTests.sh
 The optional `make -C tests verify-curl-transport` requires macOS Foundation and
 the pinned headers prepared by `scripts/prepare-curl-impersonate.sh`. It runs the
 production transport adapter with a deterministic curl engine and protocol client
-under AddressSanitizer and UndefinedBehaviorSanitizer. It covers request headers
+under AddressSanitizer and UndefinedBehaviorSanitizer. It also checks the typed
+Networking bootstrap, session constructor/request hooks, and Security trust helper.
+It covers request headers
 and bodies, redirect body removal/replacement, cookie controls, decoded response
-metadata, trust/stream exclusions, cancellation, and error mapping. It does not
+metadata, trust/stream exclusions, pre-request certificate rejection, delegate
+callback precedence, cancellation, and error mapping. It does not
 establish TLS wire behavior; that requires a device and a real endpoint.
 
 The experimental adapter is packaged with
 `SHADOW_CURL_IMPERSONATE=1 ./build.sh rootless` after dependency preparation. It
 uses curl-impersonate v2.3.2's `safari184_ios` preset when the application's saved
 `Network.Transport` is `safari184_ios`; absent or `native` keeps native networking.
-Eligible foreground NSURLSession HTTPS requests use the adapter. Background
-sessions, arbitrary body streams, authentication challenge delegates, explicit
-ATS requirements needing native trust, and WKWebView remain on their native path.
+Eligible foreground NSURLSession HTTPS requests use the adapter. The optional
+Networking component applies the same transport to supported WebKit sessions
+after receiving a matching launch snapshot. It forwards server-trust decisions
+to the original session delegate before sending HTTP headers or bodies. WebKit
+integration requires an explicit web-content arbitrary-loads allowance and keeps
+native handling for explicit pinning, certificate-transparency, minimum TLS, or
+forward-secrecy policies. Background sessions and arbitrary body streams remain
+native. App sessions with authentication challenge delegates remain native;
+the Networking component handles only the known WebKit delegate classes.
+WebSocket, HTTP authentication, and complete WebKit behavior require separate
+device verification; a successful TLS endpoint capture does not establish them.
+Preset default HTTP headers are disabled. The adapter preserves request/session
+header values, including the existing WebKit User-Agent system-profile policy.
+The TLS preset does not select the User-Agent OS version.
 The optional engine currently supports the rootless lane only.
 
 The Makefile's `test` target does not include the maintainer-script checks.

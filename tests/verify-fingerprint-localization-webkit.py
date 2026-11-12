@@ -19,6 +19,12 @@ static void Check(BOOL value, const char *message) {
     if (!value) { fprintf(stderr, "FAIL: %s\n", message); exit(1); }
 }
 static NSDictionary *Resolved;
+static NSString *TransportProfile;
+static BOOL SupportsPolicy = YES;
+static BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) { (void)policy; return SupportsPolicy; }
+static NSDictionary *SHDWFingerprintConfig(NSString *bundle) {
+    (void)bundle;return @{@"Network":@{@"Transport":TransportProfile ?: @"native"}};
+}
 static BOOL Internal, MissingSymbol, RejectHook;
 static NSUInteger SymbolLookups, HookCalls, OriginalCalls;
 static xpc_connection_t ReceivedConnection;
@@ -27,8 +33,10 @@ static int ReceivedErrno;
 @interface FixtureBundle : NSObject
 + (instancetype)mainBundle;
 @property(nonatomic, copy) NSString *bundleIdentifier;
+@property(nonatomic, readonly) NSDictionary *infoDictionary;
 @end
 @implementation FixtureBundle
+- (NSDictionary *)infoDictionary { return @{}; }
 + (instancetype)mainBundle { static FixtureBundle *bundle; if (!bundle) { bundle = [FixtureBundle new]; bundle.bundleIdentifier = @"local.sdkprobe.app"; } return bundle; }
 @end
 static void OriginalBootstrap(xpc_connection_t connection, xpc_object_t message);
@@ -247,9 +255,29 @@ static void ChildTests(NSString *mode) {
     Check(NativeCalls == 3 && CopyCalls == copies + 1 && EnvironmentCalls == applications && TimeZoneCalls == zones, "successful child snapshot changed");
     puts("native WebContent child event handler tests passed");
 }
+static void TransportParentTests(void) {
+    Resolved = @{@"OverridesSystem":@NO}; TransportProfile = @"safari184_ios";
+    SupportsPolicy = NO;
+    SHDWFingerprintInstallWebLocalization();
+    Check(HookCalls == 0, "unsupported trust policy activated transport bootstrap");
+    SupportsPolicy = YES;
+    SHDWFingerprintInstallWebLocalization();
+    Check(HookCalls == 1, "native localization suppressed transport bootstrap");
+    xpc_object_t original = Message();
+    xpc_connection_t network = FixtureConnection("com.apple.WebKit.Networking");
+    SetBootstrap(network, original);
+    xpc_object_t event = Event();
+    xpc_dictionary_set_string(event, "service-name", "com.apple.WebKit.Networking");
+    Check([SHDWTransportSnapshot(ReceivedMessage, event)[@"Profile"] isEqual:@"safari184_ios"], "transport profile not delivered");
+    Check(!xpc_dictionary_get_value(original, "me.jjolano.shadow.transport.v1"), "original launch message mutated");
+    SetBootstrap(FixtureConnection("com.apple.WebKit.WebContent"), original);
+    Check(!xpc_dictionary_get_value(ReceivedMessage, "me.jjolano.shadow.transport.v1"), "transport payload reached rendering process");
+    puts("native-localization transport bootstrap routing passed");
+}
 int main(int argc, const char **argv) { @autoreleasepool {
     if (argc != 2) return 2;
-    NSString *mode = @(argv[1]); if ([mode isEqual:@"parent"]) ParentTests(); else ChildTests(mode);
+    NSString *mode = @(argv[1]); if ([mode isEqual:@"parent"]) ParentTests();
+    else if ([mode isEqual:@"transport-parent"]) TransportParentTests(); else ChildTests(mode);
 } return 0; }
 '''
 
@@ -264,11 +292,12 @@ with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as direc
     (temp / "Parent.inc").write_text(parent)
     (temp / "Child.inc").write_text(child)
     source, binary = temp / "main.m", temp / "check"
-    source.write_text(HARNESS)
+    source.write_text('#import "Transport/Bootstrap.h"\n' + HARNESS)
     subprocess.run(["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-g",
-                    "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-framework", "Foundation",
+                    "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-framework", "Foundation", "-DSHADOW_CURL_IMPERSONATE=1",
+                    "-I", str(ROOT / "src"),
                     "-I", str(ROOT / "src/Localization"), str(source), str(ROOT / "src/Localization/Environment.m"),
-                    str(ROOT / "src/Localization/Bootstrap.m"), "-o", str(binary)], check=True)
+                    str(ROOT / "src/Localization/Bootstrap.m"), str(ROOT / "src/Transport/Bootstrap.m"), "-o", str(binary)], check=True)
     environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0", UBSAN_OPTIONS="halt_on_error=1")
-    for mode in ("parent", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"):
+    for mode in ("parent", "transport-parent", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"):
         subprocess.run([str(binary), mode], check=True, env=environment)

@@ -1,9 +1,9 @@
 #import "CurlTransport.h"
-#import "FingerprintStorage.h"
 #import <Shadow/JBPath.h>
 
 #if SHADOW_CURL_IMPERSONATE
 #import <CFNetwork/CFNetwork.h>
+#import "../../Transport/CurlTrust.h"
 #include <curl/curl.h>
 #include <dlfcn.h>
 #include <math.h>
@@ -12,6 +12,8 @@
 
 static NSString *const SHDWCurlContext = @"me.jjolano.shadow.transport.configuration";
 static NSString *const SHDWCurlBody = @"me.jjolano.shadow.transport.body";
+static NSString *const SHDWCurlTrustContext = @"me.jjolano.shadow.transport.webkit-trust";
+static NSString *const SHDWCurlSessionContext = @"me.jjolano.shadow.transport.session";
 static unsigned transportReady;
 static struct {
     CURLcode (*initialize)(long);
@@ -19,11 +21,18 @@ static struct {
     CURLcode (*impersonate)(CURL *, const char *, int);
     CURLcode (*set)(CURL *, CURLoption, ...);
     CURLcode (*perform)(CURL *);
+    CURLcode (*info)(CURL *, CURLINFO, ...);
     void (*destroy)(CURL *);
     struct curl_slist *(*append)(struct curl_slist *, const char *);
     void (*freeHeaders)(struct curl_slist *);
     const char *(*error)(CURLcode);
 } engine;
+
+@interface SHDWCurlSessionReference : NSObject
+@property(nonatomic, weak) NSURLSession *session;
+@property(nonatomic, weak) NSURLSessionTask *task;
+@end
+@implementation SHDWCurlSessionReference @end
 
 @interface SHDWSafari184Protocol : NSURLProtocol
 @property(nonatomic, strong) NSRecursiveLock *callbackLock;
@@ -34,8 +43,14 @@ static struct {
 @property(nonatomic, strong) NSMutableDictionary *responseHeaders;
 @property(nonatomic, strong) NSMutableArray *cookieLines;
 @property(nonatomic, strong) NSURLSessionConfiguration *settings;
+@property(nonatomic) CURL *transfer;
+@property(nonatomic) BOOL trustChecked;
+@property(nonatomic) BOOL trustRejected;
+@property(nonatomic) BOOL trustCancelled;
+@property(nonatomic, copy) NSString *trustFailureReason;
 - (BOOL)deliverHeaders;
 - (void)runTransfer;
+- (BOOL)approveTrust;
 @end
 
 static BOOL SHDWCurlStopped(SHDWSafari184Protocol *protocol) {
@@ -84,9 +99,20 @@ static int SHDWCurlProgress(void *context, curl_off_t total, curl_off_t download
     return SHDWCurlStopped((__bridge id)context) ? 1 : 0;
 }
 
+static int SHDWCurlPrerequisite(void *context, char *remote, char *local, int remotePort, int localPort) {
+    (void)remote; (void)local; (void)remotePort; (void)localPort;
+    SHDWSafari184Protocol *protocol = (__bridge id)context;
+    return !SHDWCurlStopped(protocol) && [protocol approveTrust] ? CURL_PREREQFUNC_OK : CURL_PREREQFUNC_ABORT;
+}
+
 static id SHDWCurlHeaderValue(NSDictionary *headers, NSString *name) {
     for (NSString *key in headers) if ([key caseInsensitiveCompare:name] == NSOrderedSame) return headers[key];
     return nil;
+}
+
+static NSString *SHDWCurlNativeUserAgent(void) {
+    CFStringRef (*copyUserAgent)(void) = dlsym(RTLD_DEFAULT, "_CFNetworkCopyDefaultUserAgentString");
+    return copyUserAgent ? CFBridgingRelease(copyUserAgent()) : nil;
 }
 
 static BOOL SHDWCurlSameOrigin(NSURL *a, NSURL *b) {
@@ -99,14 +125,19 @@ static BOOL SHDWCurlSameOrigin(NSURL *a, NSURL *b) {
 static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
     for (NSString *key in policy) {
         id value = policy[key];
-        if ([key isEqual:@"NSPinnedDomains"] && [value count]) return YES;
+        if ([key isEqual:@"NSPinnedDomains"] && (![value isKindOfClass:NSDictionary.class] || [value count])) return YES;
         if (([key isEqual:@"NSRequiresCertificateTransparency"] || [key hasSuffix:@"RequiresForwardSecrecy"]) &&
             [value respondsToSelector:@selector(boolValue)] && [value boolValue]) return YES;
         if ([key hasSuffix:@"MinimumTLSVersion"] && [value isKindOfClass:NSString.class] &&
-            [value compare:@"TLSv1.2" options:NSNumericSearch] == NSOrderedDescending) return YES;
+            [value compare:@"TLSv1.0" options:NSNumericSearch] == NSOrderedDescending) return YES;
         if ([value isKindOfClass:NSDictionary.class] && SHDWCurlRequiresNativeTrust(value)) return YES;
     }
     return NO;
+}
+
+BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) {
+    return ([policy[@"NSAllowsArbitraryLoadsInWebContent"] boolValue] || [policy[@"NSAllowsArbitraryLoads"] boolValue]) &&
+        !SHDWCurlRequiresNativeTrust(policy);
 }
 
 @implementation SHDWSafari184Protocol
@@ -125,6 +156,75 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
     [self.callbackLock lock];
     self.stopped = YES;
     [self.callbackLock unlock];
+}
+- (BOOL)approveTrust {
+    if (![NSURLProtocol propertyForKey:SHDWCurlTrustContext inRequest:self.request]) return YES;
+    if (self.trustChecked) return !self.trustRejected;
+    self.trustChecked = YES;
+    struct curl_certinfo *info = NULL;
+    NSMutableArray<NSData *> *certificates = [NSMutableArray new];
+    if (engine.info && engine.info(self.transfer, CURLINFO_CERTINFO, &info) == CURLE_OK && info) {
+        for (int index = 0; index < info->num_of_certs; index++) {
+            for (struct curl_slist *field = info->certinfo[index]; field; field = field->next) {
+                if (strncmp(field->data, "Cert:", 5)) continue;
+                NSString *pem = @(field->data + 5);
+                pem = [pem stringByReplacingOccurrencesOfString:@"-----BEGIN CERTIFICATE-----" withString:@""];
+                pem = [pem stringByReplacingOccurrencesOfString:@"-----END CERTIFICATE-----" withString:@""];
+                NSData *der = [[NSData alloc] initWithBase64EncodedString:pem options:NSDataBase64DecodingIgnoreUnknownCharacters];
+                if (der.length) [certificates addObject:der];
+            }
+        }
+    }
+    __block BOOL challengeActive = YES, challengeSent = NO, delegateInvoked = NO, missingTask = NO;
+    __block NSInteger dispositionObserved = -1;
+    BOOL accepted = SHDWCurlEvaluateTrust(certificates, self.request.URL.host, self.request.URL.port.integerValue ?: 443,
+        MIN(self.request.timeoutInterval > 0 ? self.request.timeoutInterval : 60, 60),
+        ^(NSURLAuthenticationChallenge *challenge) {
+            challengeSent = YES;
+            SHDWCurlSessionReference *reference = [NSURLProtocol propertyForKey:SHDWCurlSessionContext inRequest:self.request];
+            NSURLSession *session = reference.session;
+            NSURLSessionTask *task = reference.task;
+            if (!session || !task) { missingTask = YES; [challenge.sender cancelAuthenticationChallenge:challenge]; return; }
+            [session.delegateQueue addOperationWithBlock:^{
+                [self.callbackLock lock];
+                if (!challengeActive || SHDWCurlStopped(self)) [challenge.sender cancelAuthenticationChallenge:challenge];
+                else {
+                    delegateInvoked = YES;
+                    void (^complete)(NSURLSessionAuthChallengeDisposition, NSURLCredential *) =
+                        ^(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) {
+                            [self.callbackLock lock];
+                            dispositionObserved = disposition;
+                            [self.callbackLock unlock];
+                            if (disposition == NSURLSessionAuthChallengeUseCredential) [challenge.sender useCredential:credential forAuthenticationChallenge:challenge];
+                            else if (disposition == NSURLSessionAuthChallengePerformDefaultHandling) [challenge.sender performDefaultHandlingForAuthenticationChallenge:challenge];
+                            else if (disposition == NSURLSessionAuthChallengeRejectProtectionSpace) [challenge.sender rejectProtectionSpaceAndContinueWithChallenge:challenge];
+                            else [challenge.sender cancelAuthenticationChallenge:challenge];
+                        };
+                    id<NSURLSessionTaskDelegate> delegate = (id)session.delegate;
+                    if ([delegate respondsToSelector:@selector(URLSession:didReceiveChallenge:completionHandler:)])
+                        [delegate URLSession:session didReceiveChallenge:challenge completionHandler:complete];
+                    else if ([delegate respondsToSelector:@selector(URLSession:task:didReceiveChallenge:completionHandler:)])
+                        [delegate URLSession:session task:task didReceiveChallenge:challenge completionHandler:complete];
+                    else [challenge.sender performDefaultHandlingForAuthenticationChallenge:challenge];
+                }
+                [self.callbackLock unlock];
+            }];
+        }, ^BOOL { return SHDWCurlStopped(self); });
+    [self.callbackLock lock];
+    challengeActive = NO;
+    self.trustCancelled = dispositionObserved == NSURLSessionAuthChallengeCancelAuthenticationChallenge;
+    if (!accepted) {
+        if (!certificates.count) self.trustFailureReason = @"TLS peer certificate information is unavailable";
+        else if (!challengeSent) self.trustFailureReason = @"System certificate validation failed";
+        else if (self.trustCancelled) self.trustFailureReason = @"Authentication was cancelled";
+        else if (missingTask) self.trustFailureReason = @"The original session or task is unavailable for authentication";
+        else if (!delegateInvoked) self.trustFailureReason = @"The authentication delegate queue timed out";
+        else if (dispositionObserved < 0) self.trustFailureReason = @"The authentication delegate did not complete its challenge";
+        else self.trustFailureReason = [NSString stringWithFormat:@"The authentication delegate rejected the certificate (disposition %ld)", (long)dispositionObserved];
+    }
+    [self.callbackLock unlock];
+    self.trustRejected = !accepted;
+    return accepted;
 }
 - (BOOL)deliverHeaders {
     if (self.request.HTTPShouldHandleCookies && self.settings.HTTPShouldSetCookies && self.settings.HTTPCookieStorage) {
@@ -179,7 +279,8 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
 - (void)runTransfer {
     if (SHDWCurlStopped(self)) return;
     CURL *curl = engine.create();
-    CURLcode result = curl ? engine.impersonate(curl, "safari184_ios", 1) : CURLE_OUT_OF_MEMORY;
+    self.transfer = curl;
+    CURLcode result = curl ? engine.impersonate(curl, "safari184_ios", 0) : CURLE_OUT_OF_MEMORY;
     struct curl_slist *headers = NULL;
     NSData *body = self.request.HTTPBody ?: (self.request.HTTPBodyStream ?
         [NSURLProtocol propertyForKey:SHDWCurlBody inRequest:self.request] : nil);
@@ -191,8 +292,13 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
         SHDW_CURL_SET(CURLOPT_NOSIGNAL, 1L);
         SHDW_CURL_SET(CURLOPT_SSL_VERIFYPEER, 1L);
         SHDW_CURL_SET(CURLOPT_SSL_VERIFYHOST, 2L);
+        if ([NSURLProtocol propertyForKey:SHDWCurlTrustContext inRequest:self.request]) {
+            SHDW_CURL_SET(CURLOPT_CERTINFO, 1L);
+            SHDW_CURL_SET(CURLOPT_PREREQFUNCTION, SHDWCurlPrerequisite);
+            SHDW_CURL_SET(CURLOPT_PREREQDATA, (__bridge void *)self);
+        }
         SHDW_CURL_SET(CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L);
-        SHDW_CURL_SET(CURLOPT_ACCEPT_ENCODING, "gzip, deflate, br");
+        SHDW_CURL_SET(CURLOPT_ACCEPT_ENCODING, "");
         double timeout = self.request.timeoutInterval;
         if (!isfinite(timeout) || timeout <= 0) timeout = 60;
         SHDW_CURL_SET(CURLOPT_TIMEOUT_MS, (long)MIN(timeout * 1000, (double)LONG_MAX));
@@ -214,6 +320,10 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
             for (NSString *old in values.allKeys) if ([old caseInsensitiveCompare:key] == NSOrderedSame) [values removeObjectForKey:old];
             values[key] = self.request.allHTTPHeaderFields[key];
         }
+        if (!SHDWCurlHeaderValue(values, @"User-Agent")) {
+            NSString *native = SHDWCurlNativeUserAgent();
+            if (native) values[@"User-Agent"] = native;
+        }
         if (self.request.HTTPShouldHandleCookies && self.settings.HTTPShouldSetCookies && !SHDWCurlHeaderValue(values,@"Cookie")) {
             NSArray *cookies = [self.settings.HTTPCookieStorage cookiesForURL:self.request.URL];
             [values addEntriesFromDictionary:[NSHTTPCookie requestHeaderFieldsWithCookies:cookies ?: @[]]];
@@ -225,6 +335,12 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
             NSString *line = value.length ? [NSString stringWithFormat:@"%@: %@",name,value] : [name stringByAppendingString:@";"];
             struct curl_slist *next = engine.append(headers, line.UTF8String);
             if (!next) { result = CURLE_OUT_OF_MEMORY; break; } headers = next;
+        }
+        for (NSString *name in @[@"Accept", @"Accept-Encoding", @"Content-Type"]) {
+            if (SHDWCurlHeaderValue(values, name)) continue;
+            struct curl_slist *next = engine.append(headers, [name stringByAppendingString:@":"].UTF8String);
+            if (!next) { result = CURLE_OUT_OF_MEMORY; break; }
+            headers = next;
         }
         SHDW_CURL_SET(CURLOPT_HTTPHEADER, headers);
         NSDictionary *proxySettings = self.settings.connectionProxyDictionary;
@@ -244,19 +360,22 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
     }
     if (headers) engine.freeHeaders(headers);
     if (curl) engine.destroy(curl);
+    self.transfer = NULL;
     [self.callbackLock lock];
     if (!SHDWCurlStopped(self) && !self.redirected) {
         if (result == CURLE_OK) [self.client URLProtocolDidFinishLoading:self];
         else {
             NSInteger code = NSURLErrorNetworkConnectionLost;
-            if (result == CURLE_OPERATION_TIMEDOUT) code = NSURLErrorTimedOut;
+            if (self.trustCancelled) code = NSURLErrorCancelled;
+            else if (self.trustRejected) code = NSURLErrorServerCertificateUntrusted;
+            else if (result == CURLE_OPERATION_TIMEDOUT) code = NSURLErrorTimedOut;
             else if (result == CURLE_COULDNT_RESOLVE_HOST) code = NSURLErrorCannotFindHost;
             else if (result == CURLE_COULDNT_CONNECT) code = NSURLErrorCannotConnectToHost;
             else if (result == CURLE_PEER_FAILED_VERIFICATION) code = NSURLErrorServerCertificateUntrusted;
             else if (result == CURLE_SSL_CONNECT_ERROR) code = NSURLErrorSecureConnectionFailed;
             else if (result == CURLE_NOT_BUILT_IN) code = NSURLErrorUnsupportedURL;
             NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:code userInfo:@{
-                NSLocalizedDescriptionKey:@(engine.error(result)), NSURLErrorFailingURLErrorKey:self.request.URL}];
+                NSLocalizedDescriptionKey:self.trustFailureReason ?: @(engine.error(result)), NSURLErrorFailingURLErrorKey:self.request.URL}];
             [self.client URLProtocol:self didFailWithError:error];
         }
     }
@@ -264,30 +383,30 @@ static BOOL SHDWCurlRequiresNativeTrust(NSDictionary *policy) {
 }
 @end
 
-void SHDWCurlTransportPrepare(void) {
-    NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
-    if (![configuration[@"Network"][@"Transport"] isEqual:@"safari184_ios"]) return;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        void *image = dlopen(JBPath(@"/usr/lib/shadow/curl/libcurl-impersonate.4.dylib").fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
-        if (!image) return;
+void SHDWCurlTransportPrepareProfile(NSString *profile) {
+    if (![profile isEqual:@"safari184_ios"]) return;
+    static unsigned attempted;
+    unsigned expected = 0;
+    if (!__atomic_compare_exchange_n(&attempted, &expected, 1, NO, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    void *image = dlopen(JBPath(@"/usr/lib/shadow/curl/libcurl-impersonate.4.dylib").fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
+    if (!image) return;
 #define SHDW_CURL_SYMBOL(field, name) engine.field = dlsym(image, name); if (!engine.field) return
-        SHDW_CURL_SYMBOL(initialize, "curl_global_init");
-        SHDW_CURL_SYMBOL(create, "curl_easy_init");
-        SHDW_CURL_SYMBOL(impersonate, "curl_easy_impersonate");
-        SHDW_CURL_SYMBOL(set, "curl_easy_setopt");
-        SHDW_CURL_SYMBOL(perform, "curl_easy_perform");
-        SHDW_CURL_SYMBOL(destroy, "curl_easy_cleanup");
-        SHDW_CURL_SYMBOL(append, "curl_slist_append");
-        SHDW_CURL_SYMBOL(freeHeaders, "curl_slist_free_all");
-        SHDW_CURL_SYMBOL(error, "curl_easy_strerror");
+    SHDW_CURL_SYMBOL(initialize, "curl_global_init");
+    SHDW_CURL_SYMBOL(create, "curl_easy_init");
+    SHDW_CURL_SYMBOL(impersonate, "curl_easy_impersonate");
+    SHDW_CURL_SYMBOL(set, "curl_easy_setopt");
+    SHDW_CURL_SYMBOL(perform, "curl_easy_perform");
+    SHDW_CURL_SYMBOL(info, "curl_easy_getinfo");
+    SHDW_CURL_SYMBOL(destroy, "curl_easy_cleanup");
+    SHDW_CURL_SYMBOL(append, "curl_slist_append");
+    SHDW_CURL_SYMBOL(freeHeaders, "curl_slist_free_all");
+    SHDW_CURL_SYMBOL(error, "curl_easy_strerror");
 #undef SHDW_CURL_SYMBOL
-        if (engine.initialize(CURL_GLOBAL_DEFAULT) != CURLE_OK) return;
-        CURL *probe = engine.create(); if (!probe) return;
-        BOOL available = engine.impersonate(probe, "safari184_ios", 0) == CURLE_OK;
-        engine.destroy(probe);
-        if (available) { __atomic_store_n(&transportReady, 1, __ATOMIC_RELEASE); [NSURLProtocol registerClass:SHDWSafari184Protocol.class]; }
-    });
+    if (engine.initialize(CURL_GLOBAL_DEFAULT) != CURLE_OK) return;
+    CURL *probe = engine.create(); if (!probe) return;
+    BOOL available = engine.impersonate(probe, "safari184_ios", 0) == CURLE_OK;
+    engine.destroy(probe);
+    if (available) { __atomic_store_n(&transportReady, 1, __ATOMIC_RELEASE); [NSURLProtocol registerClass:SHDWSafari184Protocol.class]; }
 }
 BOOL SHDWCurlTransportReady(void) { return __atomic_load_n(&transportReady, __ATOMIC_ACQUIRE) != 0; }
 NSURLSessionConfiguration *SHDWCurlTransportConfiguration(NSURLSessionConfiguration *configuration) {
@@ -297,13 +416,13 @@ NSURLSessionConfiguration *SHDWCurlTransportConfiguration(NSURLSessionConfigurat
     for (Class cls in configuration.protocolClasses) if (cls != SHDWSafari184Protocol.class) [protocols addObject:cls];
     copy.protocolClasses = protocols; return copy;
 }
-NSURLRequest *SHDWCurlTransportRequest(NSURLRequest *request, NSURLSession *session) {
+static NSURLRequest *SHDWCurlPrepareRequest(NSURLRequest *request, NSURLSession *session, BOOL webKit) {
     if (!SHDWCurlTransportReady() || !request || !session) return request;
     NSURLSessionConfiguration *configuration = session.configuration;
     id delegate = session.delegate;
     NSDictionary *ats = NSBundle.mainBundle.infoDictionary[@"NSAppTransportSecurity"];
-    BOOL customTrust = [delegate respondsToSelector:@selector(URLSession:didReceiveChallenge:completionHandler:)] ||
-        [delegate respondsToSelector:@selector(URLSession:task:didReceiveChallenge:completionHandler:)] || SHDWCurlRequiresNativeTrust(ats);
+    BOOL customTrust = (!webKit && ([delegate respondsToSelector:@selector(URLSession:didReceiveChallenge:completionHandler:)] ||
+        [delegate respondsToSelector:@selector(URLSession:task:didReceiveChallenge:completionHandler:)])) || SHDWCurlRequiresNativeTrust(ats);
     if (configuration.identifier || customTrust ||
         (request.HTTPBodyStream && ![NSURLProtocol propertyForKey:SHDWCurlBody inRequest:request])) {
         if (![NSURLProtocol propertyForKey:SHDWCurlContext inRequest:request]) return request;
@@ -311,23 +430,48 @@ NSURLRequest *SHDWCurlTransportRequest(NSURLRequest *request, NSURLSession *sess
     }
     if ([NSURLProtocol propertyForKey:SHDWCurlContext inRequest:request]) {
         NSData *cachedBody = [NSURLProtocol propertyForKey:SHDWCurlBody inRequest:request];
+        SHDWCurlSessionReference *reference = [NSURLProtocol propertyForKey:SHDWCurlSessionContext inRequest:request];
         if ((request.HTTPBody && ![request.HTTPBody isEqual:cachedBody]) ||
-            (!request.HTTPBody && !request.HTTPBodyStream && cachedBody)) {
+            (!request.HTTPBody && !request.HTTPBodyStream && cachedBody) ||
+            (webKit && (reference.session != session || reference.task != nil))) {
             NSMutableURLRequest *copy = [request mutableCopy];
             if (request.HTTPBody) [NSURLProtocol setProperty:[request.HTTPBody copy] forKey:SHDWCurlBody inRequest:copy];
-            else [NSURLProtocol removePropertyForKey:SHDWCurlBody inRequest:copy];
+            else if (!request.HTTPBodyStream) [NSURLProtocol removePropertyForKey:SHDWCurlBody inRequest:copy];
+            if (webKit) {
+                SHDWCurlSessionReference *updated = [SHDWCurlSessionReference new]; updated.session = session;
+                [NSURLProtocol setProperty:@YES forKey:SHDWCurlTrustContext inRequest:copy];
+                [NSURLProtocol setProperty:updated forKey:SHDWCurlSessionContext inRequest:copy];
+            }
             return copy;
         }
         return request;
     }
     NSMutableURLRequest *copy = [request mutableCopy];
     [NSURLProtocol setProperty:[configuration copy] forKey:SHDWCurlContext inRequest:copy];
+    if (webKit) {
+        [NSURLProtocol setProperty:@YES forKey:SHDWCurlTrustContext inRequest:copy];
+        SHDWCurlSessionReference *reference = [SHDWCurlSessionReference new]; reference.session = session;
+        [NSURLProtocol setProperty:reference forKey:SHDWCurlSessionContext inRequest:copy];
+    }
     if (request.HTTPBody) [NSURLProtocol setProperty:[request.HTTPBody copy] forKey:SHDWCurlBody inRequest:copy];
     return copy;
 }
+NSURLRequest *SHDWCurlTransportRequest(NSURLRequest *request, NSURLSession *session) {
+    return SHDWCurlPrepareRequest(request, session, NO);
+}
+NSURLRequest *SHDWCurlTransportWebKitRequest(NSURLRequest *request, NSURLSession *session) {
+    return SHDWCurlPrepareRequest(request, session, YES);
+}
+void SHDWCurlTransportAttachTask(NSURLRequest *request, NSURLSessionTask *task) {
+    SHDWCurlSessionReference *reference = [NSURLProtocol propertyForKey:SHDWCurlSessionContext inRequest:request];
+    reference.task = task;
+}
 #else
-void SHDWCurlTransportPrepare(void) {}
+void SHDWCurlTransportPrepareProfile(NSString *profile) { (void)profile; }
 BOOL SHDWCurlTransportReady(void) { return NO; }
+BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) { (void)policy; return NO; }
 NSURLSessionConfiguration *SHDWCurlTransportConfiguration(NSURLSessionConfiguration *configuration) { return configuration; }
 NSURLRequest *SHDWCurlTransportRequest(NSURLRequest *request, NSURLSession *session) { (void)session; return request; }
+NSURLRequest *SHDWCurlTransportWebKitRequest(NSURLRequest *request, NSURLSession *session) { (void)session; return request; }
+void SHDWCurlTransportAttachTask(NSURLRequest *request, NSURLSessionTask *task) { (void)request; (void)task; }
 #endif

@@ -42,7 +42,17 @@ mkdir -p "$WORK/hookkit/build-support/shadow"
 cp "$ROOT/build-support/lanes.sh" "$ROOT/build-support/toolchain.sh" \
     "$ROOT/build-support/hookkit-lanes.sh" "$WORK/hookkit/build-support/shadow/"
 
+if [ -f "$src/vendor/gum/frida-gum.h" ] && [ -f "$src/vendor/gum/libfrida-gum.a" ]; then
+    cp "$src/vendor/gum/frida-gum.h" "$src/vendor/gum/libfrida-gum.a" "$WORK/hookkit/vendor/gum/"
+    for stamp in "$src/vendor/gum"/.devkit-*; do
+        [ ! -f "$stamp" ] || cp "$stamp" "$WORK/hookkit/vendor/gum/"
+    done
+fi
+
 # Build and stage just this lane's framework into $THEOS at the location
 # build-support/hookkit.mk resolves. install-theos.sh owns the lane -> path layout.
 bash "$WORK/hookkit/tools/release/install-theos.sh" "$LANE"
+if [ -n "${HOOKKIT_PACKAGE_OUTPUT:-}" ]; then
+    cp "$WORK/hookkit/.theos/release/hookkit-$LANE.deb" "$HOOKKIT_PACKAGE_OUTPUT"
+fi
 echo "provisioned HookKit ($HOOKKIT) for $LANE into $THEOS"
