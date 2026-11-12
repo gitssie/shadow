@@ -60,7 +60,8 @@ the Networking component handles only the known WebKit delegate classes.
 WebSocket, HTTP authentication, and complete WebKit behavior require separate
 device verification; a successful TLS endpoint capture does not establish them.
 Preset default HTTP headers are disabled. The adapter preserves request/session
-header values, including the existing WebKit User-Agent system-profile policy.
+header values after the existing CFNetwork and WebKit User-Agent system-profile
+policies apply. Explicit non-default App User-Agent values remain unchanged.
 The TLS preset does not select the User-Agent OS version.
 The optional engine currently supports the rootless lane only.
 
