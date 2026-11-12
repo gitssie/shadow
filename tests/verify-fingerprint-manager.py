@@ -359,7 +359,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([defaults boolForKey:SHDWSingleToggleMigrationID]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
-  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 4);
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 5);
   NSMutableDictionary *ios1872 = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
   ios1872[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.2_22H124"};
   assert([SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
@@ -372,7 +372,15 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([resolved184[@"Version"] isEqual:@"18.4"] && [resolved184[@"Build"] isEqual:@"22E240"]);
   assert([resolved184[@"Darwin"] isEqual:@"24.4.0"] && [resolved184[@"CFNetwork"] isEqual:@"3826.500.111.2.2"]);
   assert([ios184[@"Network"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration[@"Network"]]);
+  NSMutableDictionary *ios1672 = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
+  ios1672[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios16.7.2_20H115"};
+  assert([SHDWFingerprintConfiguration configurationByValidating:ios1672 error:NULL]);
+  NSDictionary *resolved1672 = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:ios1672];
+  assert([resolved1672[@"Version"] isEqual:@"16.7.2"] && [resolved1672[@"Build"] isEqual:@"20H115"]);
+  assert([resolved1672[@"Darwin"] isEqual:@"22.6.0"] && [resolved1672[@"CFNetwork"] isEqual:@"1410.0.3"]);
+  assert([ios1672[@"Network"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration[@"Network"]]);
   managerProductType = "iPhone10,3";
+  assert(![SHDWFingerprintConfiguration configurationByValidating:ios1672 error:NULL]);
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios184 error:NULL]);
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
   for (NSString *product in @[@"iPhone10,3", @"iPhone10,6"]) {

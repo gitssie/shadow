@@ -80,7 +80,8 @@ int main(void) { @autoreleasepool {
   for (NSDictionary *profile in SHDWFingerprintConfiguration.allSystemProfiles) {
     NSString *version=profile[@"Version"];
     BOOL is187=[version isEqual:@"18.7"] || [version hasPrefix:@"18.7."];
-    assert(is187 ? [profile[@"CFNetwork"] isEqual:@"3826.600.41"] : ([version isEqual:@"18.4"] ? [profile[@"CFNetwork"] isEqual:@"3826.500.111.2.2"] : !profile[@"CFNetwork"]));
+    NSString *expectedNetwork = is187 ? @"3826.600.41" : @{@"18.4":@"3826.500.111.2.2", @"16.7.2":@"1410.0.3"}[version];
+    assert(expectedNetwork ? [profile[@"CFNetwork"] isEqual:expectedNetwork] : !profile[@"CFNetwork"]);
   }
   fixture = SHDWFingerprintConfiguration.defaultConfiguration;
   NSDictionary *nativeSystem = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:fixture];
@@ -137,6 +138,15 @@ int main(void) { @autoreleasepool {
   assert(SHDWFingerprintUnameValue(&value));
   assert(!strcmp(value.release, "24.4.0"));
   assert(strstr(value.version, "xnu-11417.102.9~20/RELEASE_ARM64_T8110"));
+  chosen[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios16.7.2_20H115"};
+  fixture = [chosen copy];
+  assert([SHDWFingerprintOSVersionString() isEqual:@"16.7.2"]);
+  assert([SHDWFingerprintCFNetworkVersion() isEqual:@"1410.0.3"]);
+  assert(!strcmp(SHDWFingerprintVersionValue("kern.osversion"), "20H115"));
+  assert([SHDWFingerprintUserAgent(ua) containsString:@"OS 16_7_2 like Mac OS X"]);
+  assert(SHDWFingerprintUnameValue(&value));
+  assert(!strcmp(value.release, "22.6.0"));
+  assert(strstr(value.version, "xnu-8796.142.1.701.11~1/RELEASE_ARM64_T8110"));
   chosen[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.8_22H352"};
   fixture = [chosen copy];
   assert([SHDWFingerprintOSVersionString() isEqual:@"18.7.8"]);
