@@ -359,7 +359,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([defaults boolForKey:SHDWSingleToggleMigrationID]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
-  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 6);
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 20);
   NSMutableDictionary *ios1872 = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
   ios1872[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.2_22H124"};
   assert([SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
@@ -386,6 +386,32 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([resolved1631[@"Version"] isEqual:@"16.3.1"] && [resolved1631[@"Build"] isEqual:@"20D67"]);
   assert([resolved1631[@"Darwin"] isEqual:@"22.3.0"] && [resolved1631[@"CFNetwork"] isEqual:@"1404.0.5"]);
   assert([ios1631[@"Network"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration[@"Network"]]);
+  NSDictionary *latestSeriesBuilds = @{
+      @"16.0.3":@"20A392", @"16.1.2":@"20B110", @"16.2":@"20C65", @"16.3.1":@"20D67",
+      @"16.4.1":@"20E252", @"16.5.1":@"20F75", @"16.6.1":@"20G81", @"16.7.2":@"20H115",
+      @"17.0.3":@"21A360", @"17.1.2":@"21B101", @"17.2.1":@"21C66", @"17.3.1":@"21D61",
+      @"17.4.1":@"21E236", @"17.5.1":@"21F90", @"17.6.1":@"21G101", @"17.7.2":@"21H221"};
+  NSMutableSet *availableSeries = [NSMutableSet new];
+  for (NSDictionary *profile in SHDWFingerprintConfiguration.systemProfilesForCurrentDevice) {
+      if ([profile[@"Version"] hasPrefix:@"16."] || [profile[@"Version"] hasPrefix:@"17."]) {
+          assert(![availableSeries containsObject:profile[@"Version"]]);
+          [availableSeries addObject:profile[@"Version"]];
+      }
+  }
+  assert([availableSeries isEqual:[NSSet setWithArray:latestSeriesBuilds.allKeys]]);
+  for (NSString *version in latestSeriesBuilds) {
+      NSMutableDictionary *selected = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
+      NSString *identifier = [NSString stringWithFormat:@"iphone14-5_ios%@_%@", version, latestSeriesBuilds[version]];
+      selected[@"System"] = @{@"Mode":@"profile", @"ProfileID":identifier};
+      assert([SHDWFingerprintConfiguration configurationByValidating:selected error:NULL]);
+      NSDictionary *resolved = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:selected];
+      assert([resolved[@"Version"] isEqual:version] && [resolved[@"Build"] isEqual:latestSeriesBuilds[version]]);
+      assert([resolved[@"Kernel"] containsString:@"/RELEASE_ARM64_T8110"] && [resolved[@"CFNetwork"] length]);
+      assert([selected[@"Network"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration[@"Network"]]);
+      managerProductType = "iPhone10,3";
+      assert(![SHDWFingerprintConfiguration configurationByValidating:selected error:NULL]);
+      managerProductType = "iPhone14,5";
+  }
   managerProductType = "iPhone10,3";
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios1631 error:NULL]);
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios1672 error:NULL]);
