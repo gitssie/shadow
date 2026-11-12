@@ -359,7 +359,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([defaults boolForKey:SHDWSingleToggleMigrationID]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"Mode"] isEqual:@"profile"]);
   assert([SHDWFingerprintConfiguration.defaultConfiguration[@"System"][@"ProfileID"] isEqual:@"iphone14-5_ios18.7.1_22H31"]);
-  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 5);
+  assert(SHDWFingerprintConfiguration.systemProfilesForCurrentDevice.count == 6);
   NSMutableDictionary *ios1872 = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
   ios1872[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios18.7.2_22H124"};
   assert([SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
@@ -379,7 +379,15 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert([resolved1672[@"Version"] isEqual:@"16.7.2"] && [resolved1672[@"Build"] isEqual:@"20H115"]);
   assert([resolved1672[@"Darwin"] isEqual:@"22.6.0"] && [resolved1672[@"CFNetwork"] isEqual:@"1410.0.3"]);
   assert([ios1672[@"Network"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration[@"Network"]]);
+  NSMutableDictionary *ios1631 = [SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];
+  ios1631[@"System"] = @{@"Mode":@"profile", @"ProfileID":@"iphone14-5_ios16.3.1_20D67"};
+  assert([SHDWFingerprintConfiguration configurationByValidating:ios1631 error:NULL]);
+  NSDictionary *resolved1631 = [SHDWFingerprintConfiguration resolvedSystemForConfiguration:ios1631];
+  assert([resolved1631[@"Version"] isEqual:@"16.3.1"] && [resolved1631[@"Build"] isEqual:@"20D67"]);
+  assert([resolved1631[@"Darwin"] isEqual:@"22.3.0"] && [resolved1631[@"CFNetwork"] isEqual:@"1404.0.5"]);
+  assert([ios1631[@"Network"] isEqual:SHDWFingerprintConfiguration.defaultConfiguration[@"Network"]]);
   managerProductType = "iPhone10,3";
+  assert(![SHDWFingerprintConfiguration configurationByValidating:ios1631 error:NULL]);
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios1672 error:NULL]);
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios184 error:NULL]);
   assert(![SHDWFingerprintConfiguration configurationByValidating:ios1872 error:NULL]);
