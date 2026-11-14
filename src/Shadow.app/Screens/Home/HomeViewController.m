@@ -44,7 +44,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     self.summary = [SHDWFingerprintSummaryView new]; self.summary.cleanupTapped = ^{ [weakSelf showCleanup]; }; [self.summary addTarget:self action:@selector(showDetails) forControlEvents:UIControlEventTouchUpInside];
     UIImageView *mark = [[UIImageView alloc] initWithImage:SHDWSymbol(@"touchid", 30)]; mark.tintColor = SHDWAccent(); mark.contentMode = UIViewContentModeScaleAspectFit; mark.accessibilityIdentifier = @"home.fingerprint-logo";
     self.ipSwitchButton = [UIButton buttonWithType:UIButtonTypeSystem]; self.ipSwitchButton.tintColor = SHDWAccent();
-    [self.ipSwitchButton setImage:SHDWIPSwitchSymbol(17) forState:UIControlStateNormal];
+    [self.ipSwitchButton setImage:SHDWIPSwitchSymbol(20) forState:UIControlStateNormal];
     [self.ipSwitchButton addTarget:self action:@selector(chooseIPSwitch) forControlEvents:UIControlEventTouchUpInside]; self.ipSwitchButton.accessibilityIdentifier = @"home.switch-ip"; self.ipSwitchButton.accessibilityLabel = SHDWText(@"Switch IP");
     UIStackView *brand = [[UIStackView alloc] initWithArrangedSubviews:@[mark, self.ipSwitchButton]]; brand.alignment = UIStackViewAlignmentCenter; brand.spacing = 8;
     self.manageButton = [UIButton buttonWithType:UIButtonTypeSystem]; self.manageButton.tintColor = SHDWAccent(); [self.manageButton setImage:SHDWSymbol(@"plus", 17) forState:UIControlStateNormal]; [self.manageButton addTarget:self action:@selector(manageApplications) forControlEvents:UIControlEventTouchUpInside]; self.manageButton.accessibilityLabel = SHDWText(@"Applications"); self.manageButton.accessibilityIdentifier = @"home.manage-applications";
@@ -97,7 +97,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     self.lockButton.accessibilityLabel = SHDWText(locked ? @"Unlock fingerprint" : @"Lock fingerprint");
     NSDictionary *configuration = present ? [store configurationForApplication:self.selected.bundleIdentifier] : [SHDWFingerprintConfiguration defaultConfiguration];
     NSDictionary *systemProfile = [SHDWFingerprintConfiguration systemProfileForConfiguration:configuration];
-    [self.summary showSystemVersion:systemProfile[@"Version"] ?: UIDevice.currentDevice.systemVersion region:[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration][@"CountryCode"] ?: @"—"];
+    [self.summary showSystemVersion:systemProfile[@"Version"] ?: UIDevice.currentDevice.systemVersion region:[SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration][@"CountryCode"] ?: @"—" tlsEnabled:[SHDWFingerprintConfiguration usesCurlTransportForConfiguration:configuration]];
     [self.summary showUpdatedAt:present ? [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"UpdatedAt"] : nil];
 }
 - (void)chooseIPSwitch {

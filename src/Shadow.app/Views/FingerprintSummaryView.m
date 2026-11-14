@@ -4,6 +4,7 @@
 @interface SHDWFingerprintSummaryView ()
 @property(nonatomic, strong) UILabel *updatedAt;
 @property(nonatomic, strong) UILabel *value;
+@property(nonatomic, strong) UILabel *tlsIcon;
 @property(nonatomic, strong) UIControl *details;
 @property(nonatomic, strong) UIButton *cleanup;
 @end
@@ -29,14 +30,25 @@
         UIImageView *clock = [[UIImageView alloc] initWithImage:SHDWSymbol(@"clock", 12)]; clock.tintColor = UIColor.secondaryLabelColor; clock.contentMode = UIViewContentModeScaleAspectFit;
         UIStackView *time = [[UIStackView alloc] initWithArrangedSubviews:@[clock, _updatedAt]]; time.spacing = 6; time.alignment = UIStackViewAlignmentCenter;
         [NSLayoutConstraint activateConstraints:@[[clock.widthAnchor constraintEqualToConstant:12], [clock.heightAnchor constraintEqualToConstant:14]]];
-        UIStackView *labels = [[UIStackView alloc] initWithArrangedSubviews:@[value, time]]; labels.axis = UILayoutConstraintAxisVertical; labels.spacing = 5; labels.alignment = UIStackViewAlignmentLeading;
+        _tlsIcon = [UILabel new]; _tlsIcon.text = @"TLS";
+        _tlsIcon.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightSemibold];
+        _tlsIcon.textAlignment = NSTextAlignmentCenter; _tlsIcon.textColor = SHDWAccent();
+        _tlsIcon.backgroundColor = [SHDWAccent() colorWithAlphaComponent:0.09];
+        _tlsIcon.layer.cornerRadius = 3; _tlsIcon.clipsToBounds = YES;
+        _tlsIcon.hidden = YES; _tlsIcon.accessibilityIdentifier = @"home.tls-enabled";
+        NSLayoutConstraint *tlsWidth = [_tlsIcon.widthAnchor constraintEqualToConstant:26]; tlsWidth.priority = UILayoutPriorityDefaultHigh;
+        [NSLayoutConstraint activateConstraints:@[tlsWidth, [_tlsIcon.heightAnchor constraintEqualToConstant:14]]];
+        UIStackView *version = [[UIStackView alloc] initWithArrangedSubviews:@[value, _tlsIcon]]; version.spacing = 6; version.alignment = UIStackViewAlignmentCenter;
+        UIStackView *labels = [[UIStackView alloc] initWithArrangedSubviews:@[version, time]]; labels.axis = UILayoutConstraintAxisVertical; labels.spacing = 5; labels.alignment = UIStackViewAlignmentLeading;
         for (UIView *view in @[icon, labels, chevron]) { view.translatesAutoresizingMaskIntoConstraints = NO; view.userInteractionEnabled = NO; [self.details addSubview:view]; }
         [NSLayoutConstraint activateConstraints:@[[icon.leadingAnchor constraintEqualToAnchor:self.details.leadingAnchor constant:18], [icon.widthAnchor constraintEqualToConstant:26], [icon.heightAnchor constraintEqualToConstant:26], [icon.centerYAnchor constraintEqualToAnchor:self.details.centerYAnchor], [labels.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:14], [labels.centerYAnchor constraintEqualToAnchor:self.details.centerYAnchor], [labels.topAnchor constraintGreaterThanOrEqualToAnchor:self.details.topAnchor constant:14], [labels.bottomAnchor constraintLessThanOrEqualToAnchor:self.details.bottomAnchor constant:-14], [chevron.trailingAnchor constraintEqualToAnchor:self.details.trailingAnchor constant:-18], [chevron.widthAnchor constraintEqualToConstant:12], [chevron.heightAnchor constraintEqualToConstant:18], [chevron.centerYAnchor constraintEqualToAnchor:self.details.centerYAnchor], [labels.trailingAnchor constraintLessThanOrEqualToAnchor:chevron.leadingAnchor constant:-12]]];
         [self showUpdatedAt:nil];
     } return self;
 }
-- (void)showSystemVersion:(NSString *)version region:(NSString *)region {
+- (void)showSystemVersion:(NSString *)version region:(NSString *)region tlsEnabled:(BOOL)tlsEnabled {
     self.value.text = [NSString stringWithFormat:@"%@ · %@", version, region];
+    self.tlsIcon.hidden = !tlsEnabled;
+    self.details.accessibilityValue = tlsEnabled ? SHDWText(@"TLS fingerprint") : nil;
     self.details.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", self.value.text, self.updatedAt.text ?: @"—"];
 }
 - (void)showUpdatedAt:(NSNumber *)timestamp {

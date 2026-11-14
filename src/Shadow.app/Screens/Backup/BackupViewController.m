@@ -131,7 +131,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
         self.status.text = error ? error.localizedDescription : SHDWText(@"Restore completed");
         [self requestSheetLayout]; UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, self.status.text);
         if (error) { [self updateTitle]; [self refreshRecoveryState]; }
-        else { [self.action setTitle:SHDWText(@"Restore completed") forState:UIControlStateNormal]; [self notifyCompletion]; }
+        else [self close];
     }];
 }
 @end

@@ -1,5 +1,4 @@
 #import "CleanupService.h"
-#import <Shadow/FingerprintBackup.h>
 #import "Language.h"
 #import "OwnershipDiagnostics.h"
 #import "OperationCoordinator.h"
@@ -179,29 +178,25 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
                 update(step, @"running", nil);
                 NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
                 if ([step isEqual:@"fingerprint"]) {
-                    if (SHDWFingerprintDataIsReadOnly(identifier, [store profileForBundleIdentifier:identifier])) {
-                        refreshedProfile = [store profileForBundleIdentifier:identifier];
-                    } else {
-                        BOOL wasLocked = [store lockedForApplication:identifier];
-                        BOOL refreshed = NO;
-                        @try {
-                            if (wasLocked && ![store setLocked:NO forApplication:identifier error:&error] && !error)
-                                error = SHDWCleanupError(6, @"Unable to refresh the fingerprint.", step, mutated);
-                            if (!error) {
-                                refreshed = [store refreshApplication:identifier error:&error];
-                                if (!refreshed && !error) error = SHDWCleanupError(6, @"Unable to refresh the fingerprint.", step, mutated);
-                            }
-                        } @finally {
-                            if (!refreshed && wasLocked && ![store lockedForApplication:identifier]) {
-                                NSError *lockError = nil;
-                                if (![store setLocked:YES forApplication:identifier error:&lockError]) {
-                                    mutated = YES;
-                                    error = lockError ?: SHDWCleanupError(6, @"Unable to restore the fingerprint lock.", step, YES);
-                                }
+                    BOOL wasLocked = [store lockedForApplication:identifier];
+                    BOOL refreshed = NO;
+                    @try {
+                        if (wasLocked && ![store setLocked:NO forApplication:identifier error:&error] && !error)
+                            error = SHDWCleanupError(6, @"Unable to refresh the fingerprint.", step, mutated);
+                        if (!error) {
+                            refreshed = [store refreshApplication:identifier replaceBackedData:YES error:&error];
+                            if (!refreshed && !error) error = SHDWCleanupError(6, @"Unable to refresh the fingerprint.", step, mutated);
+                        }
+                    } @finally {
+                        if (!refreshed && wasLocked && ![store lockedForApplication:identifier]) {
+                            NSError *lockError = nil;
+                            if (![store setLocked:YES forApplication:identifier error:&lockError]) {
+                                mutated = YES;
+                                error = lockError ?: SHDWCleanupError(6, @"Unable to restore the fingerprint lock.", step, YES);
                             }
                         }
-                        if (refreshed && !error) { mutated = YES; refreshedProfile = [store profileForBundleIdentifier:identifier]; }
                     }
+                    if (refreshed && !error) { mutated = YES; refreshedProfile = [store profileForBundleIdentifier:identifier]; }
                 } else {
                     [self invokeHelper:@[@"run", identifier, token, step] error:&error];
                     if (!error) mutated = YES;
@@ -220,8 +215,7 @@ static NSError *SHDWCleanupError(NSInteger code, NSString *message, NSString *st
                 NSDictionary *current = [store profileForBundleIdentifier:identifier];
                 BOOL same = originalProfile == current || [originalProfile isEqual:current];
                 if (!error && [selection containsObject:@"fingerprint"]) {
-                    if (!refreshedProfile.count || ![current isEqual:refreshedProfile] ||
-                        (!SHDWFingerprintDataIsReadOnly(identifier, current) && (same || ![store lockedForApplication:identifier])))
+                    if (!refreshedProfile.count || same || ![current isEqual:refreshedProfile] || ![store lockedForApplication:identifier])
                         error = SHDWCleanupError(9, @"Fingerprint verification did not pass.", activeStep, mutated);
                 } else if (!error && !same) error = SHDWCleanupError(9, @"Fingerprint verification did not pass.", activeStep, mutated);
                 NSTimeInterval remaining = 0.25 - (NSProcessInfo.processInfo.systemUptime - started);

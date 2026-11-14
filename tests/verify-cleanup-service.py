@@ -14,8 +14,10 @@ source = r'''
 #include <assert.h>
 NSString *SHDWLocalizedText(NSString *value) { return value; }
 NSString *JBPath(NSString *value) { return value; }
-static BOOL enabled, locked, rejectRefresh;
+static BOOL enabled, locked, rejectRefresh, noOpRefresh;
+static NSDictionary *configuration;
 static NSUInteger generation;
+static NSString *CurrentVendor(void) { return [NSString stringWithFormat:@"11111111-1111-4111-8111-%012lu", (unsigned long)generation]; }
 static NSString *failure;
 static NSMutableArray *calls, *events;
 @implementation SHDWFingerprintStore
@@ -24,9 +26,12 @@ static NSMutableArray *calls, *events;
 - (BOOL)enabledForApplication:(NSString *)identifier { return enabled; }
 - (BOOL)lockedForApplication:(NSString *)identifier { return locked; }
 - (BOOL)setLocked:(BOOL)value forApplication:(NSString *)identifier error:(NSError **)error { locked=value; [calls addObject:value ? @"lock" : @"unlock"]; return YES; }
-- (NSDictionary *)profileForBundleIdentifier:(NSString *)identifier { return @{@"Generation":@(generation), @"VendorIdentifier":@"11111111-1111-4111-8111-111111111111"}; }
-- (BOOL)refreshApplication:(NSString *)identifier error:(NSError **)error {
-    assert(enabled && !locked); [calls addObject:@"refresh"]; if(rejectRefresh) { *error=[NSError errorWithDomain:@"fixture" code:98 userInfo:@{NSLocalizedDescriptionKey:@"refresh failed"}]; return NO; } generation++; locked=YES; return YES;
+- (NSDictionary *)profileForBundleIdentifier:(NSString *)identifier { return @{@"Generation":@(generation), @"VendorIdentifier":CurrentVendor()}; }
+- (NSDictionary *)configurationForApplication:(NSString *)identifier { return configuration; }
+- (BOOL)setConfiguration:(NSDictionary *)value forApplication:(NSString *)identifier error:(NSError **)error { assert(!"cleanup must preserve existing configuration"); return NO; }
+- (BOOL)refreshApplication:(NSString *)identifier error:(NSError **)error { assert(!"cleanup must explicitly replace backed data"); return NO; }
+- (BOOL)refreshApplication:(NSString *)identifier replaceBackedData:(BOOL)replaceBackedData error:(NSError **)error {
+    assert(replaceBackedData); assert(enabled && !locked); [calls addObject:@"refresh"]; if(rejectRefresh) { *error=[NSError errorWithDomain:@"fixture" code:98 userInfo:@{NSLocalizedDescriptionKey:@"refresh failed"}]; return NO; } if(!noOpRefresh) generation++; locked=YES; return YES;
 }
 @end
 @interface SHDWCleanupService (TestSeam)
@@ -49,6 +54,7 @@ static NSUInteger test;
 static void Next(void);
 static void Run(NSArray *selected, NSArray *expected, BOOL success, void (^assertions)(NSError *)) {
     calls=[NSMutableArray new];events=[NSMutableArray new];
+    NSDictionary *beforeConfig = [configuration copy];
     TestCleanup *service=[[TestCleanup alloc]initWithBundleIdentifier:@"local.fixture.app"];
     [service startWithSteps:selected progress:^(NSString *step,NSString *state,NSString *message) {
         assert(NSThread.isMainThread);[events addObject:[NSString stringWithFormat:@"%@:%@",step,state]];
@@ -56,11 +62,12 @@ static void Run(NSArray *selected, NSArray *expected, BOOL success, void (^asser
         assert(NSThread.isMainThread && !service.running);assert(ok==success);assert([calls isEqual:expected]);
         if (success) assert([events.lastObject isEqual:@"recheck:completed"]);
         else assert(![events containsObject:@"recheck:completed"]);
+        assert([configuration isEqual:beforeConfig]);
         if(assertions)assertions(error);Next();
     }];
 }
 static void Next(void) {
-    enabled=YES;locked=NO;failure=nil;rejectRefresh=NO;
+    enabled=YES;locked=NO;failure=nil;rejectRefresh=NO;noOpRefresh=NO;
     switch(test++) {
     case 0:
         Run(@[@"fingerprint",@"receipts",@"keychain",@"web",@"preferences",@"files"],
@@ -94,18 +101,39 @@ static void Next(void) {
         failure=@"finalize";
         Run(@[@"files"],@[@"inspect",@"prepare",@"files",@"finalize"],NO,^(NSError *e){assert([events.lastObject isEqual:@"recheck:failed"]&&[e.userInfo[@"stateMayBePartial"]boolValue]);});break;
     case 11: {
-        NSString *snapshot = [@SHDW_FINGERPRINT_BACKUP_ROOT stringByAppendingPathComponent:@"local.fixture.app/snapshots/11111111-1111-4111-8111-111111111111"];
+        // The backup prompt finishes before cleanup starts its selected stages.
+        NSString *snapshot = [[@SHDW_FINGERPRINT_BACKUP_ROOT stringByAppendingPathComponent:@"local.fixture.app/snapshots"] stringByAppendingPathComponent:CurrentVendor()];
         assert([NSFileManager.defaultManager createDirectoryAtPath:snapshot withIntermediateDirectories:YES attributes:nil error:NULL]);
-        Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e && generation==3 && !locked);});break;
+        NSDictionary *archivedData = [[SHDWFingerprintStore.sharedStore profileForBundleIdentifier:@"local.fixture.app"] copy];
+        NSDictionary *archivedConfig = [configuration copy];
+        Run(@[@"files",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"refresh",@"finalize",@"recheck"],YES,^(NSError *e){
+            assert(!e && generation==4 && locked);
+            assert(![CurrentVendor() isEqual:archivedData[@"VendorIdentifier"]]);
+            assert([archivedData[@"Generation"] unsignedIntegerValue]==3 && [configuration isEqual:archivedConfig]);
+            assert([NSFileManager.defaultManager fileExistsAtPath:snapshot]);
+        });break;
     }
-    case 12:
+    case 12: {
         locked=YES;
-        Run(@[@"files",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e && generation==3 && locked);});break;
+        NSString *snapshot = [[@SHDW_FINGERPRINT_BACKUP_ROOT stringByAppendingPathComponent:@"local.fixture.app/snapshots"] stringByAppendingPathComponent:CurrentVendor()];
+        assert([NSFileManager.defaultManager createDirectoryAtPath:snapshot withIntermediateDirectories:YES attributes:nil error:NULL]);
+        Run(@[@"files",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"unlock",@"refresh",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e && generation==5 && locked);});break;
+    }
+    case 13: {
+        noOpRefresh=YES;
+        NSString *snapshot = [[@SHDW_FINGERPRINT_BACKUP_ROOT stringByAppendingPathComponent:@"local.fixture.app/snapshots"] stringByAppendingPathComponent:CurrentVendor()];
+        assert([NSFileManager.defaultManager createDirectoryAtPath:snapshot withIntermediateDirectories:YES attributes:nil error:NULL]);
+        Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"refresh",@"finalize",@"recheck"],NO,^(NSError *e){assert(e.code==9 && generation==5 && locked);});break;
+    }
+    case 14:
+        noOpRefresh=YES;
+        assert([NSFileManager.defaultManager removeItemAtPath:@SHDW_FINGERPRINT_BACKUP_ROOT error:NULL]);
+        Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"refresh",@"finalize",@"recheck"],NO,^(NSError *e){assert(e.code==9 && generation==5 && locked);});break;
     default:
-        puts("cleanup service: ordered stages, automatic unlock/lock restoration, disabled preflight, optional refresh, fail-stop and mandatory final recheck passed");exit(0);
+        puts("cleanup service: ordered stages, automatic unlock/lock restoration, disabled preflight, optional refresh, backed replacement, configuration preservation and strict final recheck passed");exit(0);
     }
 }
-int main(void) { @autoreleasepool { dispatch_async(dispatch_get_main_queue(),^{ Next(); }); while (YES) [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]]; } }
+int main(void) { @autoreleasepool { configuration = @{@"Network":@{@"Transport":@"native"}, @"System":@{@"Mode":@"native"}, @"Localization":@{@"Region":@"US", @"Language":@"en", @"TimeZone":@"America/New_York"}}; dispatch_async(dispatch_get_main_queue(),^{ Next(); }); while (YES) [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]]; } }
 '''
 with tempfile.TemporaryDirectory(prefix="shadow-cleanup-service-") as temp:
     path = Path(temp)
