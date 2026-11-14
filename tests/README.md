@@ -13,6 +13,10 @@ and do not require Theos or the `THEOS` environment variable.
 | svc path-rewrite (pure C) | `make -C tests verify-path-rewrite` |
 | fresh fd/DIR path policy (host doubles) | `make -C tests verify-fd-path-freshness` |
 | mount filtering (pure C + static query contract) | `make -C tests verify-mount-filter` |
+| native HTTP/2 SETTINGS and header policy | `make -C tests verify-native-http2-policy` |
+| native HTTP/2 branch-stub decoding | `make -C tests verify-native-http2-stubs` |
+| native TLS bounded reads, allocation failure, peek and empty I/O | `make -C tests verify-native-tls-read` |
+| prepared function original and bounded retry (host lifecycle doubles) | `make -C tests verify-prepared-original` |
 | rebind journal/repair (pure C) | `make -C tests verify-rebind-repair` |
 | KERN_PROCARGS2 payload filter (kernel-shaped payloads) | `make -C tests verify-procargs-filter` |
 | exact HookKit package/framework version consistency | `make -C tests verify-hookkit-version` |
@@ -34,51 +38,51 @@ sh tests/MaintainerScriptTests.sh
 ```
 
 The optional `make -C tests verify-curl-transport` requires macOS Foundation and
-the pinned headers prepared by `scripts/prepare-curl-impersonate.sh`. It runs the
-production transport adapter with a deterministic curl engine and protocol client
-under AddressSanitizer and UndefinedBehaviorSanitizer. It also checks the typed
-Networking bootstrap, session constructor/request hooks, and Security trust helper.
-It covers request headers
-and bodies, redirect body removal/replacement, cookie controls, decoded response
-metadata, trust/stream exclusions, pre-request certificate rejection, delegate
-callback precedence, cancellation, and error mapping. It does not
-establish TLS wire behavior; that requires a device and a real endpoint.
+the pinned headers prepared by `scripts/prepare-curl-impersonate.sh`.
+The active transport replaces TLS within the native connection. CFNetwork and
+WebKit retain HTTP framing, headers, request bodies, redirects, authentication,
+cookies and their own caches. Curl supplies handshake and encrypted byte I/O
+through the native transport; it does not open a second external TCP connection.
+Curl’s TLS connection filter calls the native byte-stream callbacks directly.
+TLS buffering, nonblocking retry state and shutdown use curl’s existing backend;
+there is no intermediate socketpair or ciphertext pump.
+The native certificate-verification callback decides trust during the handshake.
 
-The experimental adapter is packaged with
-`SHADOW_CURL_IMPERSONATE=1 ./build.sh rootless` after dependency preparation. It
-uses curl-impersonate v2.3.2. The Manager's TLS fingerprint switch saves
-`Network.Transport=auto`; absent or `native` keeps native networking. The legacy
-`safari184_ios` setting remains enabled and now follows automatic selection.
+The initialization tests exercise profile freezing, nonblocking loader reentry,
+readiness publication, and loader, preset, TLS and HTTP/2 refusal paths. Networking
+bootstrap tests cover launch identity, selected-profile propagation and hook
+session publication. Network diagnostics tests cover native task forwarding,
+stable task IDs, request/upload snapshots, metrics and disabled collection.
+The diagnostic harnesses explicitly compile with `SHDW_TRANSPORT_DIAGNOSTICS=1`.
+The default-off check invokes all diagnostic entry points and verifies no hooks,
+frame scripts, cookie observations or trace-argument evaluation occur.
+Device checks cover HTTP/2, native trust acceptance/rejection, cancellation,
+redirected POST bodies, cookie storage, gzip delivery and cache-only reads after
+a process restart. Abrupt EOF remains handled by the native stack. Runtime
+private interfaces still require validation on each supported system.
+Custom ALPN/TLS settings and server-requested client certificates need additional
+coverage; preconfigured client identities remain on their native implementation.
+
+Build with `SHADOW_CURL_IMPERSONATE=1 ./build.sh rootless` after preparing the
+patched arm64 and arm64e dependency. The Manager's existing TLS fingerprint
+switch saves `Network.Transport=auto`; missing settings default to `auto`, while
+explicit `native` disables TLS fingerprinting.
 Selection uses the saved system fingerprint version: below 18.0 selects
-`safari172_ios`, 18.0 through 18.3 selects `safari180_ios`, and 18.4 or later
-selects `safari184_ios`. These are available preset approximations. Both App
-and Networking processes freeze the selected preset at startup.
-The explicit experimental value `Network.Transport=impit465` selects the
-issue #450 reference overrides independently of the saved system version.
-It is never selected by `auto` and is not evidence of a specific iOS version
-or WKWebView equivalence. The shared `CurlReference.h` helper applies the
-same options during readiness validation and on every transfer.
-Eligible foreground NSURLSession HTTPS requests use the adapter. The optional
-Networking component applies the same transport to supported WebKit sessions
-after receiving a matching launch snapshot. It forwards server-trust decisions
-to the original session delegate before sending HTTP headers or bodies. WebKit
-integration requires an explicit web-content arbitrary-loads allowance and keeps
-native handling for explicit pinning, certificate-transparency, minimum TLS, or
-forward-secrecy policies. Background sessions and arbitrary body streams remain
-native. App sessions with authentication challenge delegates remain native;
-the Networking component handles only the known WebKit delegate classes.
-WebSocket, HTTP authentication, and complete WebKit behavior require separate
-device verification; a successful TLS endpoint capture does not establish them.
-Preset default HTTP headers are disabled. The adapter preserves request/session
-header values after the existing CFNetwork and WebKit User-Agent system-profile
-policies apply. Explicit non-default App User-Agent values remain unchanged.
-Outgoing headers come only from the intercepted request, retaining its exposed
-dictionary enumeration without a second dictionary merge. The adapter does not
-merge session defaults or synthesize UA or Cookie headers. This does not recover
-original insertion order or guarantee the native CFNetwork wire order, neither
-of which is specified by `allHTTPHeaderFields`. Transport tests use controlled
-nonalphabetic dictionary enumeration to check this boundary independently of
-Foundation's current dictionary layout.
+`safari172_ios`, 18.0 through 18.3 selects `safari180_ios`, 18.4 through 18.6
+selects `safari184_ios`, and 18.7 or later selects `safari187_ios`.
+App and Networking processes freeze the selected preset at startup.
+The `safari187_ios` profile applies the issue #450 reference overrides, using the
+same `CurlReference.h` helper as the standalone probe. Its name does not prove
+exact OS-version or WKWebView equivalence. Native HTTP/2 remains responsible for
+framing, HPACK and flow control. For this preset, generation hooks normalize the
+initial SETTINGS and connection window and reorder request pseudo headers before
+encoding; legacy priority submissions are suppressed. Only newly created native
+client sessions are eligible, and subsequent window replenishment remains native.
+Native entry discovery validates optimized branch stubs against the selected
+system library. Stub patches preserve the original function bodies and pin the
+validated bytes through preparation and commit. The current ABI guard requires system libapple_nghttp2 1.47.0; unknown versions
+refuse installation. These hooks activate only after TLS installation succeeds.
+
 The TLS preset does not select the User-Agent OS version. WebKit default UA
 versions come from its native version-string generation entrypoint, before page
 creation; Shadow does not call `setCustomUserAgent:`. App-provided custom UAs
@@ -91,9 +95,9 @@ The optional engine currently supports the rootless lane only.
 [impit issue #450](https://github.com/apify/impit/issues/450), also used by
 [PR #465](https://github.com/apify/impit/pull/465). Compile it against the patched
 curl-impersonate headers for the intended device architecture; it loads the
-library dynamically. Invoke it as `probe library baseline|impit465 output.json`.
+library dynamically. Invoke it as `probe library baseline|safari187_ios output.json`.
 Both modes use verified HTTPS directly to Peet, with preset default headers
-disabled. `impit465` applies explicit TLS and HTTP/2 overrides to the
+disabled. `safari187_ios` applies explicit TLS and HTTP/2 overrides to the
 `safari184_ios` base. It does not register a Shadow profile or alter automatic
 selection. The capture's actual OS version and its equivalence to WKWebView
 are unverified; it is not an iOS 18.2 WKWebView reference.

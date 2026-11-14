@@ -26,6 +26,21 @@ static xpc_object_t bootstrap(void) {
     return SHDWLocalizationBootstrapMessage(xpc_dictionary_create(NULL, NULL, 0), resolved(), @"test.SDKProbe");
 }
 int main(void) { @autoreleasepool {
+    xpc_object_t networkingEvent = event();
+    xpc_dictionary_set_string(networkingEvent, "service-name", "com.apple.WebKit.Networking");
+    assert(!SHDWLocalizationSnapshot(bootstrap(), networkingEvent));
+    assert(!SHDWLocalizationNetworkingSnapshot(bootstrap(), event()));
+    NSDictionary *networkingSnapshot = SHDWLocalizationNetworkingSnapshot(bootstrap(), networkingEvent);
+    assert([networkingSnapshot[@"Owner"] isEqual:@"test.SDKProbe"]);
+    assert([networkingSnapshot[@"Languages"] isEqual:(@[@"en-US", @"fr-FR"])]);
+    assert(![networkingSnapshot isKindOfClass:NSMutableDictionary.class]);
+    for (const char *service : (const char *[]){"com.apple.WebKit.Networking.Development", "com.apple.WebKit.WebContent", ""}) {
+        xpc_dictionary_set_string(networkingEvent, "service-name", service);
+        assert(!SHDWLocalizationNetworkingSnapshot(bootstrap(), networkingEvent));
+    }
+    xpc_dictionary_set_string(networkingEvent, "service-name", "com.apple.WebKit.Networking");
+    xpc_dictionary_set_string(networkingEvent, "client-bundle-identifier", "wrong.Owner");
+    assert(!SHDWLocalizationNetworkingSnapshot(bootstrap(), networkingEvent));
     NSDictionary *persistentBefore = [NSUserDefaults.standardUserDefaults persistentDomainForName:@"test.SDKProbe"];
     NSDictionary *volatileBefore = [NSUserDefaults.standardUserDefaults volatileDomainForName:NSArgumentDomain];
     NSDictionary *globalBefore = [NSUserDefaults.standardUserDefaults persistentDomainForName:NSGlobalDomain];

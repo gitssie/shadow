@@ -35,6 +35,7 @@ for signature in ["static NSUUID *SHDWStoredVendorIdentifier(",
 methods = function(settings, "- (NSDictionary *)fingerprintDataForIdentifier:") + "\n"
 methods += function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:")
 methods += function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                            lockOnSuccess:")
+methods += "\n" + function(settings, "- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                            lockOnSuccess:(BOOL)lockOnSuccess\n                        replaceBackedData:")
 methods += "\n" + function(settings, "- (NSString *)fingerprintOwnerIdentifierForIdentifier:")
 methods += "\n" + function(settings, "- (NSDictionary *)runtimeFingerprintDataForIdentifier:")
 methods += "\n" + function(settings, "- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                                   vendorIdentifier:")
@@ -50,6 +51,9 @@ source = r'''
 #include <sys/time.h>
 #include <sys/sysctl.h>
 #include <sys/stat.h>
+static NSString *backupFixtureRoot;
+#define SHDW_FINGERPRINT_BACKUP_ROOT backupFixtureRoot.fileSystemRepresentation
+#import <Shadow/FingerprintBackup.h>
 #include <string.h>
 static BOOL maximumEntropy;
 static uint32_t storageUniform(uint32_t bound) { assert(bound); return maximumEntropy ? bound - 1 : 0; }
@@ -108,6 +112,7 @@ static NSString *fallbackPath;
 - (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)identifier vendorIdentifier:(NSUUID *__autoreleasing *)vendor;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier;
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier lockOnSuccess:(BOOL)lockOnSuccess;
+- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)identifier lockOnSuccess:(BOOL)lockOnSuccess replaceBackedData:(BOOL)replaceBackedData;
 @end
 static ShadowSettings *sharedSettings;
 '''
@@ -122,6 +127,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     assert(argc == 3);
     NSString *path = @(argv[1]), *phase = @(argv[2]);
     fallbackPath = [path stringByAppendingString:@".fallback"];
+    backupFixtureRoot = [path stringByAppendingString:@".backups"];
     sharedSettings = [ShadowSettings new];
     FileDefaults *store = [FileDefaults new];
     store.path = path;
@@ -338,6 +344,24 @@ int main(int argc, const char **argv) { @autoreleasepool {
         for(NSString *key in @[@"MemoryDelta", @"InterfaceSeed", @"BootTimeOffset", @"BootSessionUUID", @"NativeBootSessionUUID", @"VendorIdentifier"])
             assert([corrected[key] isEqual:previous[key]]);
         assert([untouched isEqual:store.values[@"b.app"]]);
+    } else if([phase isEqual:@"backed-reboot"]) {
+        NSDictionary *before = [store.values[@"a.app"] copy];
+        NSDictionary *data = before[@"Fingerprint_Data"];
+        NSString *snapshot = [[[backupFixtureRoot stringByAppendingPathComponent:@"a.app"] stringByAppendingPathComponent:@"snapshots"] stringByAppendingPathComponent:[[NSUUID alloc] initWithUUIDString:data[@"VendorIdentifier"]].UUIDString];
+        assert([NSFileManager.defaultManager createDirectoryAtPath:snapshot withIntermediateDirectories:YES attributes:nil error:NULL]);
+        nativeBootUUID = NSUUID.UUID.UUIDString; nativeBoot += 3600;
+        NSData *bytes = [NSData dataWithContentsOfFile:path];
+        assert([[sharedSettings fingerprintDataForIdentifier:@"a.app"] isEqual:data]);
+        assert([store.values[@"a.app"] isEqual:before]);
+        assert([[NSData dataWithContentsOfFile:path] isEqual:bytes]);
+        NSMutableDictionary *corrupt = [data mutableCopy]; corrupt[@"Version"] = @999;
+        NSMutableDictionary *corruptApp = [before mutableCopy]; corruptApp[@"Fingerprint_Data"] = corrupt;
+        store.values[@"a.app"] = corruptApp; assert([store synchronize]);
+        NSData *corruptBytes = [NSData dataWithContentsOfFile:path];
+        assert([[sharedSettings fingerprintDataForIdentifier:@"a.app"] isEqual:corrupt]);
+        assert([[NSData dataWithContentsOfFile:path] isEqual:corruptBytes]);
+        store.values[@"a.app"] = before; assert([store synchronize]);
+        assert([NSFileManager.defaultManager removeItemAtPath:backupFixtureRoot error:NULL]);
     } else if([phase isEqual:@"reboot"]) {
         NSMutableDictionary *positive = [store.values[@"a.app"][@"Fingerprint_Data"] mutableCopy];
         positive[@"BootTimeOffset"] = @86400;
@@ -378,5 +402,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-storage-") as tmp:
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Shadow.framework/Headers"), "-I",
         str(root / "src/ShadowCore.dylib/policy"), str(src), "-o", str(binary)], check=True)
-    for phase in ["seed", "restart", "restart", "vendor-migrate", "vendor-restart", "bounds", "clock", "reboot", "fresh"]:
+    for phase in ["seed", "restart", "restart", "vendor-migrate", "vendor-restart", "bounds", "clock", "backed-reboot", "reboot", "fresh"]:
         subprocess.run([str(binary), str(prefs), phase], check=True)

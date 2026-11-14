@@ -381,6 +381,7 @@ static BOOL shdw_apply_hook_spec_once(
   hk_hook_t *hook = NULL;
   hk_report_t *commitReport = NULL;
   BOOL installed = NO;
+  BOOL needsPreparedOriginal = NO;
 
   hk_status_t runtimeStatus =
       borrowedRuntime ? HK_STATUS_OK :
@@ -419,6 +420,7 @@ static BOOL shdw_apply_hook_spec_once(
   if (oldPtr) {
     void *preparedOriginal = shdw_prepared_original(hook, spec, &prepared);
     if (!preparedOriginal && spec->original_requirement != HK_ORIGINAL_NONE) {
+      needsPreparedOriginal = prepared.mutation == HK_MUTATION_NONE;
       goto done;
     }
     if (preparedOriginal) {
@@ -478,6 +480,16 @@ done:
   hk_report_release(commitReport);
   hk_plan_release(plan);
   if (!borrowedRuntime) hk_runtime_release(runtime);
+  // The caller must receive its continuation before code becomes reachable.
+  // A prepared plan has not mutated the target, so a backend that exposes a
+  // prepared continuation can safely handle a provider's late-publication route.
+  if (needsPreparedOriginal && createWithOverride && !borrowedRuntime &&
+      strcmp(spec->stable_hook_id, "shadow.native-tls") == 0 &&
+      (!backendOverride || strcmp(backendOverride, "provider-ellekit") != 0)) {
+    return shdw_apply_hook_spec_once(spec, oldPtr, "provider-ellekit",
+        createWithOverride, outCleanRefusal, outRetryWithSubsets,
+        outCacheScopeUnavailable, NULL);
+  }
   return installed;
 }
 
@@ -693,7 +705,7 @@ static void shdw_init_rebind_spec(hk_hook_spec_t *spec, NSString *symbolName,
   }
 
   hk_hook_spec_t spec;
-  shdw_init_spec(&spec, "shadow.function", HK_TARGET_FUNCTION_ADDRESS,
+  shdw_init_spec(&spec, self.requiresPreparedFunctionOriginal ? "shadow.native-tls" : "shadow.function", HK_TARGET_FUNCTION_ADDRESS,
                  replacement, HK_REACH_ENTRYPOINT,
                  oldPtr ? HK_ORIGINAL_CALLABLE_CONTINUATION : HK_ORIGINAL_NONE);
   spec.target.address.struct_size = sizeof(spec.target.address);
@@ -711,6 +723,27 @@ static void shdw_init_rebind_spec(hk_hook_spec_t *spec, NSString *symbolName,
     SHDWRememberHookedIMPRemap(replacement, function);
   }
   return installed;
+}
+
+- (BOOL)hookEntry:(void *)entry
+    withReplacement:(void *)replacement
+      expectedBytes:(NSData *)bytes
+            backend:(NSString *)backend {
+  if (!entry || !replacement || bytes.length != 16 || !backend.length) return NO;
+  SHDWHKRuntimeCreateWithBackendOverride createWithOverride =
+      (SHDWHKRuntimeCreateWithBackendOverride)dlsym(
+          RTLD_DEFAULT, "hk_runtime_create_with_backend_override");
+  if (!createWithOverride) return NO;
+  hk_hook_spec_t spec;
+  shdw_init_spec(&spec, "shadow.validated-entry", HK_TARGET_FUNCTION_ADDRESS,
+                 replacement, HK_REACH_ENTRYPOINT, HK_ORIGINAL_NONE);
+  spec.target.address.struct_size = sizeof(spec.target.address);
+  spec.target.address.struct_version = HK_ABI_VERSION_3_0;
+  spec.target.address.address = (uintptr_t)entry;
+  spec.target.address.expected_initial_bytes = bytes.bytes;
+  spec.target.address.expected_initial_bytes_size = bytes.length;
+  return shdw_apply_hook_spec_once(&spec, NULL, backend.UTF8String,
+      createWithOverride, NULL, NULL, NULL, NULL);
 }
 
 - (BOOL)hookRebindSymbol:(NSString *)symbolName

@@ -11,3 +11,5 @@ xpc_object_t SHDWLocalizationBootstrapMessage(xpc_object_t original,
 
 // Returns only immutable resolved values after validating the launch identity.
 NSDictionary *SHDWLocalizationSnapshot(xpc_object_t bootstrap, xpc_object_t event);
+
+NSDictionary *SHDWLocalizationNetworkingSnapshot(xpc_object_t bootstrap, xpc_object_t event);

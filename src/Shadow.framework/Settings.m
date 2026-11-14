@@ -1,5 +1,6 @@
 #import <Shadow/Settings.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintBackup.h>
 #import <Shadow/FingerprintOwner.h>
 #import <Shadow/FingerprintVolumeTime.h>
 #import <Shadow/FingerprintAdvertising.h>
@@ -353,6 +354,7 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
     NSDictionary *app = [storedApp isKindOfClass:[NSDictionary class]]
                             ? storedApp : nil;
     id originalData = app[@"Fingerprint_Data"];
+    id sourceData = originalData;
     id data = SHDWRepairedFingerprintVendorData(originalData);
     BOOL needsVendor = data && ![data isEqual:originalData];
     // A sandboxed defaults connection can omit another app's suite data.
@@ -368,6 +370,7 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
         id repaired =
             SHDWRepairedFingerprintVendorData(fileApp[@"Fingerprint_Data"]);
         if (repaired) {
+          sourceData = fileApp[@"Fingerprint_Data"];
           data = repaired;
           needsVendor = ![data isEqual:fileApp[@"Fingerprint_Data"]];
           if (!app) {
@@ -380,6 +383,8 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
         }
       }
     }
+
+    if (SHDWFingerprintDataIsReadOnly(bundleIdentifier, sourceData)) return [sourceData copy];
 
     if (!SHDWFingerprintApplicationEnabled(app) ||
         SHDWFingerprintApplicationLocked(app)) {
@@ -499,6 +504,12 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
 
 - (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier
                             lockOnSuccess:(BOOL)lockOnSuccess {
+  return [self refreshFingerprintDataForIdentifier:bundleIdentifier lockOnSuccess:lockOnSuccess replaceBackedData:NO];
+}
+
+- (BOOL)refreshFingerprintDataForIdentifier:(NSString *)bundleIdentifier
+                            lockOnSuccess:(BOOL)lockOnSuccess
+                        replaceBackedData:(BOOL)replaceBackedData {
   if (bundleIdentifier.length == 0) {
     return NO;
   }
@@ -518,6 +529,7 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
         }
       }
     }
+    if (!replaceBackedData && SHDWFingerprintDataIsReadOnly(bundleIdentifier, [storedApp isKindOfClass:NSDictionary.class] ? storedApp[@"Fingerprint_Data"] : nil)) return YES;
     if (!SHDWFingerprintApplicationEnabled(storedApp) ||
         SHDWFingerprintApplicationLocked(storedApp)) {
       return NO;

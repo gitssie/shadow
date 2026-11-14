@@ -47,8 +47,12 @@ static id nativeBundleValue(NSString *key) { return metadataFixture[key]; }
 #define isCallerExternal() (external && !depth)
 static BOOL enabled=YES, external=YES, available=YES, installs=YES;
 static void SHDWCurlTransportPrepare(void) {}
-static NSURLSessionConfiguration *SHDWCurlTransportConfiguration(NSURLSessionConfiguration *configuration) { return configuration; }
-static NSURLRequest *SHDWCurlTransportRequest(NSURLRequest *request, id session) { (void)session;return request; }
+static void SHDWCurlTransportTraceRequest(NSURLRequest *request, NSString *stage, NSString *reason) { (void)request;(void)stage;(void)reason; }
+#if SHDW_TRANSPORT_DIAGNOSTICS
+static void SHDWNetworkDiagnosticsAttachUploadData(id task, NSData *data) { (void)task;(void)data; }
+static void SHDWNetworkDiagnosticsAttachUploadFile(id task, NSURL *url) { (void)task;(void)url; }
+#endif
+static void SHDWNetworkDiagnosticsTraceRequestOrigin(NSURLRequest *request, NSString *stage) { (void)request;(void)stage; }
 static NSString *release=@"24.6.0", *nativeValue;
 static BOOL sourcePublicationSucceeds;
 static BOOL SHDWNetworkReplaceUserAgentCache(const void *getter,NSString *native,NSString *updated) {

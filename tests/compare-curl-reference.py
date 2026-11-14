@@ -55,7 +55,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
-    reference = json.loads((Path(__file__).parent / "fixtures/transport-reference-impit465.json").read_text())
+    reference = json.loads((Path(__file__).parent / "fixtures/transport-reference-safari187_ios.json").read_text())
     actual = json.loads(args.report.read_text())
     try:
         failures = differences(reference, actual)

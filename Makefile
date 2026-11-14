@@ -12,10 +12,7 @@ SUBPROJECTS += src/Shadow.dylib
 SUBPROJECTS += src/ShadowCore.dylib
 SUBPROJECTS += src/ShadowSettings.bundle
 ifneq ($(SHADOW_LANE),rootful-legacy)
-SUBPROJECTS += src/ShadowWebContent.dylib
-ifeq ($(SHADOW_CURL_IMPERSONATE),1)
-SUBPROJECTS += src/ShadowNetworking.dylib
-endif
+SUBPROJECTS += src/ShadowWebKit.dylib
 SUBPROJECTS += src/Shadow.app
 SUBPROJECTS += src/ShadowCleaner
 endif
@@ -25,6 +22,7 @@ include $(THEOS_MAKE_PATH)/aggregate.mk
 # The rootless scheme stages the whole layout/ under /var/jb. Select the
 # matching ruleset-watcher plist after staging, before packaging.
 before-package::
+	$(ECHO_NOTHING)rm -f "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/ShadowWebContent.dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/ShadowWebContent.plist" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/ShadowNetworking.dylib" "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/ShadowNetworking.plist"$(ECHO_END)
 ifeq ($(SHADOW_CURL_IMPERSONATE),1)
 	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/usr/lib/shadow/curl" "$(THEOS_STAGING_DIR)/usr/share/doc/shadow-curl"$(ECHO_END)
 	$(ECHO_NOTHING)cp "$(SHADOW_CURL_ROOT)/libcurl-impersonate.4.dylib" "$(THEOS_STAGING_DIR)/usr/lib/shadow/curl/"$(ECHO_END)

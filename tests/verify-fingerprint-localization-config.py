@@ -67,7 +67,8 @@ int main(void) { @autoreleasepool {
   NSDictionary *normalized = [SHDWFingerprintConfiguration configurationByValidating:historical error:nil];
   assert(normalized);
   assert([normalized[@"Localization"] isEqual:base[@"Localization"]]);
-  for (NSString *key in @[@"System",@"Network",@"Receipts",@"Advertising"])
+  assert([normalized[@"Network"] isEqual:(@{@"RadioTechnologies":@[@"4g"], @"Transport":@"auto"})]);
+  for (NSString *key in @[@"System",@"Receipts",@"Advertising"])
     assert([normalized[key] isEqual:historical[key]]);
   assert([historical isEqual:historicalBefore] && !historical[@"Localization"]);
   for (NSString *key in @[@"Region",@"Language",@"TimeZone"]) {

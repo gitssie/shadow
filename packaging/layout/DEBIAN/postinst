@@ -113,6 +113,11 @@ shadowd_remove_legacy_state() {
 case "$1" in
     configure)
 
+        for inject_dir in "$DPKG_ROOT/Library/MobileSubstrate/DynamicLibraries" "$DPKG_ROOT/usr/lib/TweakInject"; do
+            rm -f "$inject_dir/ShadowWebContent.dylib" "$inject_dir/ShadowWebContent.plist" \
+                  "$inject_dir/ShadowNetworking.dylib" "$inject_dir/ShadowNetworking.plist"
+        done
+
         rm -f "$DPKG_ROOT/Library/MobileSubstrate/DynamicLibraries/ShadowCore.dylib" \
               "$DPKG_ROOT/usr/lib/TweakInject/ShadowCore.dylib"
         chown -R root:wheel "$DPKG_ROOT/Library/Shadow"

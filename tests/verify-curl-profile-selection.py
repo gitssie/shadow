@@ -22,18 +22,17 @@ static NSString *SHDWFingerprintOSVersionString(void) { return version; }
 void SHDWCurlTransportPrepareProfile(NSString *profile) { calls++;prepared=[profile copy]; }
 ''' + implementation + r'''
 int main(void) { @autoreleasepool {
-    NSArray *versions=@[@"16.3",@"17.2",@"17.7.2",@"18.0",@"18.3.1",@"18.4",@"18.7.2",@"18.10"];
-    NSArray *profiles=@[@"safari172_ios",@"safari172_ios",@"safari172_ios",@"safari180_ios",@"safari180_ios",@"safari184_ios",@"safari184_ios",@"safari184_ios"];
+    NSArray *versions=@[@"16.3",@"17.2",@"17.7.2",@"18.0",@"18.3.1",@"18.4",@"18.6.9",@"18.7",@"18.7.1",@"18.7.2",@"18.10",@"27.0"];
+    NSArray *profiles=@[@"safari172_ios",@"safari172_ios",@"safari172_ios",@"safari180_ios",@"safari180_ios",@"safari184_ios",@"safari184_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios"];
     (void)profiles;
-    for(id selected in @[NSNull.null,@"native",@"auto",@"safari184_ios",@"impit465"]) {
+    for(id selected in @[NSNull.null,@"native",@"auto",@"safari184_ios"]) {
         mode=selected==NSNull.null ? nil : selected;
         for(NSUInteger i=0;i<versions.count;i++) {
             version=versions[i];prepared=nil;unsigned before=calls;
             SHDWCurlTransportPrepare();
 #if SHADOW_CURL_IMPERSONATE
             assert(calls==before+1);
-            if([mode isEqual:@"impit465"]) assert([prepared isEqual:@"impit465"]);
-            else if([mode isEqual:@"auto"] || [mode isEqual:@"safari184_ios"]) assert([prepared isEqual:profiles[i]]);
+            if(!mode || [mode isEqual:@"auto"] || [mode isEqual:@"safari184_ios"]) assert([prepared isEqual:profiles[i]]);
             else assert(!prepared);
 #else
             assert(calls==before && !prepared);
@@ -41,12 +40,6 @@ int main(void) { @autoreleasepool {
         }
     }
     mode=@"auto";version=nil;prepared=nil;SHDWCurlTransportPrepare();assert(!prepared);
-    mode=@"impit465";version=nil;prepared=nil;SHDWCurlTransportPrepare();
-#if SHADOW_CURL_IMPERSONATE
-    assert([prepared isEqual:@"impit465"]);
-#else
-    assert(!prepared);
-#endif
     puts("App curl activation: saved fingerprint version mapping, legacy mode, native/missing defaults and disabled build passed");
 } }
 '''

@@ -6,10 +6,10 @@
 /* Standalone live probe; does not change Shadow's transport selection. */
 int main(int argc, char **argv) {
     if (argc != 4) {
-        fprintf(stderr, "usage: %s library baseline|impit465 output.json\n", argv[0]);
+        fprintf(stderr, "usage: %s library baseline|safari187_ios output.json\n", argv[0]);
         return 2;
     }
-    int custom = !strcmp(argv[2], "impit465");
+    int custom = !strcmp(argv[2], "safari187_ios");
     if (!custom && strcmp(argv[2], "baseline")) return 2;
     void *library = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!library) { fprintf(stderr, "%s\n", dlerror()); return 2; }
@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
     if (!curl) return 2;
     FILE *output = fopen(argv[3], "wb");
     if (!output) { cleanup(curl); return 2; }
-    CURLcode result = SHDWCurlApplyProfile(curl, custom ? "impit465" : "safari184_ios", impersonate, set);
+    CURLcode result = SHDWCurlApplyProfile(curl, custom ? "safari187_ios" : "safari184_ios", impersonate, set);
 #define SET(option, value) do { if (result == CURLE_OK) result = set(curl, option, value); } while (0)
     SET(CURLOPT_URL, "https://tls.peet.ws/api/all");
     SET(CURLOPT_PROXY, "");

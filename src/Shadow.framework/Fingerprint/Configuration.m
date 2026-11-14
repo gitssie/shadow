@@ -160,17 +160,15 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
     }
   }
   return @{@"Version":@1, @"System":system,
-    @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"], @"Transport":@"native"},
-    @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"perApp"},
-    @"WebKit":@{@"OverrideUserAgent":@YES},
+    @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"], @"Transport":@"auto"},
+    @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"zero"},
     @"Localization":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"}};
 }
 + (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration {
   id transport = configuration[@"Network"][@"Transport"];
-  return [transport isEqual:@"auto"] || [transport isEqual:@"safari184_ios"] || [transport isEqual:@"impit465"];
+  return !transport || [transport isEqual:@"auto"] || [transport isEqual:@"safari184_ios"];
 }
 + (NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(NSString *)systemVersion {
-  if ([configuration[@"Network"][@"Transport"] isEqual:@"impit465"]) return @"impit465";
   if (![self usesCurlTransportForConfiguration:configuration] || ![systemVersion isKindOfClass:NSString.class] ||
       !systemVersion.length || systemVersion.length > 32) return nil;
   NSArray<NSString *> *parts = [systemVersion componentsSeparatedByString:@"."];
@@ -187,11 +185,8 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   }
   if (numbers[0] < 18) return @"safari172_ios";
   if (numbers[0] == 18 && numbers[1] < 4) return @"safari180_ios";
-  return @"safari184_ios";
-}
-+ (BOOL)overridesWebUserAgentForConfiguration:(NSDictionary *)configuration {
-  id value = configuration[@"WebKit"][@"OverrideUserAgent"];
-  return !value || [value boolValue];
+  if (numbers[0] == 18 && numbers[1] < 7) return @"safari184_ios";
+  return @"safari187_ios";
 }
 + (NSArray<NSDictionary *> *)allSystemProfiles {
   static NSArray<NSDictionary *> *profiles;
@@ -362,13 +357,6 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
     return SHDWConfigurationInvalid(error);
   NSDictionary *localization = SHDWConfigurationLocalization(value[@"Localization"]);
   if (!localization) return SHDWConfigurationInvalid(error);
-  id webKit = value[@"WebKit"];
-  if (webKit && !SHDWConfigurationKeys(webKit, @[], @[@"OverrideUserAgent"]))
-    return SHDWConfigurationInvalid(error);
-  id overrideUserAgent = webKit[@"OverrideUserAgent"];
-  if (overrideUserAgent && (![overrideUserAgent isKindOfClass:NSNumber.class] ||
-      CFGetTypeID((__bridge CFTypeRef)overrideUserAgent) != CFBooleanGetTypeID()))
-    return SHDWConfigurationInvalid(error);
   NSNumber *version = value[@"Version"], *updated = value[@"UpdatedAt"];
   if (![version isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)version) == CFBooleanGetTypeID() ||
       version.doubleValue != 1 || (updated && (![updated isKindOfClass:NSNumber.class] ||
@@ -378,7 +366,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   if (!SHDWConfigurationKeys(system,@[@"Mode"],@[@"ProfileID"]) ||
       !SHDWConfigurationKeys(network,@[@"RadioTechnologies"],@[@"Transport"]) ||
       !SHDWConfigurationKeys(receipts,@[@"InterceptEnabled"],@[])) return SHDWConfigurationInvalid(error);
-  if (network[@"Transport"] && ![@[@"native", @"auto", @"safari184_ios", @"impit465"] containsObject:network[@"Transport"]])
+  if (network[@"Transport"] && ![@[@"native", @"auto", @"safari184_ios"] containsObject:network[@"Transport"]])
     return SHDWConfigurationInvalid(error);
   if ([system[@"Mode"] isEqual:@"native"]) {
     if (system[@"ProfileID"]) return SHDWConfigurationInvalid(error);
@@ -401,8 +389,11 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   if (![intercept isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)intercept) != CFBooleanGetTypeID())
     return SHDWConfigurationInvalid(error);
   NSMutableDictionary *normalized = [value mutableCopy];
+  [normalized removeObjectForKey:@"WebKit"];
+  NSMutableDictionary *normalizedNetwork = [network mutableCopy];
+  if (!normalizedNetwork[@"Transport"]) normalizedNetwork[@"Transport"] = @"auto";
+  normalized[@"Network"] = normalizedNetwork;
   normalized[@"Localization"] = localization;
-  normalized[@"WebKit"] = @{@"OverrideUserAgent":@([self overridesWebUserAgentForConfiguration:value])};
   return [NSPropertyListSerialization propertyListWithData:
     [NSPropertyListSerialization dataWithPropertyList:normalized format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil]
     options:NSPropertyListImmutable format:NULL error:nil];

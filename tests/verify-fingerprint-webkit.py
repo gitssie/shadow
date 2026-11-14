@@ -49,6 +49,12 @@ assert "shdw_fingerprint_webkit_clipboard_install(" not in function(production[i
 ua_group = production[production.index("%group shadowhook_fingerprint_webkit\n"):production.index("%group shadowhook_fingerprint_webkit_clipboard_eval")]
 assert "- (void)evaluateJavaScript:" not in ua_group
 
+# Diagnostics have separate fixtures; keep their view lookups out of the UA/clipboard doubles.
+fingerprint = "\n".join(line for line in fingerprint.splitlines()
+                        if not any(name in line for name in (
+                            "SHDWWebFrameDiagnosticsInstall(", "SHDWWebCookieDiagnosticsObserveView(",
+                            "SHDWNetworkDiagnosticsTraceRequestOrigin(", "SHDWNetworkDiagnosticsTraceWebHTMLOrigin(")))
+
 # Exercise preserved dormant code in doubles without enabling production injection.
 fingerprint = fingerprint.replace("// if(shdw_webkit_configuration)", "if(shdw_webkit_configuration)")
 fingerprint = fingerprint.replace("//     shdw_fingerprint_webkit_clipboard_install", "    shdw_fingerprint_webkit_clipboard_install")
@@ -57,16 +63,18 @@ fingerprint = fingerprint.replace("// if(applies) shdw_fingerprint_webkit_clipbo
 prefix = r'''
 #import <Foundation/Foundation.h>
 static BOOL nativeSystemMode;
-static id userAgentOverride;
 static unsigned sourceInstallCalls, sourceCallsAtNativeInit;
 static NSString *sourceInstalledVersion;
 BOOL SHDWWebUserAgentInstall(NSString *version) { sourceInstallCalls++;sourceInstalledVersion=[version copy];return YES; }
 void SHDWFingerprintInstallWebLocalization(void) {}
+void SHDWWebFrameDiagnosticsInstall(id configuration) { (void)configuration; }
+void SHDWWebCookieDiagnosticsObserveView(id view, id url, id phase) { (void)view; (void)url; (void)phase; }
+void SHDWNetworkDiagnosticsTraceRequestOrigin(id request, id phase) { (void)request; (void)phase; }
+void SHDWNetworkDiagnosticsTraceWebHTMLOrigin(id html, id url) { (void)html; (void)url; }
 NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
     (void)bundleID;
     if(nativeSystemMode)return @{@"System":@{@"Mode":@"native"}};
     NSMutableDictionary *configuration=[@{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}} mutableCopy];
-    if(userAgentOverride)configuration[@"WebKit"]=@{@"OverrideUserAgent":userAgentOverride};
     return configuration;
 }
 
@@ -377,16 +385,10 @@ static void verify_navigation(void) {
 static void verify_hooks(void) {
     unsigned before=sourceInstallCalls;
     shdw_fingerprint_enabled=NO;shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
-    shdw_fingerprint_enabled=YES;nativeSystemMode=YES;shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
-    nativeSystemMode=NO;userAgentOverride=@NO;
-    shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before);
-    for(unsigned coder=0;coder<2;coder++) {
-        WKWebView *nativeView=newView(coder);
-        assert(sourceInstallCalls==before && !nativeView.storedCustomUA && !nativeView.nativeWrites);
-    }
-    userAgentOverride=@YES;shdw_fingerprint_webkit_prepare_user_agent();
-    assert(sourceInstallCalls==before+1);before=sourceInstallCalls;
-    userAgentOverride=nil;shdw_fingerprint_webkit_prepare_user_agent();
+    shdw_fingerprint_enabled=YES;nativeSystemMode=YES;
+    shdw_fingerprint_webkit_prepare_user_agent();assert(sourceInstallCalls==before+1);
+    nativeSystemMode=NO;before=sourceInstallCalls;
+    shdw_fingerprint_webkit_prepare_user_agent();
     assert(sourceInstallCalls==before+1 && [sourceInstalledVersion isEqual:@"18.7.1"]);
     for(unsigned coder = 0; coder < 2; coder++) {
         before=sourceInstallCalls;

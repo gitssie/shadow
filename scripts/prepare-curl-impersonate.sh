@@ -15,7 +15,9 @@ PY
 tar -xzf "$ARCHIVE" -C "$STAGE"
 BUILD_ROOT=${SHADOW_CURL_BUILD_ROOT:-${TMPDIR:-/tmp}/shadow-curl-arm64e}
 "$ROOT/scripts/build-curl-impersonate-arm64e.sh" "$BUILD_ROOT"
-xcrun lipo -create "$STAGE/libcurl-impersonate.4.8.0.dylib" \
+ARM64_BUILD_ROOT=${SHADOW_CURL_ARM64_BUILD_ROOT:-${TMPDIR:-/tmp}/shadow-curl-arm64}
+"$ROOT/scripts/build-curl-impersonate-arm64e.sh" "$ARM64_BUILD_ROOT" arm64
+xcrun lipo -create "$ARM64_BUILD_ROOT/install/lib/libcurl-impersonate.4.8.0.dylib" \
     "$BUILD_ROOT/install/lib/libcurl-impersonate.4.8.0.dylib" -output "$STAGE/libcurl-impersonate.4.dylib"
 install_name_tool -id '@loader_path/libcurl-impersonate.4.dylib' "$STAGE/libcurl-impersonate.4.dylib"
 ldid -S "$STAGE/libcurl-impersonate.4.dylib"
@@ -27,4 +29,5 @@ mv "$DEST/libcurl-impersonate.4.dylib.tmp" "$DEST/libcurl-impersonate.4.dylib"
 cp "$STAGE"/LICENSE* "$DEST/"
 cp "$BUILD_ROOT/install/licenses/"LICENSE* "$DEST/"
 cp "$BUILD_ROOT/install/build-provenance.json" "$DEST/arm64e-build-provenance.json"
+cp "$ARM64_BUILD_ROOT/install/build-provenance.json" "$DEST/arm64-build-provenance.json"
 printf '%s\n' 'Prepared curl-impersonate 2.3.2 (iOS arm64 + arm64e)'

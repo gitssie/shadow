@@ -124,6 +124,12 @@ if grep -E '\<pgrep\>|\<seq\>|kill[[:space:]]+-[0-9]' "$root/packaging/layout/DE
     fail 'forbidden maintainer command remains'
 fi
 
+for inject_dir in "$clean_pkg/Library/MobileSubstrate/DynamicLibraries" "$clean_pkg/usr/lib/TweakInject"; do
+    mkdir -p "$inject_dir"
+    for module in ShadowWebContent ShadowNetworking ShadowWebKit OtherTweak; do
+        touch "$inject_dir/$module.dylib" "$inject_dir/$module.plist"
+    done
+done
 mkdir -p "$clean_pkg/Applications/ShadowManager.app"
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "$FAKE_LOG"' \
     'exit "${FAKE_UICACHE_RESULT:-0}"' >"$tmp/bin/uicache"
@@ -134,6 +140,17 @@ env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_RO
     SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \
     SHADOW_UICACHE_BIN="$tmp/bin/uicache" sh "$root/packaging/layout/DEBIAN/postinst" configure
 assert grep -F -q -- "-p $clean_pkg/Applications/ShadowManager.app" "$tmp/log"
+for inject_dir in "$clean_pkg/Library/MobileSubstrate/DynamicLibraries" "$clean_pkg/usr/lib/TweakInject"; do
+    for module in ShadowWebContent ShadowNetworking; do
+        assert test ! -e "$inject_dir/$module.dylib"
+        assert test ! -e "$inject_dir/$module.plist"
+    done
+    for module in ShadowWebKit OtherTweak; do
+        assert test -f "$inject_dir/$module.dylib"
+        assert test -f "$inject_dir/$module.plist"
+    done
+done
+
 if env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_ROOTFS_ROOT="$tmp/rootfs-clean" \
     FAKE_LOG="$tmp/log" FAKE_STATE="$tmp/state" FAKE_PROGRAM=/var/jb/usr/libexec/shadowd \
     SHADOW_LAUNCHCTL_BIN="$tmp/bin/launchctl" SHADOW_PS_BIN="$tmp/bin/ps" SHADOW_SLEEP_BIN="$tmp/bin/sleep" \

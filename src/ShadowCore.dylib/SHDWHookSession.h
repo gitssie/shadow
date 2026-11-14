@@ -20,6 +20,8 @@ typedef struct {
 // keeping it here avoids leaking HK3 request structs through every hook file.
 @interface SHDWHookSession : NSObject
 
+@property(nonatomic) BOOL requiresPreparedFunctionOriginal;
+
 // The coordinator supplies its serial queue; plain init creates a private one.
 - (instancetype)initWithLifecycleQueue:(dispatch_queue_t)queue;
 // Attempts synchronously. Return NO only for an absent class/selector or
@@ -36,6 +38,11 @@ typedef struct {
 - (BOOL)hookFunction:(void *)function
      withReplacement:(void *)replacement
            outOldPtr:(void **)oldPtr;
+// Patch a validated entry without relocating it; caller retains a separate original.
+- (BOOL)hookEntry:(void *)entry
+    withReplacement:(void *)replacement
+      expectedBytes:(NSData *)bytes
+            backend:(NSString *)backend;
 - (BOOL)hookRebindSymbol:(NSString *)symbolName
          withReplacement:(void *)replacement
                outOldPtr:(void **)oldPtr;

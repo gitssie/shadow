@@ -1,0 +1,714 @@
+--- a/lib/cf-https-connect.c
++++ b/lib/cf-https-connect.c
+@@ -222,7 +222,8 @@
+   {
+     /* For a negotiated HTTP/2 connection insert the h2 filter. */
+     const char *alpn = Curl_conn_cf_get_alpn_negotiated(cf->next, data);
+-    if(alpn && !strcmp("h2", alpn)) {
++    if((!data->set.connect_only || data->set.connect_only_ws) &&
++       alpn && !strcmp("h2", alpn)) {
+       CURLcode result = Curl_http2_switch_at(cf, data);
+       if(result) {
+         ctx->state = CF_HC_FAILURE;
+--- a/lib/easy.c
++++ b/lib/easy.c
+@@ -1739,6 +1739,12 @@
+     return CURLE_UNSUPPORTED_PROTOCOL;
+   }
+ 
++  if(data->set.shadow_external_io && data->set.shadow_transport_read) {
++    *connp = data->conn;
++    if(!*connp)
++      (void)Curl_getconnectinfo(data, connp);
++    return *connp ? CURLE_OK : CURLE_UNSUPPORTED_PROTOCOL;
++  }
+   sfd = Curl_getconnectinfo(data, connp);
+ 
+   if(sfd == CURL_SOCKET_BAD) {
+@@ -1748,6 +1754,192 @@
+   }
+ 
+   return CURLE_OK;
++}
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_enable_external_io(CURL *curl)
++{
++  struct Curl_easy *data = curl;
++  if(!data || !data->set.connect_only || data->multi)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  data->set.shadow_external_io = TRUE;
++  return CURLE_OK;
++}
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_set_transport(
++  CURL *curl,
++  CURLcode (*read_cb)(void *, void *, size_t, size_t *),
++  CURLcode (*write_cb)(void *, const void *, size_t, size_t *), void *context)
++{
++  struct Curl_easy *data = curl;
++  if(!data || !data->set.connect_only || !data->set.shadow_external_io ||
++     data->multi || data->conn || !read_cb || !write_cb)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  data->set.shadow_transport_read = read_cb;
++  data->set.shadow_transport_write = write_cb;
++  data->set.shadow_transport_context = context;
++  return CURLE_OK;
++}
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_set_native_verify(
++  CURL *curl, int (*verify)(void *), void *context)
++{
++  struct Curl_easy *data = curl;
++  if(!data || !data->set.connect_only || !data->set.shadow_external_io ||
++     data->conn || !verify)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  data->set.shadow_native_verify = verify;
++  data->set.shadow_native_verify_context = context;
++  return CURLE_OK;
++}
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_get_alpn(CURL *curl,
++                                                       const char **protocol)
++{
++  struct Curl_easy *data = curl;
++  struct connectdata *connection = NULL;
++  CURLcode result;
++  if(!protocol)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  *protocol = NULL;
++  result = easy_connection(data, &connection);
++  if(result)
++    return result;
++  *protocol = Curl_conn_get_alpn_negotiated(data, connection);
++  return CURLE_OK;
++}
++
++#ifdef USE_OPENSSL
++CURLcode Curl_ossl_shadow_tls_snapshot(void *, unsigned int *, unsigned int *,
++                                      int (*)(const unsigned char *, size_t,
++                                              void *), void *, bool);
++#endif
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_get_tls_snapshot(
++  CURL *curl, unsigned int *version, unsigned int *cipher,
++  int (*certificate)(const unsigned char *, size_t, void *), void *context)
++{
++  struct Curl_easy *data = curl;
++  struct connectdata *connection = NULL;
++  struct curl_tlssessioninfo info;
++  CURLcode result;
++  if(!version || !cipher || !certificate)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  *version = *cipher = 0;
++  result = easy_connection(data, &connection);
++  if(result)
++    return result;
++#ifdef USE_OPENSSL
++  memset(&info, 0, sizeof(info));
++  if(!Curl_conn_get_ssl_info(data, connection, FIRSTSOCKET,
++                             CF_QUERY_SSL_INFO, &info) ||
++     info.backend != CURLSSLBACKEND_OPENSSL || !info.internals)
++    return CURLE_NOT_BUILT_IN;
++  return Curl_ossl_shadow_tls_snapshot(info.internals, version, cipher,
++                                       certificate, context, TRUE);
++#else
++  (void)info;
++  (void)context;
++  return CURLE_NOT_BUILT_IN;
++#endif
++}
++
++#ifdef USE_OPENSSL
++CURLcode Curl_ossl_shadow_shutdown_write(struct Curl_easy *,
++                                        struct connectdata *);
++#endif
++#ifdef USE_OPENSSL
++CURLcode Curl_ossl_shadow_io_state(struct connectdata *, int *, int *);
++#endif
++CURL_EXTERN CURLcode curl_shadow_connect_only_get_io_state(CURL *curl,
++                                                          int *io_need,
++                                                          int *shutdown_state)
++{
++  struct Curl_easy *data = curl;
++  struct connectdata *connection;
++  if(!io_need || !shutdown_state)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  *io_need = *shutdown_state = 0;
++  if(!data || !data->set.connect_only || !data->set.shadow_external_io)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  /* A pending handshake still owns data->conn; completed connect-only
++     transfers use the connection retained by their multi handle. */
++  connection = data->conn;
++  if(!connection)
++    (void)Curl_getconnectinfo(data, &connection);
++  if(!connection)
++    return CURLE_UNSUPPORTED_PROTOCOL;
++#ifdef USE_OPENSSL
++  return Curl_ossl_shadow_io_state(connection, io_need, shutdown_state);
++#else
++  return CURLE_NOT_BUILT_IN;
++#endif
++}
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_shutdown(CURL *curl,
++                                                        int *complete)
++{
++  struct Curl_easy *data = curl;
++  struct connectdata *connection = NULL;
++  struct Curl_cfilter *cf;
++  bool done = FALSE;
++  CURLcode result;
++  if(!complete)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  *complete = 0;
++  result = easy_connection(data, &connection);
++  if(result)
++    return result;
++  for(cf = connection->cfilter[FIRSTSOCKET]; cf; cf = cf->next) {
++    if(cf->cft->flags & CF_TYPE_SSL)
++      break;
++  }
++  if(!cf)
++    return CURLE_UNSUPPORTED_PROTOCOL;
++  result = cf->cft->do_shutdown(cf, data, &done);
++  *complete = done ? 1 : 0;
++  return result;
++}
++
++CURL_EXTERN CURLcode curl_shadow_connect_only_shutdown_write(CURL *curl)
++{
++  struct Curl_easy *data = curl;
++  struct connectdata *connection = NULL;
++  CURLcode result = easy_connection(data, &connection);
++  if(result)
++    return result;
++#ifdef USE_OPENSSL
++  return Curl_ossl_shadow_shutdown_write(data, connection);
++#else
++  return CURLE_NOT_BUILT_IN;
++#endif
++}
++
++#ifdef USE_OPENSSL
++CURLcode Curl_ossl_shadow_verification_snapshot(
++  void *, char *, size_t, unsigned int *, unsigned int *,
++  int (*)(const unsigned char *, size_t, void *), void *);
++#endif
++CURL_EXTERN CURLcode curl_shadow_connect_only_get_verification_snapshot(
++  CURL *curl, char *alpn, size_t capacity,
++  unsigned int *version, unsigned int *cipher,
++  int (*certificate)(const unsigned char *, size_t, void *), void *context)
++{
++  struct Curl_easy *data = curl;
++  if(!data || !data->set.connect_only || !data->set.shadow_external_io ||
++     !data->set.shadow_native_verify || !data->set.shadow_verification_ssl ||
++     !data->set.shadow_verification_pending || !data->conn ||
++     !Curl_is_connecting(data) || !alpn || !capacity || !version || !cipher || !certificate)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  alpn[0] = 0;
++  *version = *cipher = 0;
++#ifdef USE_OPENSSL
++  return Curl_ossl_shadow_verification_snapshot(
++    data->set.shadow_verification_ssl, alpn, capacity, version, cipher,
++    certificate, context);
++#else
++  (void)context;
++  return CURLE_NOT_BUILT_IN;
++#endif
+ }
+ 
+ /*
+--- a/lib/vtls/openssl.c
++++ b/lib/vtls/openssl.c
+@@ -2094,6 +2094,10 @@
+   DEBUGASSERT(octx);
+ 
+   connssl->input_pending = FALSE;
++  if(data && data->set.shadow_verification_ssl == octx->ssl) {
++    data->set.shadow_verification_ssl = NULL;
++    data->set.shadow_verification_pending = FALSE;
++  }
+   if(octx->ssl) {
+     SSL_free(octx->ssl);
+     octx->ssl = NULL;
+@@ -3845,6 +3849,9 @@
+   X509_STORE *cached_store;
+   bool cache_criteria_met, is_empty;
+ 
++  if(data->set.shadow_external_io && data->set.shadow_native_verify)
++    return CURLE_OK;
++
+   /* Consider the X509 store cacheable if it comes from CAfile/CApath,
+      or no source is provided and we are falling back to OpenSSL's built-in
+      default. */
+@@ -4163,6 +4170,35 @@
+ }
+ #endif /* else HAVE_SSL_SET1_ECH_CONFIG_LIST */
+ 
++#ifdef OPENSSL_IS_BORINGSSL
++static enum ssl_verify_result_t ossl_shadow_native_verify(SSL *ssl,
++                                                          uint8_t *alert)
++{
++  struct Curl_cfilter *cf = SSL_get_app_data(ssl);
++  struct Curl_easy *data = cf ? CF_DATA_CURRENT(cf) : NULL;
++  struct ssl_connect_data *connssl = cf ? cf->ctx : NULL;
++  struct ossl_ctx *octx = connssl ? connssl->backend : NULL;
++  int decision;
++  if(!data || !octx || !data->set.shadow_native_verify) {
++    *alert = SSL_AD_BAD_CERTIFICATE;
++    return ssl_verify_invalid;
++  }
++  data->set.shadow_verification_ssl = ssl;
++  decision = data->set.shadow_native_verify(
++    data->set.shadow_native_verify_context);
++  data->set.shadow_verification_pending = (decision == 0);
++  if(decision > 0) {
++    octx->shadow_native_verified = TRUE;
++    return ssl_verify_ok;
++  }
++  if(decision < 0) {
++    *alert = SSL_AD_BAD_CERTIFICATE;
++    return ssl_verify_invalid;
++  }
++  return ssl_verify_retry;
++}
++#endif
++
+ static CURLcode ossl_init_ssl(struct ossl_ctx *octx,
+                               struct Curl_cfilter *cf,
+                               struct Curl_easy *data,
+@@ -4176,9 +4212,13 @@
+   const struct alpn_spec *alps = NULL;
+ #endif
+ 
++  data->set.shadow_verification_ssl = NULL;
++  data->set.shadow_verification_pending = FALSE;
+   /* Let's make an SSL structure */
+   if(octx->ssl)
+     SSL_free(octx->ssl);
++  octx->shadow_write_shutdown_complete = FALSE;
++  octx->shadow_native_verified = FALSE;
+   octx->ssl = SSL_new(octx->ssl_ctx);
+   if(!octx->ssl) {
+     failf(data, "SSL: could not create a context (handle)");
+@@ -4186,6 +4226,11 @@
+   }
+ 
+   SSL_set_app_data(octx->ssl, ssl_user_data);
++#ifdef OPENSSL_IS_BORINGSSL
++  if(data->set.shadow_external_io && data->set.shadow_native_verify)
++    SSL_set_custom_verify(octx->ssl, SSL_VERIFY_PEER,
++                           ossl_shadow_native_verify);
++#endif
+ 
+ #ifdef OPENSSL_IS_BORINGSSL
+   if(data->set.ssl_enable_alps) {
+@@ -5070,6 +5115,11 @@
+     int detail = SSL_get_error(octx->ssl, err);
+     CURL_TRC_CF(data, cf, "SSL_connect() -> err=%d, detail=%d", err, detail);
+ 
++#ifdef OPENSSL_IS_BORINGSSL
++    if(detail == SSL_ERROR_WANT_CERTIFICATE_VERIFY &&
++       data->set.shadow_external_io && data->set.shadow_native_verify)
++      return CURLE_AGAIN;
++#endif
+     if(detail == SSL_ERROR_WANT_READ) {
+       CURL_TRC_CF(data, cf, "SSL_connect() -> want recv");
+       connssl->io_need = CURL_SSL_IO_NEED_RECV;
+@@ -5707,6 +5757,10 @@
+   long ossl_verify;
+   X509 *server_cert;
+   bool verified = FALSE;
++
++  if(data->set.shadow_external_io && data->set.shadow_native_verify &&
++     octx->shadow_native_verified)
++    return CURLE_OK;
+ 
+   if(data->set.ssl.certinfo && !octx->reused_session) {
+     /* asked to gather certificate info. Reused sessions do not have cert
+@@ -6468,6 +6522,163 @@
+     (void *)octx->ssl_ctx : (void *)octx->ssl;
+ }
+ 
++/* Read-only adapter state: valid before the TLS filter becomes connected. */
++CURLcode Curl_ossl_shadow_io_state(struct connectdata *connection,
++                                   int *io_need, int *shutdown_state)
++{
++  struct Curl_cfilter *cf;
++  struct ssl_connect_data *connssl;
++  struct ossl_ctx *octx;
++  int shutdown_bits;
++  if(!connection || !io_need || !shutdown_state)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  *io_need = *shutdown_state = 0;
++  for(cf = connection->cfilter[FIRSTSOCKET]; cf; cf = cf->next) {
++    if(cf->cft == &Curl_cft_ssl)
++      break;
++  }
++  if(!cf || !cf->ctx)
++    return CURLE_UNSUPPORTED_PROTOCOL;
++  connssl = cf->ctx;
++  if(connssl->ssl_impl != &Curl_ssl_openssl)
++    return CURLE_NOT_BUILT_IN;
++  octx = connssl->backend;
++  if(!octx || !octx->ssl)
++    return CURLE_SSL_CONNECT_ERROR;
++  if(connssl->io_need & CURL_SSL_IO_NEED_RECV)
++    *io_need |= 1;
++  if(connssl->io_need & CURL_SSL_IO_NEED_SEND)
++    *io_need |= 2;
++  shutdown_bits = SSL_get_shutdown(octx->ssl);
++  if(shutdown_bits & SSL_SENT_SHUTDOWN)
++    *shutdown_state |= 1;
++  if(shutdown_bits & SSL_RECEIVED_SHUTDOWN)
++    *shutdown_state |= 2;
++  return CURLE_OK;
++}
++
++CURLcode Curl_ossl_shadow_shutdown_write(struct Curl_easy *data,
++                                        struct connectdata *connection)
++{
++  struct Curl_cfilter *cf;
++  struct cf_call_data save;
++  struct ssl_connect_data *connssl;
++  struct ossl_ctx *octx;
++  int rc, error;
++  CURLcode result;
++  for(cf = connection->cfilter[FIRSTSOCKET]; cf; cf = cf->next) {
++    if(cf->cft == &Curl_cft_ssl)
++      break;
++  }
++  if(!cf || !cf->connected)
++    return CURLE_UNSUPPORTED_PROTOCOL;
++  connssl = cf->ctx;
++  if(connssl->ssl_impl != &Curl_ssl_openssl)
++    return CURLE_NOT_BUILT_IN;
++  octx = connssl->backend;
++  if(!octx || !octx->ssl)
++    return CURLE_SSL_CONNECT_ERROR;
++  connssl->io_need = CURL_SSL_IO_NEED_NONE;
++  CF_DATA_SAVE(save, cf, data);
++  if(!SSL_is_init_finished(octx->ssl)) {
++    unsigned char pending;
++    ERR_clear_error();
++    rc = SSL_peek(octx->ssl, &pending, 1);
++    error = rc <= 0 ? SSL_get_error(octx->ssl, rc) : SSL_ERROR_NONE;
++    if(error != SSL_ERROR_NONE && error != SSL_ERROR_WANT_READ &&
++       error != SSL_ERROR_WANT_WRITE) {
++      CF_DATA_RESTORE(cf, save);
++      return CURLE_SEND_ERROR;
++    }
++    if(error == SSL_ERROR_WANT_READ)
++      connssl->io_need = CURL_SSL_IO_NEED_RECV;
++    else if(error == SSL_ERROR_WANT_WRITE)
++      connssl->io_need = CURL_SSL_IO_NEED_SEND;
++    if(!SSL_is_init_finished(octx->ssl)) {
++      CF_DATA_RESTORE(cf, save);
++      return CURLE_AGAIN;
++    }
++  }
++  if(octx->shadow_write_shutdown_complete)
++    result = CURLE_OK;
++  else {
++    ERR_clear_error();
++    rc = SSL_shutdown(octx->ssl);
++    error = rc < 0 ? SSL_get_error(octx->ssl, rc) : SSL_ERROR_NONE;
++    if(error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
++      connssl->io_need = error == SSL_ERROR_WANT_READ ?
++        CURL_SSL_IO_NEED_RECV : CURL_SSL_IO_NEED_SEND;
++      result = CURLE_AGAIN;
++    }
++    else if(rc >= 0 && (SSL_get_shutdown(octx->ssl) & SSL_SENT_SHUTDOWN)) {
++      octx->shadow_write_shutdown_complete = TRUE;
++      result = CURLE_OK;
++    }
++    else
++      result = CURLE_SEND_ERROR;
++  }
++  CF_DATA_RESTORE(cf, save);
++  return result;
++}
++
++/* Internal experimental adapter. Certificate bytes live for the callback. */
++CURLcode Curl_ossl_shadow_tls_snapshot(void *internals,
++                                      unsigned int *version,
++                                      unsigned int *cipher,
++                                      int (*certificate)(const unsigned char *,
++                                                         size_t, void *),
++                                      void *context, bool finalized)
++{
++  SSL *ssl = internals;
++  const SSL_CIPHER *selected;
++  STACK_OF(X509) *chain;
++  size_t i, count;
++  if(!ssl || !version || !cipher || !certificate)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  selected = SSL_get_current_cipher(ssl);
++  chain = SSL_get_peer_cert_chain(ssl);
++  count = chain ? sk_X509_num(chain) : 0;
++  if(!selected || !count ||
++     (finalized && !SSL_is_init_finished(ssl) && !SSL_in_false_start(ssl)))
++    return CURLE_SSL_CONNECT_ERROR;
++  *version = (unsigned int)SSL_version(ssl);
++  *cipher = (unsigned int)(SSL_CIPHER_get_id(selected) & 0xffff);
++  for(i = 0; i < count; ++i) {
++    unsigned char *der = NULL;
++    int length = i2d_X509(sk_X509_value(chain, i), &der);
++    int accepted;
++    if(length <= 0 || !der) {
++      OPENSSL_free(der);
++      return CURLE_SSL_CERTPROBLEM;
++    }
++    accepted = certificate(der, (size_t)length, context);
++    OPENSSL_free(der);
++    if(!accepted)
++      return CURLE_ABORTED_BY_CALLBACK;
++  }
++  return CURLE_OK;
++}
++
++CURLcode Curl_ossl_shadow_verification_snapshot(
++  void *internals, char *alpn, size_t capacity,
++  unsigned int *version, unsigned int *cipher,
++  int (*certificate)(const unsigned char *, size_t, void *), void *context)
++{
++  const uint8_t *selected = NULL;
++  unsigned int length = 0;
++  SSL *ssl = internals;
++  if(!ssl || !alpn || !capacity)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  SSL_get0_alpn_selected(ssl, &selected, &length);
++  if(length >= capacity)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  if(length)
++    memcpy(alpn, selected, length);
++  alpn[length] = 0;
++  return Curl_ossl_shadow_tls_snapshot(ssl, version, cipher,
++                                       certificate, context, FALSE);
++}
++
+ const struct Curl_ssl Curl_ssl_openssl = {
+   { CURLSSLBACKEND_OPENSSL, "openssl" }, /* info */
+ 
+--- a/lib/vtls/openssl.h
++++ b/lib/vtls/openssl.h
+@@ -130,6 +130,8 @@
+      This is a bool and not a bitfield because it is passed by address. */
+   bool keylog_done;
+ #endif
++  BIT(shadow_write_shutdown_complete);
++  BIT(shadow_native_verified);
+   BIT(x509_store_setup);            /* x509 store has been set up */
+   BIT(store_is_empty);              /* no certs/paths/blobs in x509 store */
+   BIT(reused_session);              /* session-ID was reused for this */
+--- a/lib/connect.c
++++ b/lib/connect.c
+@@ -36,6 +36,7 @@
+ #include "multihandle.h"
+ #include "select.h"
+ #include "vdns/cf-dns.h"
++#include "vtls/vtls.h"
+ #include "curlx/strparse.h"
+ 
+ #if !defined(CURL_DISABLE_ALTSVC) || defined(USE_HTTPSRR)
+@@ -75,6 +76,8 @@
+ 
+   if(data->conn && CURL_CONN_IN_SHUTDOWN(data->conn, FIRSTSOCKET))
+     return Curl_cshutdn_timeleft_ms(data, data->conn, FIRSTSOCKET);
++  else if(data->set.shadow_external_io && data->set.connect_only)
++    return 0; /* The owner of the external byte stream owns its deadlines. */
+   else if(Curl_is_connecting(data)) {
+     timediff_t ctimeout_ms = (data->set.connecttimeout > 0) ?
+       data->set.connecttimeout : DEFAULT_CONNECT_TIMEOUT;
+@@ -156,6 +159,164 @@
+   }
+ }
+ 
++/* The native owner supplies an already established byte stream. No socket,
++   resolver, proxy, or polling ownership crosses this boundary. */
++struct shadow_transport {
++  CURLcode (*read_cb)(void *, void *, size_t, size_t *);
++  CURLcode (*write_cb)(void *, const void *, size_t, size_t *);
++  void *context;
++};
++
++static void shadow_transport_destroy(struct Curl_cfilter *cf,
++                                       struct Curl_easy *data)
++{
++  (void)data;
++  free(cf->ctx);
++  cf->ctx = NULL;
++}
++
++static CURLcode shadow_transport_connect(struct Curl_cfilter *cf,
++                                          struct Curl_easy *data, bool *done)
++{
++  (void)data;
++  cf->connected = TRUE;
++  *done = TRUE;
++  return CURLE_OK;
++}
++
++static CURLcode shadow_transport_pollset(struct Curl_cfilter *cf,
++                                          struct Curl_easy *data,
++                                          struct easy_pollset *ps)
++{
++  (void)cf;
++  (void)data;
++  (void)ps;
++  return CURLE_OK;
++}
++
++static CURLcode shadow_transport_send(struct Curl_cfilter *cf,
++                                       struct Curl_easy *data,
++                                       const uint8_t *buf, size_t len,
++                                       bool eos, size_t *n)
++{
++  struct shadow_transport *ctx = cf->ctx;
++  CURLcode result;
++  (void)data;
++  (void)eos;
++  *n = 0;
++  result = ctx->write_cb(ctx->context, buf, len, n);
++  if(*n > len || (result && *n)) {
++    *n = 0;
++    return CURLE_SEND_ERROR;
++  }
++  return result;
++}
++
++static CURLcode shadow_transport_recv(struct Curl_cfilter *cf,
++                                       struct Curl_easy *data, char *buf,
++                                       size_t len, size_t *n)
++{
++  struct shadow_transport *ctx = cf->ctx;
++  CURLcode result;
++  (void)data;
++  *n = 0;
++  result = ctx->read_cb(ctx->context, buf, len, n);
++  if(*n > len || (result && *n)) {
++    *n = 0;
++    return CURLE_RECV_ERROR;
++  }
++  return result;
++}
++
++static bool shadow_transport_alive(struct Curl_cfilter *cf,
++                                    struct Curl_easy *data, bool *pending)
++{
++  (void)data;
++  *pending = FALSE;
++  return cf->connected;
++}
++
++static CURLcode shadow_transport_query(struct Curl_cfilter *cf,
++                                        struct Curl_easy *data, int query,
++                                        int *res1, void *res2)
++{
++  if(query == CF_QUERY_IP_INFO) {
++    *res1 = FALSE;
++    memset(res2, 0, sizeof(struct ip_quadruple));
++    return CURLE_OK;
++  }
++  if(query == CF_QUERY_REMOTE_ADDR) {
++    *(const struct Curl_sockaddr_ex **)res2 = NULL;
++    return CURLE_OK;
++  }
++  if(query == CF_QUERY_CONNECT_REPLY_MS) {
++    *res1 = -1;
++    return CURLE_OK;
++  }
++  if(query == CF_QUERY_SOCKET) {
++    *(curl_socket_t *)res2 = CURL_SOCKET_BAD;
++    return CURLE_OK;
++  }
++  if(query == CF_QUERY_REALLY_CONNECTED) {
++    *res1 = cf->connected;
++    return CURLE_OK;
++  }
++  if(query == CF_QUERY_TRANSPORT) {
++    *res1 = TRNSPRT_TCP;
++    return CURLE_OK;
++  }
++  return Curl_cf_def_query(cf, data, query, res1, res2);
++}
++
++static const struct Curl_cftype shadow_transport_type = {
++  "SHADOW-EXTERNAL", CF_TYPE_IP_CONNECT, 0,
++  shadow_transport_destroy,
++  shadow_transport_connect,
++  Curl_cf_def_shutdown,
++  shadow_transport_pollset,
++  Curl_cf_def_data_pending,
++  shadow_transport_send,
++  shadow_transport_recv,
++  Curl_cf_def_cntrl,
++  shadow_transport_alive,
++  Curl_cf_def_conn_keep_alive,
++  shadow_transport_query
++};
++
++static CURLcode shadow_transport_setup(struct Curl_easy *data,
++                                        struct connectdata *conn,
++                                        int8_t sockindex)
++{
++#ifdef USE_SSL
++  struct shadow_transport *ctx;
++  struct Curl_cfilter *cf = NULL;
++  CURLcode result;
++  if(sockindex != FIRSTSOCKET || conn->scheme->protocol != CURLPROTO_HTTPS ||
++     !data->set.connect_only || !data->set.shadow_transport_read ||
++     !data->set.shadow_transport_write)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  ctx = calloc(1, sizeof(*ctx));
++  if(!ctx)
++    return CURLE_OUT_OF_MEMORY;
++  ctx->read_cb = data->set.shadow_transport_read;
++  ctx->write_cb = data->set.shadow_transport_write;
++  ctx->context = data->set.shadow_transport_context;
++  result = Curl_cf_create(&cf, &shadow_transport_type, ctx);
++  if(result) {
++    free(ctx);
++    return result;
++  }
++  Curl_conn_cf_add(data, conn, sockindex, cf);
++  return Curl_ssl_cfilter_add(data, Curl_conn_get_origin(conn, sockindex),
++                              conn, sockindex);
++#else
++  (void)data;
++  (void)conn;
++  (void)sockindex;
++  return CURLE_NOT_BUILT_IN;
++#endif
++}
++
+ CURLcode Curl_conn_setup(struct Curl_easy *data,
+                          struct connectdata *conn,
+                          int8_t sockindex,
+@@ -168,6 +329,9 @@
+   DEBUGASSERT(data);
+   DEBUGASSERT(conn->scheme);
+   DEBUGASSERT(!conn->cfilter[sockindex]);
++
++  if(data->set.shadow_external_io && data->set.shadow_transport_read)
++    return shadow_transport_setup(data, conn, sockindex);
+ 
+   if(!first_peer)
+     return CURLE_FAILED_INIT;
+--- a/lib/urldata.h
++++ b/lib/urldata.h
+@@ -1014,6 +1014,14 @@
+ 
+   timediff_t timeout;   /* ms, 0 means no timeout */
+   timediff_t connecttimeout; /* ms, 0 means default timeout */
++  bool shadow_external_io;
++  CURLcode (*shadow_transport_read)(void *, void *, size_t, size_t *);
++  CURLcode (*shadow_transport_write)(void *, const void *, size_t, size_t *);
++  void *shadow_transport_context;
++  int (*shadow_native_verify)(void *);
++  void *shadow_native_verify_context;
++  void *shadow_verification_ssl;
++  bool shadow_verification_pending;
+   timediff_t happy_eyeballs_timeout; /* ms, 0 is a valid value */
+   timediff_t server_response_timeout; /* ms, 0 means no timeout */
+   timediff_t shutdowntimeout; /* ms, 0 means default timeout */

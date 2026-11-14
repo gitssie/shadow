@@ -131,11 +131,15 @@ verify-fingerprint:
 .PHONY: verify-fingerprint
 
 verify-curl-transport:
+	python3 verify-transport-diagnostics-disabled.py
 	python3 verify-curl-profile-selection.py
-	python3 verify-curl-transport.py
+	python3 verify-curl-diagnostics.py
+	python3 verify-network-diagnostics.py
+	python3 verify-web-frame-diagnostics.py
+	python3 verify-web-cookie-diagnostics.py
+	python3 verify-web-cookie-bridge.py
 	python3 verify-curl-initialization.py
 	python3 verify-transport-bootstrap.py
-	python3 verify-curl-trust.py
 	python3 verify-networking-session.py
 
 .PHONY: verify-curl-transport
@@ -199,6 +203,9 @@ image-header-index:
 .PHONY: image-header-index
 
 rebind-image-scheduler:
+	python3 verify-validated-entry.py
+	python3 verify-native-http2-runtime.py
+	python3 verify-native-http2-discovery.py
 	python3 verify-rebind-image-scheduler.py
 	python3 verify-rebind-session.py
 	python3 verify-dyld-load-order.py
@@ -262,3 +269,32 @@ verify-fingerprint-diagnostics:
 
 test: verify-fingerprint-diagnostics
 .PHONY: verify-fingerprint-diagnostics
+
+verify-prepared-original:
+	python3 verify-prepared-original.py
+
+.PHONY: verify-prepared-original
+test: verify-prepared-original
+
+verify-native-tls-read:
+	python3 verify-native-tls-read.py
+	python3 verify-native-tls-write.py
+	python3 verify-native-tls-io.py
+	python3 verify-native-tls-shutdown.py --check-regression
+
+.PHONY: verify-native-tls-read
+test: verify-native-tls-read
+
+verify-native-http2-policy:
+	$(CC) -std=c11 -Wall -Wextra -Werror verify-native-http2-policy.c -o /tmp/shadow-native-http2-policy-test
+	/tmp/shadow-native-http2-policy-test
+
+.PHONY: verify-native-http2-policy
+test: verify-native-http2-policy
+
+verify-native-http2-stubs:
+	$(CC) -std=c11 -Wall -Wextra -Werror verify-native-http2-stubs.c -o /tmp/shadow-native-http2-stubs-test
+	/tmp/shadow-native-http2-stubs-test
+
+.PHONY: verify-native-http2-stubs
+test: verify-native-http2-stubs

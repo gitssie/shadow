@@ -22,10 +22,11 @@ ShadowCore_PRIVATE_FRAMEWORKS = MobileCoreServices
 ShadowCore_CFLAGS = -fobjc-arc -fvisibility=hidden -I. -I hooks -I../Shadow.framework/Headers $(SHADOW_HOOKKIT_CFLAGS)
 ShadowCore_CFLAGS += -DSHADOW_CURL_IMPERSONATE=$(SHADOW_CURL_IMPERSONATE)
 ifeq ($(SHADOW_CURL_IMPERSONATE),1)
-ShadowCore_FILES += ../Transport/Bootstrap.m ../Transport/CurlTrust.m
+ShadowCore_FILES += ../Transport/NativeTLS.m ../Transport/ExternalTLS.c ../Transport/NativeHTTP2.m
+ShadowCore_FILES += ../Transport/Bootstrap.m ../Transport/NetworkDiagnostics.m
 ShadowCore_CFLAGS += -I$(SHADOW_CURL_ROOT)/include
 ShadowCore_FRAMEWORKS += CFNetwork
-ShadowCore_FRAMEWORKS += Security
+ShadowCore_FRAMEWORKS += Security Network
 endif
 ShadowCore_LOGOSFLAGS = -c generator=hookkit -c hook_inheritance=allow_inherited
 ifneq ($(SHADOW_LANE),rootful-legacy)

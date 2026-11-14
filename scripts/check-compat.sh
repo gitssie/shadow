@@ -63,14 +63,22 @@ if [ "$PROFILE" != rootful-legacy ]; then
     APP=$(find_one -type f -path '*/Applications/ShadowManager.app/ShadowManager')
     APP_INFO=$(find_one -type f -path '*/Applications/ShadowManager.app/Info.plist')
     CLEANER=$(find_one -type f -path '*/usr/libexec/shadow-cleaner')
-    LOCALE=$(find_one -type f -path '*/DynamicLibraries/ShadowWebContent.dylib')
+    WEBKIT=$(find_one -type f -path '*/DynamicLibraries/ShadowWebKit.dylib')
+    WEBKIT_FILTER=$(find_one -type f -path '*/DynamicLibraries/ShadowWebKit.plist')
+    python3 - "$WEBKIT_FILTER" <<'PYFILTER'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as stream:
+    bundles = plistlib.load(stream)['Filter']['Bundles']
+if sorted(bundles) != ['com.apple.WebKit.Networking', 'com.apple.WebKit.WebContent']:
+    raise SystemExit('ShadowWebKit must target both WebKit services')
+PYFILTER
+    OBSOLETE=$(find "$TMP/root" -type f \( -name 'ShadowWebContent.dylib' -o -name 'ShadowWebContent.plist' -o -name 'ShadowNetworking.dylib' -o -name 'ShadowNetworking.plist' \) -print)
+    [ -z "$OBSOLETE" ] || { echo "package contains obsolete WebKit modules: $OBSOLETE" >&2; exit 1; }
     [ -u "$CLEANER" ] || { echo "cleanup helper privilege bit is missing" >&2; exit 1; }
     [ -s "$APP_INFO" ] || { echo "manager app metadata is empty" >&2; exit 1; }
-    BINARIES+=("$APP" "$CLEANER" "$LOCALE")
-    NETWORKING=$(find "$TMP" -type f -path '*/DynamicLibraries/ShadowNetworking.dylib' -print -quit)
-    if [ -n "$NETWORKING" ]; then
-        BINARIES+=("$NETWORKING")
-        CURL_ENGINE=$(find_one -type f -path '*/usr/lib/shadow/curl/libcurl-impersonate.4.dylib')
+    BINARIES+=("$APP" "$CLEANER" "$WEBKIT")
+    CURL_ENGINE=$(find "$TMP/root" -type f -path '*/usr/lib/shadow/curl/libcurl-impersonate.4.dylib' -print -quit)
+    if [ -n "$CURL_ENGINE" ]; then
         python3 "$ROOT/scripts/check-curl-impersonate.py" "$CURL_ENGINE"
     fi
 fi

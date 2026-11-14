@@ -144,9 +144,13 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
     [self.selector setExpanded:NO animated:YES];
     NSString *identifier = [self.selected.bundleIdentifier copy]; self.busy = YES; self.selector.enabled = NO; self.summary.enabled = NO; self.manageButton.enabled = NO; self.lockButton.enabled = NO; [self.refreshControl setWorking:YES];
     __weak typeof(self) weakSelf = self;
-    dispatch_async(self.operationQueue, ^{ NSError *error = nil; BOOL success = [[SHDWFingerprintStore sharedStore] refreshApplication:identifier error:&error];
+    dispatch_async(self.operationQueue, ^{ NSError *error = nil;
+        SHDWFingerprintStore *store = SHDWFingerprintStore.sharedStore;
+        NSDictionary *before = [store profileForBundleIdentifier:identifier];
+        BOOL success = [store refreshApplication:identifier error:&error];
+        BOOL changed = ![before isEqual:[store profileForBundleIdentifier:identifier]];
         dispatch_async(dispatch_get_main_queue(), ^{ [SHDWOperationCoordinator endOperation]; typeof(self) self = weakSelf; if (!self) return; self.busy = NO; self.selector.enabled = YES; self.summary.enabled = YES; self.manageButton.enabled = YES; [self.refreshControl setWorking:NO]; [self reloadApplications];
-            if (success && [self.selected.bundleIdentifier isEqualToString:identifier]) [self.refreshControl showCompleted]; else if (!success) SHDWShowError(self, error);
+            if (success && changed && [self.selected.bundleIdentifier isEqualToString:identifier]) [self.refreshControl showCompleted]; else if (!success) SHDWShowError(self, error);
         });
     });
 }

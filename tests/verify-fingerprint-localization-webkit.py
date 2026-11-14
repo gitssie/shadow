@@ -22,14 +22,8 @@ static void Check(BOOL value, const char *message) {
 static NSDictionary *Resolved;
 static NSString *TransportProfile;
 static NSString *SystemMode = @"native", *OSVersion = @"18.7.1";
-static id UserAgentOverride;
-#if SHADOW_CURL_IMPERSONATE
-static BOOL SupportsPolicy = YES;
-static BOOL SHDWCurlTransportSupportsWebKitPolicy(NSDictionary *policy) { (void)policy; return SupportsPolicy; }
-#endif
-static NSDictionary *SHDWFingerprintConfig(NSString *bundle) {
+NSDictionary *SHDWFingerprintConfig(NSString *bundle) {
     (void)bundle;NSMutableDictionary *configuration=[@{@"Network":@{@"Transport":TransportProfile ?: @"native"}, @"System":@{@"Mode":SystemMode}} mutableCopy];
-    if(UserAgentOverride)configuration[@"WebKit"]=@{@"OverrideUserAgent":UserAgentOverride};
     return configuration;
 }
 static NSString *SHDWFingerprintOSVersionString(void) { return OSVersion; }
@@ -151,9 +145,6 @@ static xpc_object_t Event(void) {
     xpc_dictionary_set_string(event, "client-bundle-identifier", "local.sdkprobe.app"); return event;
 }
 static void ParentTests(void) {
-    Resolved = @{@"OverridesSystem":@NO};
-    SHDWFingerprintInstallWebLocalization();
-    Check(!SymbolLookups && !HookCalls && !shdw_sym_policy_lookup_web_localization("xpc_connection_set_bootstrap"), "native installation changed parent");
     Resolved = Custom(); MissingSymbol = YES; SHDWFingerprintInstallWebLocalization();
     Check(!HookCalls && !shdw_sym_policy_lookup_web_localization("xpc_connection_set_bootstrap"), "unresolved original exposed replacement");
     MissingSymbol = NO; RejectHook = YES; SHDWFingerprintInstallWebLocalization();
@@ -174,7 +165,17 @@ static void ParentTests(void) {
     Check(xpc_array_get_count(languages) == 2 && !strcmp(xpc_array_get_string(languages, 0), "en-US") && !strcmp(xpc_array_get_string(languages, 1), "fr-FR"), "WebKit language override differs");
     xpc_object_t foreignEvent = Event(); xpc_dictionary_set_string(foreignEvent, "client-bundle-identifier", "other.app");
     Check(!SHDWLocalizationSnapshot(ReceivedMessage, foreignEvent), "payload not bound to exact owner");
-    SetBootstrap(network, original); Check(ReceivedMessage == original, "network process modified");
+    SetBootstrap(network, original);
+#if SHADOW_CURL_IMPERSONATE
+    xpc_object_t networkEvent = Event();
+    xpc_dictionary_set_string(networkEvent, "service-name", "com.apple.WebKit.Networking");
+    NSDictionary *networkLocale = SHDWLocalizationNetworkingSnapshot(ReceivedMessage, networkEvent);
+    Check([networkLocale[@"LocaleIdentifier"] isEqual:Resolved[@"LocaleIdentifier"]] &&
+          [networkLocale[@"Languages"] isEqual:Resolved[@"Languages"]], "Networking lost selected localization");
+    Check(!SHDWLocalizationSnapshot(ReceivedMessage, networkEvent), "WebContent receiver accepted Networking event");
+#else
+    Check(ReceivedMessage == original, "disabled build modified Networking launch");
+#endif
     Internal = YES; SetBootstrap(web, original); Internal = NO; Check(SHDWLocalizationSnapshot(ReceivedMessage, Event()) != nil, "internal launch lost configured payload");
     SetBootstrap(nil, original); Check(ReceivedMessage == original, "nil connection modified");
     Resolved = @{@"OverridesSystem":@NO}; SetBootstrap(web, original); Check([SHDWLocalizationSnapshot(ReceivedMessage, Event())[@"TimeZone"] isEqual:Custom()[@"TimeZone"]], "installed parent snapshot changed");
@@ -277,7 +278,7 @@ static void UserAgentParentTests(void) {
     Resolved = @{@"OverridesSystem":@NO};
     SystemMode = @"native";
     SHDWFingerprintInstallWebLocalization();
-    Check(!HookCalls && !SymbolLookups, "native system mode activated UA bootstrap");
+    Check(HookCalls == 1, "native system mode did not activate UA bootstrap");
     SystemMode = @"profile";
     SHDWFingerprintInstallWebLocalization();
     Check(HookCalls == 1, "UA-only profile did not install bootstrap with native localization");
@@ -297,31 +298,27 @@ static void UserAgentParentTests(void) {
     Check(ReceivedMessage == original, "UA-only profile modified Networking launch");
     puts("UA-only native-localization parent bootstrap passed");
 }
-static void UserAgentDisabledParentTests(NSString *mode) {
-    BOOL locale = [mode isEqual:@"ua-disabled-locale"];
-    BOOL transport = [mode isEqual:@"ua-disabled-transport"];
-    SystemMode = @"profile"; UserAgentOverride = @NO;
+static void UserAgentIndependentParentTests(NSString *mode) {
+    BOOL locale = [mode isEqual:@"ua-independent-locale"];
+    BOOL transport = [mode isEqual:@"ua-independent-transport"];
+    SystemMode = @"profile";
     Resolved = locale ? Custom() : @{@"OverridesSystem":@NO};
-    TransportProfile = transport ? @"safari184_ios" : nil;
+    TransportProfile = transport ? @"auto" : nil;
     SHDWFingerprintInstallWebLocalization();
-    Check(HookCalls == ((locale || transport) ? 1u : 0u), "disabled UA changed independent bootstrap activation");
-    if (!locale && !transport) {
-        Check(!SymbolLookups, "disabled UA activated bootstrap with native locale/transport");
-        return;
-    }
+    Check(HookCalls == 1, "always-enabled UA did not activate bootstrap");
     xpc_object_t original = Message();
     SetBootstrap(FixtureConnection("com.apple.WebKit.WebContent"), original);
-    Check(!SHDWWebUserAgentSnapshot(ReceivedMessage, Event()), "disabled UA sent child source override");
-    Check((SHDWLocalizationSnapshot(ReceivedMessage, Event()) != nil) == locale, "UA switch changed locale routing");
+    Check(SHDWWebUserAgentSnapshot(ReceivedMessage, Event()) != nil, "UA source override missing");
+    Check((SHDWLocalizationSnapshot(ReceivedMessage, Event()) != nil) == locale, "UA changed locale routing");
 #if SHADOW_CURL_IMPERSONATE
     if (transport) {
         SetBootstrap(FixtureConnection("com.apple.WebKit.Networking"), original);
         xpc_object_t event = Event();
         xpc_dictionary_set_string(event, "service-name", "com.apple.WebKit.Networking");
-        Check([SHDWTransportSnapshot(ReceivedMessage, event)[@"Profile"] isEqual:@"safari184_ios"], "disabled UA removed transport profile");
+        Check([SHDWTransportSnapshot(ReceivedMessage, event)[@"Profile"] isEqual:@"safari187_ios"], "UA removed transport profile");
     }
 #endif
-    puts("disabled UA preserves independent localization and transport passed");
+    puts("always-enabled UA preserves independent localization and transport passed");
 }
 static void UserAgentChildTests(NSString *mode) {
     setenv("TZ", "Etc/UTC", 1); tzset();
@@ -361,10 +358,6 @@ static void TransportParentTests(NSString *mode) {
     if ([mode isEqual:@"transport-172"]) OSVersion = @"17.2.1";
     if ([mode isEqual:@"transport-180"]) OSVersion = @"18.3.1";
     NSString *expectedProfile = [SHDWFingerprintConfiguration curlTransportProfileForConfiguration:SHDWFingerprintConfig(@"local.sdkprobe.app") systemVersion:OSVersion];
-    SupportsPolicy = NO;
-    SHDWFingerprintInstallWebLocalization();
-    Check(HookCalls == 0, "unsupported trust policy activated transport bootstrap");
-    SupportsPolicy = YES;
     SHDWFingerprintInstallWebLocalization();
     Check(HookCalls == 1, "native localization suppressed transport bootstrap");
     xpc_object_t original = Message();
@@ -383,7 +376,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     if (argc != 2) return 2;
     NSString *mode = @(argv[1]); if ([mode isEqual:@"parent"]) ParentTests();
     else if ([mode isEqual:@"ua-parent"]) UserAgentParentTests();
-    else if ([mode hasPrefix:@"ua-disabled"]) UserAgentDisabledParentTests(mode);
+    else if ([mode hasPrefix:@"ua-independent"]) UserAgentIndependentParentTests(mode);
     else if ([mode hasPrefix:@"ua-"]) UserAgentChildTests(mode);
 #if SHADOW_CURL_IMPERSONATE
     else if ([mode hasPrefix:@"transport-"]) TransportParentTests(mode);
@@ -395,7 +388,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
 with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as directory:
     temp = Path(directory)
     parent = (ROOT / "src/ShadowCore.dylib/policy/WebLocalization.m").read_text()
-    child = (ROOT / "src/ShadowWebContent.dylib/Entry.m").read_text()
+    child = (ROOT / "src/ShadowWebKit.dylib/WebContent.m").read_text()
     # Substitute imports and the automatic constructor only; execute actual production functions.
     parent = "\n".join(line for line in parent.splitlines() if not line.startswith("#import"))
     child = "\n".join(line for line in child.splitlines() if not line.startswith("#import"))
@@ -412,8 +405,8 @@ with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as direc
                         "-I", str(ROOT / "src/Localization"), str(source), str(ROOT / "src/Localization/Environment.m"),
                         str(ROOT / "src/Localization/Bootstrap.m"), str(ROOT / "src/Transport/Bootstrap.m"),
                         str(ROOT / "src/WebUserAgent/Bootstrap.m"), str(ROOT / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary)], check=True)
-        modes = ["parent", "ua-parent", "ua-disabled", "ua-disabled-locale", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
+        modes = ["parent", "ua-parent", "ua-independent", "ua-independent-locale", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
         if curl_enabled:
-            modes.extend(["transport-parent", "transport-172", "transport-180", "ua-disabled-transport"])
+            modes.extend(["transport-parent", "transport-172", "transport-180", "ua-independent-transport"])
         for mode in modes:
             subprocess.run([str(binary), mode], check=True, env=environment)

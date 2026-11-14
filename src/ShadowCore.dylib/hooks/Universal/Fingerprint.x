@@ -327,7 +327,7 @@ static NSDate *shdw_home_volume_creation_date(NSURL *url, const void *caller) {
         } else authorized=((BOOL (*)(id,SEL))objc_msgSend)(ASIdentifierManager.sharedManager,NSSelectorFromString(@"isAdvertisingTrackingEnabled"));
         if (!authorized) return native;
         NSDictionary *config=SHDWFingerprintConfig(shdw_fingerprint_bundle_id);
-        NSString *mode=config[@"Advertising"][@"Mode"] ?: @"perApp";
+        NSString *mode=config[@"Advertising"][@"Mode"] ?: @"zero";
         NSString *value=SHDWFingerprintAdvertisingValue(mode,
             SHDWFingerprintData(shdw_fingerprint_bundle_id)[@"AdvertisingIdentifier"],native.UUIDString,authorized);
         return value ? [[NSUUID alloc] initWithUUIDString:value] : native;

@@ -2,6 +2,7 @@
 #import <Shadow/FingerprintConfiguration.h>
 #import <Shadow/Settings.h>
 #import <Shadow/FingerprintState.h>
+#import <Shadow/FingerprintBackup.h>
 #import <Shadow/SHDWPlugin.h>
 #import "Profile.h"
 #import "StoredApplication.h"
@@ -104,6 +105,10 @@ static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
 }
 
 - (BOOL)refreshApplication:(NSString *)bundleID error:(NSError **)error {
+  return [self refreshApplication:bundleID replaceBackedData:NO error:error];
+}
+
+- (BOOL)refreshApplication:(NSString *)bundleID replaceBackedData:(BOOL)replaceBackedData error:(NSError **)error {
   @synchronized(ShadowSettings.sharedInstance) {
     if (![self validIdentifier:bundleID error:error]) return NO;
     NSDictionary *app = [self application:bundleID];
@@ -113,10 +118,11 @@ static BOOL SHDWFingerprintStoreFailure(NSError **error, NSInteger code,
     if (!SHDWFingerprintApplicationEnabled(app)) {
       return SHDWFingerprintStoreFailure(error, 5, @"Fingerprint is disabled.");
     }
+    if (!replaceBackedData && SHDWFingerprintDataIsReadOnly(bundleID, app[@"Fingerprint_Data"])) return YES;
     if (SHDWFingerprintApplicationLocked(app)) {
       return SHDWFingerprintStoreFailure(error, 6, @"Fingerprint is locked.");
     }
-    if (![ShadowSettings.sharedInstance refreshFingerprintDataForIdentifier:bundleID lockOnSuccess:YES]) {
+    if (![ShadowSettings.sharedInstance refreshFingerprintDataForIdentifier:bundleID lockOnSuccess:YES replaceBackedData:replaceBackedData]) {
       return SHDWFingerprintStoreFailure(error, 2, @"Unable to generate a valid device profile.");
     }
     return YES;

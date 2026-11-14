@@ -36,8 +36,10 @@ static void SetBootstrap(xpc_connection_t connection, xpc_object_t bootstrap) {
                 message = SHDWWebUserAgentBootstrapMessage(message, userAgentVersion, ownerIdentifier);
             }
 #if SHADOW_CURL_IMPERSONATE
-            if (SHDWTransportIsNetworkingService(xpc_connection_get_name(connection)))
+            if (SHDWTransportIsNetworkingService(xpc_connection_get_name(connection))) {
+                message = SHDWLocalizationBootstrapMessage(message, localizationSnapshot, ownerIdentifier);
                 message = SHDWTransportBootstrapMessage(message, transportProfile, ownerIdentifier);
+            }
 #endif
         }
     }
@@ -56,15 +58,14 @@ void SHDWFingerprintInstallWebLocalization(void) {
     NSDictionary *resolved = SHDWFingerprintLocalization();
     BOOL needsBootstrap = [resolved[@"OverridesSystem"] boolValue];
     SHADOW_INTERNAL_SCOPE {
+#if SHADOW_CURL_IMPERSONATE
         NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
-        if ([configuration[@"System"][@"Mode"] isEqual:@"profile"] &&
-            [SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:configuration] &&
-            SHDWWebUserAgentVersionIsValid(SHDWFingerprintOSVersionString()))
+#endif
+        if (SHDWWebUserAgentVersionIsValid(SHDWFingerprintOSVersionString()))
             userAgentVersion = [SHDWFingerprintOSVersionString() copy];
 #if SHADOW_CURL_IMPERSONATE
-        if (SHDWCurlTransportSupportsWebKitPolicy(NSBundle.mainBundle.infoDictionary[@"NSAppTransportSecurity"]))
-            transportProfile = [SHDWFingerprintConfiguration curlTransportProfileForConfiguration:configuration
-                systemVersion:SHDWFingerprintOSVersionString()];
+        transportProfile = [SHDWFingerprintConfiguration curlTransportProfileForConfiguration:configuration
+            systemVersion:SHDWFingerprintOSVersionString()];
 #endif
     }
     needsBootstrap |= userAgentVersion != nil;

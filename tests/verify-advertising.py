@@ -16,7 +16,7 @@ for(NSString *mode in @[@"system",@"zero",@"perApp"]){
  assert([SHDWFingerprintAdvertisingValue(mode,saved,zero,NO) isEqual:zero]);
  NSMutableDictionary *config=[SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];config[@"Advertising"]=@{@"Mode":mode};assert([SHDWFingerprintConfiguration configurationByValidating:config error:NULL]);
 }
-assert([SHDWFingerprintConfiguration.defaultConfiguration[@"Advertising"][@"Mode"] isEqual:@"perApp"]);
+assert([SHDWFingerprintConfiguration.defaultConfiguration[@"Advertising"][@"Mode"] isEqual:@"zero"]);
 assert([SHDWFingerprintAdvertisingValue(@"perApp",saved,native,YES) isEqual:saved]);
 assert([SHDWFingerprintAdvertisingValue(@"zero",saved,native,YES) isEqual:zero]);
 assert([SHDWFingerprintAdvertisingValue(@"system",saved,native,YES) isEqual:native]);
@@ -28,7 +28,7 @@ assert([SHDWFingerprintAdvertisingValue(@"perApp",nil,native,YES) isEqual:native
 assert(SHDWFingerprintAdvertisingValue(@"perApp",nil,nil,YES)==nil);
 NSMutableDictionary *legacy=[SHDWFingerprintConfiguration.defaultConfiguration mutableCopy];[legacy removeObjectForKey:@"Advertising"];assert([SHDWFingerprintConfiguration configurationByValidating:legacy error:NULL]);
 for(id invalid in @[@{@"Mode":@"bad"},@{@"Mode":@"perApp",@"extra":@1},NSNull.null,@[]]){legacy[@"Advertising"]=invalid;assert(![SHDWFingerprintConfiguration configurationByValidating:legacy error:NULL]);}
-puts("PASS: perApp default, consent gates, zero/system/perApp, absent/invalid saved ID, legacy and strict mode validation");
+puts("PASS: zero default, consent gates, zero/system/perApp, absent/invalid saved ID, legacy and strict mode validation");
 }return 0;}
 '''
 with tempfile.TemporaryDirectory(prefix="shadow-advertising-test-") as d:

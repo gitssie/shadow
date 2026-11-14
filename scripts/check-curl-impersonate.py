@@ -43,9 +43,13 @@ for index in range(count):
     cursor = offset + 32
     require(cursor + command_bytes <= offset + length, "invalid curl load commands")
     deployment = identity = None
+    symbol_table = None
     for _ in range(commands):
         command, size = struct.unpack_from("<II", data, cursor)
         require(size >= 8 and cursor + size <= offset + 32 + command_bytes, "invalid curl load command")
+        if command == 0x2:
+            require(size >= 24, "invalid curl symbol table command")
+            symbol_table = struct.unpack_from("<4I", data, cursor + 8)
         if command == 0x32:
             platform, deployment = struct.unpack_from("<II", data, cursor + 8)
             require(platform == 2, "curl slice must target iOS devices")
@@ -56,8 +60,29 @@ for index in range(count):
             require(start < cursor + size, "invalid curl install name")
             identity = data[start:cursor + size].split(b"\0", 1)[0]
         cursor += size
+    require(symbol_table is not None, "curl transport is missing exported symbol metadata")
+    symoff, nsyms, stroff, strsize = symbol_table
+    require(symoff + nsyms * 16 <= length and stroff + strsize <= length,
+            "invalid curl exported symbol bounds")
+    exports = set()
+    for symbol in range(nsyms):
+        index, kind = struct.unpack_from("<IB", data, offset + symoff + symbol * 16)
+        if not kind & 1 or kind & 0x0e == 0:
+            continue
+        require(index < strsize, "invalid curl symbol name")
+        name = data[offset + stroff + index:offset + stroff + strsize].split(b"\0", 1)[0]
+        exports.add(name)
+    for name in ("curl_easy_init", "curl_easy_impersonate", "curl_easy_setopt", "curl_easy_send",
+                 "curl_easy_recv", "curl_multi_init", "curl_multi_perform",
+                 "curl_shadow_connect_only_get_alpn", "curl_shadow_connect_only_get_tls_snapshot",
+                 "curl_shadow_connect_only_shutdown_write", "curl_shadow_connect_only_enable_external_io",
+                 "curl_shadow_connect_only_set_native_verify",
+                 "curl_shadow_connect_only_get_verification_snapshot",
+                 "curl_shadow_connect_only_get_io_state", "curl_shadow_connect_only_set_transport",
+                 "curl_shadow_connect_only_shutdown"):
+        require(("_" + name).encode() in exports, architecture + " curl is missing " + name)
     require(deployment is not None and deployment <= maximum, "curl minimum iOS exceeds the rootless floor")
     require(identity == b"@loader_path/libcurl-impersonate.4.dylib", "unexpected curl install name")
 require(architectures == {"arm64", "arm64e"}, "missing curl architecture")
 if not args.quiet:
-    print("curl transport: arm64 + modern arm64e, iOS deployment targets and install names passed")
+    print("curl transport: arm64 + modern arm64e, iOS deployment targets, install names and native TLS APIs passed")

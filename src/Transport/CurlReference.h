@@ -6,9 +6,12 @@
 static inline CURLcode SHDWCurlApplyProfile(CURL *curl, const char *profile,
         CURLcode (*impersonate)(CURL *, const char *, int),
         CURLcode (*set)(CURL *, CURLoption, ...)) {
-    int custom = !strcmp(profile, "impit465");
+    int custom = !strcmp(profile, "safari187_ios");
     CURLcode result = impersonate(curl, custom ? "safari184_ios" : profile, 0);
 #define SET(option, value) do { if (result == CURLE_OK) { result = set(curl, option, value);  } } while (0)
+    /* A handle may already carry defaults loaded from the environment. */
+    SET(CURLOPT_HTTPBASEHEADER, (struct curl_slist *)NULL);
+    SET(CURLOPT_USERAGENT, (char *)NULL);
     if (custom) {
         SET(CURLOPT_SSL_CIPHER_LIST,
             "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:"

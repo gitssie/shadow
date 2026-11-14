@@ -64,7 +64,7 @@ static NSDictionary *StateMobileFingerprint(NSString *mode, NSDictionary *target
         BOOL locked=[store lockedForApplication:identifier],refreshed=NO;
         @try {
             Require(!locked || [store setLocked:NO forApplication:identifier error:&failure],failure.localizedDescription ?: @"Cannot unlock fingerprint");
-            refreshed=[store refreshApplication:identifier error:&failure];
+            refreshed=[store refreshApplication:identifier replaceBackedData:YES error:&failure];
             Require(refreshed,failure.localizedDescription ?: @"Cannot refresh fingerprint");
         } @finally {
             if(!refreshed && locked && ![store lockedForApplication:identifier])Require([store setLocked:YES forApplication:identifier error:&failure],@"Cannot restore fingerprint lock");

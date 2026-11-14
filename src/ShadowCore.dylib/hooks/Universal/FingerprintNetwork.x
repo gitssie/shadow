@@ -3,6 +3,9 @@
 #import "../../policy/NetworkUserAgentCache.h"
 #import "../../policy/CurlTransport.h"
 #import "../../policy/WebLocalization.h"
+#if SHADOW_CURL_IMPERSONATE
+#import "../../../Transport/NetworkDiagnostics.h"
+#endif
 #import "../../../Shadow.framework/Fingerprint/DiagnosticsInternal.h"
 #include <dlfcn.h>
 #include <objc/runtime.h>
@@ -107,7 +110,6 @@ static NSString *shdw_network_default_user_agent(id supplied, BOOL present) {
 
 static NSURLSessionConfiguration *shdw_network_configuration(NSURLSessionConfiguration *configuration) {
     if(!configuration) return configuration;
-    configuration = SHDWCurlTransportConfiguration(configuration);
     NSDictionary *headers = configuration.HTTPAdditionalHeaders;
     NSString *key;
     id supplied = shdw_network_user_agent_header(headers, &key);
@@ -121,9 +123,14 @@ static NSURLSessionConfiguration *shdw_network_configuration(NSURLSessionConfigu
 }
 
 NSURLRequest *shdw_fingerprint_network_request(NSURLSession *session, NSURLRequest *request, const void *caller) {
-    if(!request || !shdw_fingerprint_is_enabled() || !shdw_caller_is_external(caller)) return request;
+    BOOL externalCaller = shdw_caller_is_external(caller);
+    (void)session;
+    if(!request || !shdw_fingerprint_is_enabled()) {
+        SHDWCurlTransportTraceRequest(request, @"request.skipped", @"outsideFingerprintScope");
+        return request;
+    }
     SHADOW_INTERNAL_SCOPE {
-        request = SHDWCurlTransportRequest(request, session);
+        if(!externalCaller) return request;
         NSString *key;
         id supplied = shdw_network_user_agent_header(request.allHTTPHeaderFields, &key);
         if(!key) supplied = shdw_network_user_agent_header(session.configuration.HTTPAdditionalHeaders, &key);
@@ -163,19 +170,43 @@ static BOOL shdw_network_class_declares(Class cls, SEL selector) {
 
 static IMP shdw_network_request_implementation(SHDWNetworkRequestHook *cell, unsigned arguments) {
     if(arguments == 3) return imp_implementationWithBlock(^id(id session, NSURLRequest *request) {
+        SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"request.create.origin");
         const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
         request = shdw_fingerprint_network_request(session, request, caller);
-        return ((id (*)(id, SEL, NSURLRequest *))cell->original)(session, cell->selector, request);
+        id task = ((id (*)(id, SEL, NSURLRequest *))cell->original)(session, cell->selector, request);
+        return task;
     });
     if(arguments == 4) return imp_implementationWithBlock(^id(id session, NSURLRequest *request, id argument) {
+        SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"request.create.origin");
         const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+#if SHDW_TRANSPORT_DIAGNOSTICS
+        NSString *name = NSStringFromSelector(cell->selector);
+#endif
         request = shdw_fingerprint_network_request(session, request, caller);
-        return ((id (*)(id, SEL, NSURLRequest *, id))cell->original)(session, cell->selector, request, argument);
+        id task = ((id (*)(id, SEL, NSURLRequest *, id))cell->original)(session, cell->selector, request, argument);
+#if SHDW_TRANSPORT_DIAGNOSTICS
+        if ([name hasSuffix:@"fromData:"] && [argument isKindOfClass:NSData.class])
+            SHDWNetworkDiagnosticsAttachUploadData(task, argument);
+        else if ([name hasSuffix:@"fromFile:"] && [argument isKindOfClass:NSURL.class])
+            SHDWNetworkDiagnosticsAttachUploadFile(task, argument);
+#endif
+        return task;
     });
     return imp_implementationWithBlock(^id(id session, NSURLRequest *request, id argument, id completion) {
+        SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"request.create.origin");
         const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
+#if SHDW_TRANSPORT_DIAGNOSTICS
+        NSString *name = NSStringFromSelector(cell->selector);
+#endif
         request = shdw_fingerprint_network_request(session, request, caller);
-        return ((id (*)(id, SEL, NSURLRequest *, id, id))cell->original)(session, cell->selector, request, argument, completion);
+        id task = ((id (*)(id, SEL, NSURLRequest *, id, id))cell->original)(session, cell->selector, request, argument, completion);
+#if SHDW_TRANSPORT_DIAGNOSTICS
+        if ([name containsString:@"fromData:"] && [argument isKindOfClass:NSData.class])
+            SHDWNetworkDiagnosticsAttachUploadData(task, argument);
+        else if ([name containsString:@"fromFile:"] && [argument isKindOfClass:NSURL.class])
+            SHDWNetworkDiagnosticsAttachUploadFile(task, argument);
+#endif
+        return task;
     });
 }
 
@@ -193,7 +224,7 @@ static void shdw_network_prepare_session(NSURLSession *session) {
     };
     SHADOW_INTERNAL_SCOPE {
         @synchronized(attempted) {
-            for(Class cls = object_getClass(session); cls && cls != NSURLSession.class; cls = class_getSuperclass(cls)) {
+            for(Class cls = object_getClass(session); cls && cls != NSObject.class; cls = class_getSuperclass(cls)) {
                 NSValue *key = [NSValue valueWithPointer:(__bridge const void *)cls];
                 NSMutableSet *names = attempted[key];
                 if(!names) attempted[key] = names = [NSMutableSet new];
@@ -228,11 +259,12 @@ static NSURLSession *shdw_network_shared_session(id self, SEL selector) {
 static NSURLSession *(*shdw_native_network_session)(id, SEL, NSURLSessionConfiguration *);
 static NSURLSession *shdw_network_session(id self, SEL selector, NSURLSessionConfiguration *configuration) {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
-    if(!shdw_fingerprint_is_enabled() || !shdw_caller_is_external(caller))
+    BOOL externalCaller = shdw_caller_is_external(caller);
+    if(!shdw_fingerprint_is_enabled())
         return shdw_native_network_session(self, selector, configuration);
     shdw_network_prepare_user_agent_source();
     NSURLSessionConfiguration *updated;
-    SHADOW_INTERNAL_SCOPE { updated = shdw_network_configuration(configuration); }
+    SHADOW_INTERNAL_SCOPE { updated = externalCaller ? shdw_network_configuration(configuration) : configuration; }
     NSURLSession *session = shdw_native_network_session(self, selector, updated);
     shdw_network_prepare_session(session);
     return session;
@@ -242,18 +274,30 @@ static NSURLSession *(*shdw_native_network_session_delegate)(id, SEL, NSURLSessi
 static NSURLSession *shdw_network_session_delegate(id self, SEL selector,
     NSURLSessionConfiguration *configuration, id<NSURLSessionDelegate> delegate, NSOperationQueue *queue) {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
-    if(!shdw_fingerprint_is_enabled() || !shdw_caller_is_external(caller))
+    BOOL externalCaller = shdw_caller_is_external(caller);
+    if(!shdw_fingerprint_is_enabled())
         return shdw_native_network_session_delegate(self, selector, configuration, delegate, queue);
     shdw_network_prepare_user_agent_source();
     NSURLSessionConfiguration *updated;
-    SHADOW_INTERNAL_SCOPE { updated = shdw_network_configuration(configuration); }
+    SHADOW_INTERNAL_SCOPE { updated = externalCaller ? shdw_network_configuration(configuration) : configuration; }
     NSURLSession *session = shdw_native_network_session_delegate(self, selector, updated, delegate, queue);
     shdw_network_prepare_session(session);
     return session;
 }
 
+static NSURLSession *(*shdw_native_network_session_primitive)(id, SEL, NSURLSessionConfiguration *, id, NSOperationQueue *, id);
+static NSURLSession *shdw_network_session_primitive(id self, SEL selector, NSURLSessionConfiguration *configuration,
+    id delegate, NSOperationQueue *queue, id dispatchQueue) {
+    NSURLSession *session = shdw_native_network_session_primitive(self, selector, configuration, delegate, queue, dispatchQueue);
+    if(shdw_fingerprint_is_enabled()) shdw_network_prepare_session(session);
+    return session;
+}
+
 void shdw_universal_fingerprint_network_prepare(SHDWHookSession *hooks) {
     if(!hooks || !shdw_fingerprint_is_enabled()) return;
+#if SHADOW_CURL_IMPERSONATE
+    SHDWNetworkDiagnosticsInstall(hooks);
+#endif
     SHDWCurlTransportPrepare();
 #if SHADOW_CURL_IMPERSONATE
     SHDWFingerprintInstallWebLocalization();
@@ -274,6 +318,11 @@ void shdw_universal_fingerprint_network_prepare(SHDWHookSession *hooks) {
             withReplacement:shdw_network_session outOldPtr:(void **)&shdw_native_network_session];
         delegateInstalled = [hooks hookMessageInClass:metaclass withSelector:@selector(sessionWithConfiguration:delegate:delegateQueue:)
             withReplacement:shdw_network_session_delegate outOldPtr:(void **)&shdw_native_network_session_delegate];
+        SEL primitive = NSSelectorFromString(@"_sessionWithConfiguration:delegate:delegateQueue:delegateDispatchQueue:");
+        Method primitiveMethod = class_getInstanceMethod(metaclass, primitive);
+        if(primitiveMethod && method_getNumberOfArguments(primitiveMethod) == 6)
+            [hooks hookMessageInClass:metaclass withSelector:primitive
+                withReplacement:shdw_network_session_primitive outOldPtr:(void **)&shdw_native_network_session_primitive];
     }
     __atomic_store_n(&shdw_network_user_agent_state,
         sessionInstalled && delegateInstalled && sharedInstalled ? 2 : 3, __ATOMIC_RELEASE);

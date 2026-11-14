@@ -24,7 +24,7 @@ static NSMutableArray *calls, *events;
 - (BOOL)enabledForApplication:(NSString *)identifier { return enabled; }
 - (BOOL)lockedForApplication:(NSString *)identifier { return locked; }
 - (BOOL)setLocked:(BOOL)value forApplication:(NSString *)identifier error:(NSError **)error { locked=value; [calls addObject:value ? @"lock" : @"unlock"]; return YES; }
-- (NSDictionary *)profileForBundleIdentifier:(NSString *)identifier { return @{@"Generation":@(generation)}; }
+- (NSDictionary *)profileForBundleIdentifier:(NSString *)identifier { return @{@"Generation":@(generation), @"VendorIdentifier":@"11111111-1111-4111-8111-111111111111"}; }
 - (BOOL)refreshApplication:(NSString *)identifier error:(NSError **)error {
     assert(enabled && !locked); [calls addObject:@"refresh"]; if(rejectRefresh) { *error=[NSError errorWithDomain:@"fixture" code:98 userInfo:@{NSLocalizedDescriptionKey:@"refresh failed"}]; return NO; } generation++; locked=YES; return YES;
 }
@@ -93,6 +93,14 @@ static void Next(void) {
     case 10:
         failure=@"finalize";
         Run(@[@"files"],@[@"inspect",@"prepare",@"files",@"finalize"],NO,^(NSError *e){assert([events.lastObject isEqual:@"recheck:failed"]&&[e.userInfo[@"stateMayBePartial"]boolValue]);});break;
+    case 11: {
+        NSString *snapshot = [@SHDW_FINGERPRINT_BACKUP_ROOT stringByAppendingPathComponent:@"local.fixture.app/snapshots/11111111-1111-4111-8111-111111111111"];
+        assert([NSFileManager.defaultManager createDirectoryAtPath:snapshot withIntermediateDirectories:YES attributes:nil error:NULL]);
+        Run(@[@"fingerprint"],@[@"inspect",@"prepare",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e && generation==3 && !locked);});break;
+    }
+    case 12:
+        locked=YES;
+        Run(@[@"files",@"fingerprint"],@[@"inspect",@"prepare",@"files",@"finalize",@"recheck"],YES,^(NSError *e){assert(!e && generation==3 && locked);});break;
     default:
         puts("cleanup service: ordered stages, automatic unlock/lock restoration, disabled preflight, optional refresh, fail-stop and mandatory final recheck passed");exit(0);
     }
@@ -103,6 +111,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-cleanup-service-") as temp:
     path = Path(temp)
     (path / "test.m").write_text(source)
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                    "-DSHDW_FINGERPRINT_BACKUP_ROOT=\"" + str(path / "backups") + "\"",
                     "-Wno-incomplete-implementation", "-fsanitize=address,undefined", "-g",
                     "-I" + str(root / "src/Shadow.framework/Headers"),
                     "-I" + str(root / "src/Shadow.app"),

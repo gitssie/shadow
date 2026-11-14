@@ -82,13 +82,13 @@ xpc_object_t SHDWLocalizationBootstrapMessage(xpc_object_t original, NSDictionar
     return message;
 }
 
-NSDictionary *SHDWLocalizationSnapshot(xpc_object_t bootstrap, xpc_object_t event) {
+static NSDictionary *snapshotForService(xpc_object_t bootstrap, xpc_object_t event, NSString *expectedService) {
     if (!SHDWLocalizationBootstrapHasPayload(bootstrap) ||
         !event || xpc_get_type(event) != XPC_TYPE_DICTIONARY) return nil;
     NSString *messageName = xpcString(xpc_dictionary_get_value(event, "message-name"));
     NSString *service = xpcString(xpc_dictionary_get_value(event, "service-name"));
     NSString *client = xpcString(xpc_dictionary_get_value(event, "client-bundle-identifier"));
-    if (![messageName isEqualToString:@"bootstrap"] || !SHDWLocalizationIsWebContentService(service.UTF8String) || !client) return nil;
+    if (![messageName isEqualToString:@"bootstrap"] || ![service isEqualToString:expectedService] || !client) return nil;
     xpc_object_t payload = xpc_dictionary_get_value(bootstrap, payloadKey);
     NSString *owner = xpcString(xpc_dictionary_get_value(payload, "owner-bundle-identifier"));
     if (!owner || ![owner isEqualToString:client]) return nil;
@@ -104,4 +104,16 @@ NSDictionary *SHDWLocalizationSnapshot(xpc_object_t bootstrap, xpc_object_t even
     }
     return validatedSnapshot(xpcString(xpc_dictionary_get_value(payload, "locale-identifier")), languages,
                              xpcString(xpc_dictionary_get_value(payload, "time-zone")));
+}
+
+NSDictionary *SHDWLocalizationSnapshot(xpc_object_t bootstrap, xpc_object_t event) {
+    return snapshotForService(bootstrap, event, @"com.apple.WebKit.WebContent");
+}
+
+NSDictionary *SHDWLocalizationNetworkingSnapshot(xpc_object_t bootstrap, xpc_object_t event) {
+    NSDictionary *values = snapshotForService(bootstrap, event, @"com.apple.WebKit.Networking");
+    if (!values) return nil;
+    NSMutableDictionary *snapshot = [values mutableCopy];
+    snapshot[@"Owner"] = xpcString(xpc_dictionary_get_value(event, "client-bundle-identifier"));
+    return [snapshot copy];
 }

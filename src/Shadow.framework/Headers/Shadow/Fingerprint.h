@@ -16,6 +16,8 @@ __attribute__((visibility("default")))
 - (BOOL)registerApplication:(NSString *)bundleID error:(NSError * _Nullable * _Nullable)error;
 // Saves the new profile and its locked state together.
 - (BOOL)refreshApplication:(NSString *)bundleID error:(NSError * _Nullable * _Nullable)error;
+// Used only after a verified full environment reset.
+- (BOOL)refreshApplication:(NSString *)bundleID replaceBackedData:(BOOL)replaceBackedData error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)removeApplication:(NSString *)bundleID error:(NSError * _Nullable * _Nullable)error;
 - (NSDictionary *)configurationForApplication:(NSString *)bundleID;
 - (BOOL)setConfiguration:(NSDictionary *)configuration forApplication:(NSString *)bundleID error:(NSError * _Nullable * _Nullable)error;

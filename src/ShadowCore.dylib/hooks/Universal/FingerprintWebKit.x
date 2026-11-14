@@ -1,3 +1,4 @@
+#include "../../../Transport/DiagnosticsConfig.h"
 #import "UniversalHooks.h"
 #import <WebKit/WebKit.h>
 #import <objc/message.h>
@@ -6,6 +7,9 @@
 #import "../../policy/WebUserAgent.h"
 #import <Shadow/FingerprintConfiguration.h>
 #import "../../policy/WebLocalization.h"
+#import "../../../Transport/NetworkDiagnostics.h"
+#import "../../policy/WebFrameDiagnostics.h"
+#import "../../policy/WebCookieDiagnostics.h"
 #include <errno.h>
 
 static unsigned shdw_webkit_install_state;
@@ -112,10 +116,7 @@ static void shdw_fingerprint_webkit_prepare_user_agent(void) {
     if(!shdw_fingerprint_is_enabled()) return;
     int saved = errno;
     SHADOW_INTERNAL_SCOPE {
-        NSDictionary *configuration = SHDWFingerprintConfig(NSBundle.mainBundle.bundleIdentifier);
-        if([configuration[@"System"][@"Mode"] isEqual:@"profile"] &&
-           [SHDWFingerprintConfiguration overridesWebUserAgentForConfiguration:configuration])
-            SHDWWebUserAgentInstall(SHDWFingerprintOSVersionString());
+        SHDWWebUserAgentInstall(SHDWFingerprintOSVersionString());
         SHDWFingerprintInstallWebLocalization();
     }
     errno = saved;
@@ -139,6 +140,7 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
 - (instancetype)initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     BOOL applies = shdw_fingerprint_is_enabled() && shdw_fingerprint_app_caller(caller);
+    if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebFrameDiagnosticsInstall(configuration);
     // if(applies) shdw_fingerprint_webkit_clipboard_install(configuration);
     shdw_fingerprint_webkit_prepare_user_agent();
     WKWebView *view = %orig(frame, configuration);
@@ -153,6 +155,7 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
     BOOL applies = shdw_fingerprint_is_enabled() && shdw_fingerprint_app_caller(caller);
     shdw_fingerprint_webkit_prepare_user_agent();
     WKWebView *view = %orig(coder);
+    if (SHDW_TRANSPORT_DIAGNOSTICS && view && shdw_fingerprint_is_enabled()) SHDWWebFrameDiagnosticsInstall(view.configuration);
     if(view && applies) {
         objc_setAssociatedObject(view, &shdw_webkit_candidate_key, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         shdw_fingerprint_webkit_apply(view);
@@ -160,11 +163,17 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
     return view;
 }
 - (WKNavigation *)loadRequest:(NSURLRequest *)request {
+    if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebFrameDiagnosticsInstall(((WKWebView *)self).configuration);
+    if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebCookieDiagnosticsObserveView((WKWebView *)self, request.URL, @"loadRequest");
+    SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"webview.loadRequest.origin");
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     shdw_fingerprint_webkit_select(self, caller);
     return %orig(request);
 }
 - (WKNavigation *)loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL {
+    if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebFrameDiagnosticsInstall(((WKWebView *)self).configuration);
+    if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebCookieDiagnosticsObserveView((WKWebView *)self, baseURL, @"loadHTML");
+    SHDWNetworkDiagnosticsTraceWebHTMLOrigin(string, baseURL);
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     shdw_fingerprint_webkit_select(self, caller);
     return %orig(string, baseURL);
@@ -319,6 +328,7 @@ void shdw_universal_fingerprint_webkit_prepare(SHDWHookSession *hooks) {
         }
         return;
     }
+    SHDWWebCookieDiagnosticsInstall(hooks);
     unsigned expected = 0;
     if(!__atomic_compare_exchange_n(&shdw_webkit_install_state, &expected, 1, NO,
        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;

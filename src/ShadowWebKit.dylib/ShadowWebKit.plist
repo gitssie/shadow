@@ -3,5 +3,6 @@
 <plist version="1.0"><dict>
 <key>Filter</key><dict><key>Bundles</key><array>
 <string>com.apple.WebKit.WebContent</string>
+<string>com.apple.WebKit.Networking</string>
 </array></dict>
 </dict></plist>
