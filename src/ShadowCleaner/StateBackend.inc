@@ -1,4 +1,6 @@
 #import "../AppState/State.h"
+#import "../AppState/Catalog.h"
+#import "../../sdk/AppState/SHDWAppStateCatalogQuery.h"
 #import "../common.h"
 #import <Shadow/Settings.h>
 #import <Shadow/Fingerprint.h>
@@ -234,12 +236,10 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
 static NSArray *StateConciseCatalog(NSArray *catalog) {
     NSMutableArray *result = [NSMutableArray new];
     for (NSDictionary *manifest in catalog) {
-        NSMutableDictionary *entry = [NSMutableDictionary new];
-        for (NSString *key in @[@"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"owner", @"restorePending", @"recoverySource", @"resetPending", @"finalizationPending", @"unavailable", @"error"]) if (manifest[key]) entry[key] = manifest[key];
-        if ([manifest[@"unavailable"] boolValue]) { entry[@"size"] = @0; [result addObject:entry]; continue; }
-        NSNumber *dataSize = manifest[@"archiveInfo"][@"archiveSize"], *stateSize = manifest[@"stateArchiveInfo"][@"archiveSize"] ?: @0;
-        Require([dataSize isKindOfClass:NSNumber.class] && [stateSize isKindOfClass:NSNumber.class] && [dataSize isEqual:@(dataSize.unsignedLongLongValue)] && [stateSize isEqual:@(stateSize.unsignedLongLongValue)] && dataSize.unsignedLongLongValue <= UINT64_MAX - stateSize.unsignedLongLongValue, @"Invalid backup archive size");
-        entry[@"size"] = @(dataSize.unsignedLongLongValue + stateSize.unsignedLongLongValue); [result addObject:entry];
+        NSError *failure=nil;
+        NSDictionary *entry=SHDWAppStateCatalogEntry(manifest,&failure);
+        Require(entry!=nil,failure.localizedDescription ?: @"Invalid backup archive size");
+        [result addObject:entry];
     }
     return result;
 }
@@ -332,7 +332,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     stateInitiatingParent = getppid(); StateParent();
     Require(argc == 4 || argc == 5, @"Expected an application state action and an optional encoded request");
     NSString *identifier = [NSString stringWithUTF8String:argv[2]], *action = [NSString stringWithUTF8String:argv[3]];
-    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"backup", @"backupAndReset",@"discardAndReset", @"restore", @"edit", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
+    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"queryCatalog", @"backup", @"backupAndReset",@"discardAndReset", @"restore", @"edit", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
     if(StateExternalAction(action)) {
         NSDictionary *external=@{};
         if(argc==5){NSString *encoded=[NSString stringWithUTF8String:argv[4]];NSData *bytes=nil;
@@ -344,16 +344,31 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     }
     NSDictionary *request = @{};
     if (argc == 5) { NSString *encoded = [NSString stringWithUTF8String:argv[4]]; Require(encoded.length <= 256 * 1024, @"Application state action request is too large"); id value = StateDecode([[NSData alloc] initWithBase64EncodedString:encoded options:0]); Require([value isKindOfClass:NSDictionary.class], @"Invalid application state action request"); request = value; }
-    NSArray *allowed = [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"]) ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : @[@"idfv"];
+    NSArray *allowed = [action isEqual:@"queryCatalog"] ? SHDWAppStateCatalogQueryKeys() : [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"]) ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : @[@"idfv"];
     for (id key in request) Require([allowed containsObject:key], @"Unknown application state action option");
-    if (![action isEqual:@"catalog"] && ![action isEqual:@"backup"]) Require([request[@"idfv"] isKindOfClass:NSString.class], @"A saved fingerprint identifier is required");
+    if (![action isEqual:@"catalog"] && ![action isEqual:@"queryCatalog"] && ![action isEqual:@"backup"]) Require([request[@"idfv"] isKindOfClass:NSString.class], @"A saved fingerprint identifier is required");
     if (request[@"saveCurrent"]) Require([request[@"saveCurrent"] isKindOfClass:NSNumber.class] && [@[@NO, @YES] containsObject:request[@"saveCurrent"]], @"Invalid save-current option");
     if (request[@"metadata"]) { Require([request[@"metadata"] isKindOfClass:NSDictionary.class], @"Invalid backup metadata"); for (id key in request[@"metadata"]) Require([@[@"title", @"note"] containsObject:key] && [request[@"metadata"][key] isKindOfClass:NSString.class], @"Invalid backup metadata field"); }
     stateFailureCode=@"permission_denied";Require(geteuid() == 0, @"Cannot enter the private backup storage context");
-    BOOL readOnly = [@[@"catalog", @"recheck"] containsObject:action];
+    BOOL readOnly = [@[@"catalog", @"queryCatalog", @"recheck"] containsObject:action];
     stateFailureCode=@"operation_failed";int lock = SessionLockForAccess(identifier, !readOnly);
     @try {
         Require([Canonical(StateStorage.stringByDeletingLastPathComponent) isEqual:StateStorage.stringByDeletingLastPathComponent], @"Backup storage parent is not canonical"); NativeStateBackend *backend = [NativeStateBackend new]; NSError *error = nil;
+        if ([action isEqual:@"queryCatalog"]) {
+            if (![SHDWAppStateStore validateCatalogQuery:request error:&error]) return StateErrorTerminal(error);
+            struct stat storageInfo;
+            BOOL missing = lstat(StateStorage.fileSystemRepresentation, &storageInfo) && errno == ENOENT;
+            NSDictionary *result;
+            if (missing) result = @{@"items":@[], @"total":@0, @"nextOffset":@0, @"hasMore":@NO, @"currentSnapshot":@{}, @"restorePending":@NO};
+            else {
+                SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend readOnly:YES error:&error];
+                if (!store) return StateErrorTerminal(error);
+                store.currentIdentityProvider = ^NSString *(NSString *bundle) { return StateReadExternalIdentity(bundle); };
+                result = [store queryCatalogBundle:identifier query:request error:&error];
+            }
+            if (!result) return StateErrorTerminal(error);
+            return @{@"ok":@YES, @"result":[StateEncode(result) base64EncodedStringWithOptions:0]};
+        }
         NSDictionary *target = [backend resolveBundle:identifier error:&error]; if(!target)return StateErrorTerminal(error);
         StateWorkerValue(target[@"authority"], ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"])?@"state-fingerprint-reset-check":@"state-registration", nil);
         SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend error:&error]; if(!store)return StateErrorTerminal(error);

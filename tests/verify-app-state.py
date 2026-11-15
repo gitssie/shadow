@@ -88,6 +88,10 @@ static NSDictionary *ContentTree(NSString *root) {
 }
 static NSDictionary *StoreTree(NSString *root) {
     NSMutableDictionary *result=[Tree(root) mutableCopy];
+    // Advisory workflow/search records may change after a rejected or failed operation;
+    // immutable backup bytes and recovery files remain part of this assertion.
+    for(NSString *name in result.allKeys)
+        if([name isEqual:@".index"] || [name hasPrefix:@".index/"]) [result removeObjectForKey:name];
     // Creating and removing a private staging directory changes its parent's mtime.
     for(NSString *name in result.allKeys)if([result[name][@"directory"] boolValue]){NSMutableDictionary *entry=[result[name] mutableCopy];[entry removeObjectForKey:@"mtime"];[entry removeObjectForKey:@"mtimeNsec"];result[name]=entry;}
     return result;
@@ -700,7 +704,7 @@ static void StateTests(NSString *base) {
     Put(data,MCM,Bytes(@"MCM-live"));Put(data,@".com.apple.mobile_container_manager.acl.plist",Bytes(@"ACL-live"));NSDictionary *liveRootDates=HistoricalTimes(data,1200000000),*liveGroupRootDates=HistoricalTimes(group,1200000100),*liveMCMDates=Times([data stringByAppendingPathComponent:MCM]),*liveACLDates=Times([data stringByAppendingPathComponent:@".com.apple.mobile_container_manager.acl.plist"]);Reset(backend);Check([store restoreBundle:BID idfv:A saveCurrent:YES error:&error]!=nil,[NSString stringWithFormat:@"restore selected snapshot: %@",error]);Check([ContentTree(data) isEqual:savedData]&&[ContentTree(group) isEqual:savedGroup],@"restored full file set differs");Check([Get(data,MCM)isEqual:Bytes(@"MCM-live")]&&[Get(data,@".com.apple.mobile_container_manager.acl.plist")isEqual:Bytes(@"ACL-live")],@"restore replaced MCM registration metadata");Check(SameBirth(liveRootDates,Times(data))&&SameBirth(liveGroupRootDates,Times(group))&&[liveMCMDates isEqual:Times([data stringByAppendingPathComponent:MCM])]&&[liveACLDates isEqual:Times([data stringByAppendingPathComponent:@".com.apple.mobile_container_manager.acl.plist"])],@"restore changed container-root creation or MCM/ACL dates");Check([backend.keychain isEqual:savedKeys],@"restored keychain differs");Check([backend.preferences isEqual:savedPreferences],@"restored iOS preferences differ");Check([backend.fingerprint[@"data"] isEqual:savedFP[@"data"]]&&[backend.fingerprint[@"configuration"] isEqual:savedFP[@"configuration"]]&&[backend.fingerprint[@"locked"] boolValue],@"fingerprint data/configuration/lock not restored together");Check([otherBefore isEqual:Tree(other)],@"restore changed another application");Check([hashA isEqual:Digest(archiveA)],@"restore clobbered selected source");
     Put(data,@"Documents/new-session-data",Bytes(@"accumulated after snapshot"));Put(group,@"new-session-data",Bytes(@"group accumulated after snapshot"));backend.preferences=@{@"new-session":@YES};backend.keychain=@[@{@"account":@"new-session"}];RejectSameEnvironment(store,backend,root,data,group);
     NSDictionary *liveBefore=Tree(data),*sameStore=Tree(root);
-    backend.fingerprint=FP(C,@"gamma",NO);backend.failCapture=YES;Put(data,@"Documents/text",Bytes(@"current-unsaved"));liveBefore=Tree(data);sameStore=Tree(root);Reset(backend);Check(![store restoreBundle:BID idfv:A saveCurrent:YES error:&error],@"save-current failure allowed restore");Check([liveBefore isEqual:Tree(data)]&&[sameStore isEqual:Tree(root)],@"save-current failure wrote store or live files");backend.failCapture=NO;
+    backend.fingerprint=FP(C,@"gamma",NO);backend.failCapture=YES;Put(data,@"Documents/text",Bytes(@"current-unsaved"));liveBefore=Tree(data);sameStore=StoreTree(root);Reset(backend);Check(![store restoreBundle:BID idfv:A saveCurrent:YES error:&error],@"save-current failure allowed restore");Check([liveBefore isEqual:Tree(data)]&&[sameStore isEqual:StoreTree(root)],@"save-current failure wrote store or live files");backend.failCapture=NO;
     for(NSString *badID in @[@"../escape",@"not-a-uuid",@"",@"11111111/1111-4111-8111-111111111111"]){sameStore=Tree(root);Check(![store restoreBundle:BID idfv:badID saveCurrent:NO error:&error]&&![store deleteBundle:BID idfv:badID error:&error]&&![store editBundle:BID idfv:badID metadata:@{@"title":@"bad",@"note":@""} error:&error]&&![store recheckBundle:BID idfv:badID error:&error],@"invalid IDFV accepted");Check([sameStore isEqual:Tree(root)],@"invalid IDFV changed store");}
     sameStore=Tree(root);Reset(backend);Check(![store backupBundle:@"../escape" metadata:nil error:&error],@"bundle traversal accepted");Check(backend.calls.count==0&&[sameStore isEqual:Tree(root)],@"invalid bundle reached backend or filesystem");backend.fingerprint=FP(@"not-a-uuid",@"invalid",NO);Reset(backend);Check(![store backupBundle:BID metadata:nil error:&error],@"invalid live IDFV accepted");
     backend.fingerprint=FP(C,@"gamma",NO);backend.restarted=YES;liveBefore=Tree(data);Reset(backend);Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"restarted target restore succeeded");Check([liveBefore isEqual:Tree(data)],@"target restart failure modified live files");backend.restarted=NO;
@@ -832,7 +836,7 @@ def archive_prefix():
 
 def main():
     prefix = archive_prefix()
-    sources = [ROOT / "src/AppState/Archive.m", ROOT / "src/AppState/State.m"]
+    sources = [ROOT / "src/AppState/Archive.m", ROOT / "src/AppState/State.m", ROOT / "src/AppState/Index.m"]
     missing = [str(path) for path in sources if not path.exists()]
     if missing:
         raise SystemExit("Production sources not available yet: " + ", ".join(missing))
@@ -840,7 +844,7 @@ def main():
         temp = Path(directory).resolve()
         harness = temp / "main.m"
         harness.write_text(HARNESS)
-        common = ["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-deprecated-declarations", "-g", "-O1", "-framework", "Foundation", "-I" + str(prefix / "include"), "-I" + str(ROOT / "src/AppState"), "-L" + str(prefix / "lib"), "-Wl,-rpath," + str(prefix / "lib"), str(harness), *map(str, sources), "-larchive", "-lzstd"]
+        common = ["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-deprecated-declarations", "-g", "-O1", "-framework", "Foundation", "-I" + str(prefix / "include"), "-I" + str(ROOT / "src/AppState"), "-L" + str(prefix / "lib"), "-Wl,-rpath," + str(prefix / "lib"), str(harness), *map(str, sources), "-larchive", "-lzstd", "-lsqlite3"]
         zstd = os.environ.get("ZSTD_PREFIX")
         if not zstd:
             zstd = next((candidate for candidate in ("/opt/homebrew/opt/zstd", "/usr/local/opt/zstd") if Path(candidate, "lib").is_dir()), None)

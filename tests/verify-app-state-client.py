@@ -8,7 +8,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = r'''#!/usr/bin/python3
-import base64, json, os, plistlib, stat, sys, time
+import base64, datetime, json, os, plistlib, stat, sys, time
 assert len(sys.argv) == 5 and sys.argv[1] == "state"
 assert sys.argv[2] == "local.fixture.app"
 action = sys.argv[3]
@@ -26,7 +26,8 @@ else:
     request = plistlib.loads(base64.b64decode(sys.argv[4], validate=True))
 with open(__file__ + ".calls", "a") as calls:
     calls.write(action + "\n")
-mode = request.get("mode", "valid")
+mode_path = __file__ + ".mode"
+mode = open(mode_path).read() if os.path.exists(mode_path) else request.get("mode", "valid")
 def emit(value):
     sys.stdout.buffer.write(json.dumps(value, separators=(",", ":")).encode() + b"\n")
     sys.stdout.buffer.flush()
@@ -42,6 +43,10 @@ else:
     emit({"event":"progress", "progress":{"phase":"fixture"}})
     data = b"x" * (7 * 1024 * 1024) if mode == "large" else b"\x00\xff"
     result = {"data": data, "stdin": action == "importState"}
+    if action == "queryCatalog":
+        assert request == {"search":"Été", "region":"FR", "offset":2, "limit":2, "refresh":True}
+        item = {"idfv":"11111111-2222-3333-4444-555555555555", "title":"Été", "note":"voyage", "date":datetime.datetime(2026,1,2), "size":4096, "owner":"phone", "status":"backed_up", "Fingerprint_Config":{"Localization":{"Region":"FR"}}}
+        result = {"items":[item], "total":3, "nextOffset":3, "hasMore":False, "currentSnapshot":item, "restorePending":False}
     emit({"ok":True, "result":base64.b64encode(plistlib.dumps(result, fmt=plistlib.FMT_BINARY)).decode()})
 '''
 HARNESS = r'''
@@ -76,6 +81,9 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     Check(value && !error && [value[@"data"]length]==7*1024*1024,@"external response exceeds old frame limit");
     for(NSString *action in @[@"externalClaim",@"externalRelease",@"externalOwnership",@"backupAndReset"])
         Check([client invokeAction:action bundleIdentifier:@"local.fixture.app" request:@{@"idfv":@"11111111-2222-3333-4444-555555555555"} progress:nil error:&error]!=nil,@"ownership action rejected by shared SDK");
+    value=[client invokeAction:@"queryCatalog" bundleIdentifier:@"local.fixture.app" request:SHDWAppStateCatalogQuery(@"Été", @"FR", 2, 2, YES) progress:nil error:&error];
+    Check(value && !error && [value[@"items"]count]==1 && [value[@"total"]isEqual:@3] && ![value[@"hasMore"]boolValue],@"paged query response lost");
+    Check([value[@"items"][0][@"date"]isKindOfClass:NSDate.class] && [value[@"currentSnapshot"][@"Fingerprint_Config"][@"Localization"][@"Region"]isEqual:@"FR"],@"query metadata types/configuration lost");
     NSUInteger calls=Calls(path);
     for (NSString *action in @[@"unknown",@"state;touch"]) {
         Check(![client invokeAction:action bundleIdentifier:@"local.fixture.app" request:@{} progress:nil error:&error] && error.code==2,@"unsupported action rejected");
@@ -89,6 +97,9 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     }
     client.timeout=10;
     Check(![client invokeAction:@"importState" bundleIdentifier:@"local.fixture.app" request:@{@"unsupported":[NSObject new]} progress:nil error:&error] && error.code==2,@"non-plist request rejected without exception");
+    for (NSDictionary *query in @[@{@"refresh":@1}, @{@"limit":@0}, @{@"unknown":@YES}]) {
+        Check(![client invokeAction:@"queryCatalog" bundleIdentifier:@"local.fixture.app" request:query progress:nil error:&error] && error.code==2, @"malformed catalog query rejected by shared validator");
+    }
     Check(Calls(path)==calls,@"validation spawned no processes");
     SHDWAppStateClient *production=[[SHDWAppStateClient alloc]initWithHelperPath:path];
     Check(![production invokeAction:@"capabilities" bundleIdentifier:@"local.fixture.app" request:@{} progress:nil error:&error] && error.code==1 && Calls(path)==calls,@"untrusted helper rejected");
@@ -102,6 +113,11 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
         Check(![client invokeAction:@"externalVerify" bundleIdentifier:@"local.fixture.app" request:@{@"mode":[@"error:" stringByAppendingString:code]} progress:nil error:&error],@"structured error returned success");
         NSError *source=error.userInfo[NSUnderlyingErrorKey],*posix=source.userInfo[NSUnderlyingErrorKey];
         Check([error.userInfo[@"errorCode"]isEqual:code]&&[source.domain isEqual:@"fixture.source"]&&source.code==41&&[posix.domain isEqual:NSPOSIXErrorDomain]&&posix.code==13&&[error.userInfo[@"helperDetails"][@"phase"]isEqual:@"fixture"]&&[error.userInfo[@"stateMayBePartial"]boolValue],@"stable structured helper error lost in SDK");
+    }
+    for (NSString *mode in @[@"malformed",@"partial",@"timeout"]) {
+        Check([mode writeToFile:[path stringByAppendingString:@".mode"] atomically:YES encoding:NSUTF8StringEncoding error:NULL], @"fixture mode write");
+        Check(![client invokeAction:@"queryCatalog" bundleIdentifier:@"local.fixture.app" request:SHDWAppStateCatalogQuery(@"Été", @"FR", 2, 2, YES) progress:nil error:&error] && error.code==4 && ![error.userInfo[@"outcomeUnknown"]boolValue] && ![error.userInfo[@"stateMayBePartial"]boolValue],@"read-only query interruption marked as mutation");
+        Check([NSFileManager.defaultManager removeItemAtPath:[path stringByAppendingString:@".mode"] error:NULL], @"fixture mode cleanup");
     }
     calls=Calls(path);start=NSProcessInfo.processInfo.systemUptime;
     Check(![client invokeAction:@"importState" bundleIdentifier:@"local.fixture.app" request:Import(@"timeout") progress:nil error:&error] && error.code==4 && [error.userInfo[@"outcomeUnknown"]boolValue],@"import timeout preserves unknown outcome");

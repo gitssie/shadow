@@ -7,6 +7,39 @@ resolves the selected application, controls its processes, and delegates scoped
 credential and fingerprint operations to mobile-context workers. The archive
 module itself has no UIKit or device-service dependency.
 
+## Manager search index
+
+Manager uses the helper's `queryCatalog` action for bounded pages, title/note
+substring search and optional configuration-region filtering. The original
+`catalog` and `externalCatalog` responses remain available. Queries return
+`currentSnapshot` and `restorePending` separately from filtered page items, so
+searching or paging cannot change current-environment action guards.
+
+The derived database is `.index/backup-index.sqlite` under the backup root.
+It contains one table, `backup_entries`, keyed by `(bundleID, idfv)`. Names and
+meanings follow the existing catalog: `title`, `note`, `date`, `version`, `build`,
+`digest`, `owner`, and `size`. `version`/`build` describe the app; `digest` is the
+saved Shadow display fingerprint. `Fingerprint_Data` is a binary plist BLOB;
+`Fingerprint_Config` is JSON TEXT with its original keys and nesting, including
+`Localization.Region`. `status` records the saved environment's workflow state;
+its shared constants live in `BackupStatus.h`. No backup manifests or archive
+formats change.
+
+An upgrade migration imports existing snapshots across all apps in one transaction.
+The database version is committed only when that migration completes, so an
+interruption can be retried. New snapshots write their in-memory identity values
+directly. Searches, pages and ordinary refreshes do not decode state archives;
+source-file presence is checked for returned entries. Explicit refresh may
+rebuild a corrupt database, which then requires the same upgrade migration;
+unsupported newer schemas are preserved and reported. Writers acquire the index
+gate before the application lock and mark the index incomplete before source
+changes. Successful source and index updates restore the completed version;
+interruption or failed cache updates require the same unified recovery migration.
+Index contention is rejected before source changes, and a failed cache update
+cannot turn an already completed backup into a failed backup operation.
+Unfinished recovery remains governed by `pending.plist`, and restore/delete/
+ownership operations continue to validate original snapshot authority.
+
 ## Storage and identity
 
 ```text
@@ -225,7 +258,8 @@ scripts/build-app-state-core.sh rootless
 Set `THEOS` as for other repository builds. `PREBUILT_ROOT` and `SDKROOT` may
 override dependency storage and the SDK. Dependency sources are checksum-pinned
 and built outside the source tree; core outputs go under ignored `build/app-state`.
-The compile/link check force-loads the core against static libarchive/Zstandard;
+The compile/link check force-loads the core against static libarchive/Zstandard
+and the system SQLite library;
 it does not package or install an app. Normal modern-lane dependency provisioning
 also builds these libraries; packaged builds link them into the cleaner helper.
 Host and compile/link checks do not verify live iOS permissions, Keychain

@@ -186,6 +186,15 @@ malformed identity, failed synchronization and capability negotiation. Transfer
 fixtures use real archives to check manifest conflict rejection, pending-source
 protection, corrupt import rejection and read-only storage opening.
 
+Index checks cover the single-table schema, binary-plist fingerprint data, JSON
+configuration and region search, one transaction importing all existing apps,
+unchanged source bytes, warm queries without state-archive decoding, paging,
+incremental updates and interrupted/corrupt-index recovery. The module test also
+simulates older iOS JSON1 function flags. Shared query tests exercise Manager's
+boolean encoding across property-list IPC and reject malformed query options.
+Controller checks execute automatic scroll pagination, concurrent-request guards,
+footer loading, failed-page retries and query-error recovery with view doubles.
+
 This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.
 

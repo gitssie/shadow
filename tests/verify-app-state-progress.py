@@ -32,7 +32,7 @@ if not archive: raise SystemExit("Set ARCHIVE_PREFIX to libarchive with Zstd sup
 zstd = next((Path(p) for p in [os.environ.get("ZSTD_PREFIX", ""), "/opt/homebrew/opt/zstd", "/usr/local/opt/zstd"] if p and Path(p,"lib").exists()),None)
 with tempfile.TemporaryDirectory(prefix="shadow-state-progress-") as directory:
     temp=Path(directory);source=temp/"main.m";source.write_text(harness)
-    command=["xcrun","--sdk","macosx","clang","-fobjc-arc","-fblocks","-O1","-Wall","-Wextra","-Werror","-Wno-unused-function","-Wno-deprecated-declarations","-fsanitize=address,undefined","-framework","Foundation","-I"+str(archive/"include"),"-I"+str(ROOT/"src/AppState"),"-L"+str(archive/"lib"),"-Wl,-rpath,"+str(archive/"lib"),str(source),str(ROOT/"src/AppState/Archive.m"),str(ROOT/"src/AppState/State.m"),"-larchive","-lzstd","-o",str(temp/"test")]
+    command=["xcrun","--sdk","macosx","clang","-fobjc-arc","-fblocks","-O1","-Wall","-Wextra","-Werror","-Wno-unused-function","-Wno-deprecated-declarations","-fsanitize=address,undefined","-framework","Foundation","-I"+str(archive/"include"),"-I"+str(ROOT/"src/AppState"),"-L"+str(archive/"lib"),"-Wl,-rpath,"+str(archive/"lib"),str(source),str(ROOT/"src/AppState/Archive.m"),str(ROOT/"src/AppState/State.m"),str(ROOT/"src/AppState/Index.m"),"-lsqlite3","-larchive","-lzstd","-o",str(temp/"test")]
     if zstd: command += ["-L"+str(zstd/"lib"),"-Wl,-rpath,"+str(zstd/"lib")]
     subprocess.run(command,check=True)
     subprocess.run([str(temp/"test"),str(temp/"fixtures")],check=True,env=dict(os.environ,ASAN_OPTIONS="detect_leaks=0:abort_on_error=1",UBSAN_OPTIONS="halt_on_error=1"))

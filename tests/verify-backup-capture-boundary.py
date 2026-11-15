@@ -65,7 +65,7 @@ def main():
         source = temp / "main.m"
         source.write_text("#define main OriginalFixtureMain\n" + module["HARNESS"] + "\n#undef main\n" + EXTRA)
         binary = temp / "check"
-        command = ["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-deprecated-declarations", "-g", "-O1", "-framework", "Foundation", "-I" + str(prefix / "include"), "-I" + str(ROOT / "src/AppState"), "-L" + str(prefix / "lib"), "-L" + str(zstd / "lib"), "-Wl,-rpath," + str(prefix / "lib"), "-Wl,-rpath," + str(zstd / "lib"), str(source), str(ROOT / "src/AppState/Archive.m"), str(ROOT / "src/AppState/State.m"), "-larchive", "-lzstd", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-o", str(binary)]
+        command = ["xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-Wno-deprecated-declarations", "-g", "-O1", "-framework", "Foundation", "-I" + str(prefix / "include"), "-I" + str(ROOT / "src/AppState"), "-L" + str(prefix / "lib"), "-L" + str(zstd / "lib"), "-Wl,-rpath," + str(prefix / "lib"), "-Wl,-rpath," + str(zstd / "lib"), str(source), str(ROOT / "src/AppState/Archive.m"), str(ROOT / "src/AppState/State.m"), str(ROOT / "src/AppState/Index.m"), "-lsqlite3", "-larchive", "-lzstd", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-o", str(binary)]
         subprocess.run(command, check=True)
         environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:abort_on_error=1", UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1")
         failed = []

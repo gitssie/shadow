@@ -2,12 +2,13 @@ include ../../build-support/build-lanes.mk
 include $(THEOS)/makefiles/common.mk
 
 TOOL_NAME = shadow-cleaner
-shadow-cleaner_FILES = main.m Cleaner.m ../AppState/Archive.m ../AppState/State.m
+shadow-cleaner_FILES = main.m Cleaner.m ../AppState/Archive.m ../AppState/State.m ../AppState/Index.m
 APP_STATE_LANE = $(if $(SHADOW_LANE),$(SHADOW_LANE),rootful-modern)
 APP_STATE_DEPS_ROOT = $(abspath $(if $(PREBUILT_ROOT),$(PREBUILT_ROOT),../../../prebuilt))/app-state/$(APP_STATE_LANE)
 APP_STATE_PREFIX = $(APP_STATE_DEPS_ROOT)/$(THEOS_CURRENT_ARCH)
 shadow-cleaner_CFLAGS = -fobjc-arc -fvisibility=hidden -DSHADOW_STATE_SUPPORT -I$(APP_STATE_PREFIX)/include -I../Shadow.framework/Headers
 shadow-cleaner_LDFLAGS = -Wl,-x $(APP_STATE_PREFIX)/lib/libarchive.a $(APP_STATE_PREFIX)/lib/libzstd.a -F../ -rpath /Library/Frameworks -rpath /var/jb/Library/Frameworks -rpath /usr/lib -rpath /var/jb/usr/lib
+shadow-cleaner_LIBRARIES = sqlite3
 shadow-cleaner_FRAMEWORKS = Foundation Security LocalAuthentication
 shadow-cleaner_EXTRA_FRAMEWORKS = Shadow
 shadow-cleaner_PRIVATE_FRAMEWORKS = MobileCoreServices

@@ -9,6 +9,7 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
     return [NSError errorWithDomain:@"me.jjolano.shadow.backup" code:code userInfo:@{NSLocalizedDescriptionKey:SHDWLocalizedText(message), @"stateMayBePartial":@(partial)}];
 }
 @interface SHDWBackupService ()
+- (void)queryCatalog:(NSDictionary *)query completion:(void (^)(NSDictionary * _Nullable page, NSError * _Nullable error))completion;
 @property(atomic, readwrite) BOOL running;
 @property(nonatomic, copy) NSString *bundleIdentifier;
 - (NSString *)helperPath;
@@ -44,9 +45,22 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
         completion(result, error);
     }];
 }
+- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh
+                  completion:(void (^)(NSDictionary *, NSError *))completion {
+    [self queryCatalog:SHDWAppStateCatalogQuery(search, nil, offset, SHDWAppStateCatalogPageSize, refresh) completion:completion];
+}
+- (void)queryCatalog:(NSDictionary *)query completion:(void (^)(NSDictionary *, NSError *))completion {
+    [self performAction:@"queryCatalog" request:query progress:nil completion:^(id result, NSError *error) {
+        BOOL valid = [result isKindOfClass:NSDictionary.class] && [result[@"items"] isKindOfClass:NSArray.class] &&
+            [result[@"currentSnapshot"] isKindOfClass:NSDictionary.class] && [result[@"restorePending"] isKindOfClass:NSNumber.class] &&
+            [result[@"total"] isKindOfClass:NSNumber.class] && [result[@"nextOffset"] isKindOfClass:NSNumber.class] && [result[@"hasMore"] isKindOfClass:NSNumber.class];
+        if (result && !valid) { error = BackupError(6, @"The backup helper returned an invalid result.", NO); result = nil; }
+        completion(result, error);
+    }];
+}
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(SHDWBackupProgress)progress completion:(SHDWBackupCompletion)completion {
-    BOOL readOnly = [@[@"catalog", @"recheck"] containsObject:action]; NSError *failure = nil;
-    NSSet *allowed = [NSSet setWithArray:@[@"catalog", @"backup", @"restore", @"edit", @"delete", @"recheck"]];
+    BOOL readOnly = [@[@"catalog", @"queryCatalog", @"recheck"] containsObject:action]; NSError *failure = nil;
+    NSSet *allowed = [NSSet setWithArray:@[@"catalog", @"queryCatalog", @"backup", @"restore", @"edit", @"delete", @"recheck"]];
     if (![allowed containsObject:action] || !self.bundleIdentifier.length || ![request isKindOfClass:NSDictionary.class]) failure = BackupError(2, @"Invalid backup request.", NO);
     @synchronized(self) {
         if (!failure && self.running) failure = BackupError(7, @"An operation is already running.", NO);

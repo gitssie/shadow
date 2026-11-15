@@ -17,14 +17,14 @@ for arch in $AS_ARCHS; do
     flags=(-arch "$arch" -isysroot "$AS_SDKROOT" "-miphoneos-version-min=$deploy"
         -fobjc-arc -fvisibility=hidden -Wall -Wextra -Werror -Wno-deprecated-declarations
         -I"$prefix/include")
-    for name in Archive State; do
+    for name in Archive State Index; do
         "$clang" "${flags[@]}" -c "$ROOT/src/AppState/$name.m" -o "$output/$arch/$name.o"
     done
-    "$ar" rcs "$output/$arch/libShadowAppState.a" "$output/$arch/Archive.o" "$output/$arch/State.o"
+    "$ar" rcs "$output/$arch/libShadowAppState.a" "$output/$arch/Archive.o" "$output/$arch/State.o" "$output/$arch/Index.o"
     printf 'int main(void) { return 0; }\n' > "$output/$arch/link-check.c"
     "$clang" -arch "$arch" -isysroot "$AS_SDKROOT" "-miphoneos-version-min=$deploy" \
         "$output/$arch/link-check.c" -Wl,-force_load,"$output/$arch/libShadowAppState.a" \
         "$prefix/lib/libarchive.a" "$prefix/lib/libzstd.a" -framework Foundation \
-        -Wl,-x -o "$output/$arch/link-check"
+        -lsqlite3 -Wl,-x -o "$output/$arch/link-check"
     echo "AppState compile/link passed: $AS_LANE/$arch (iOS $deploy)"
 done

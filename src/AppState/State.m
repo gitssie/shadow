@@ -1,4 +1,8 @@
 #import "State.h"
+#import "Index.h"
+#import "Catalog.h"
+#import "BackupStatus.h"
+#import "../../sdk/AppState/SHDWAppStateCatalogQuery.h"
 #import "../Shadow.framework/Headers/Shadow/FingerprintResetBaseline.h"
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -7,6 +11,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
+#include <math.h>
 #import <CommonCrypto/CommonDigest.h>
 
 NSString *const SHDWAppStateErrorDomain = @"me.jjolano.shadow.app-state";
@@ -264,12 +269,17 @@ static void CollectAbandonedSnapshots(int parent) {
 @property(nonatomic) struct stat info;
 @property(nonatomic) struct stat snapshotInfo;
 @property(nonatomic, copy) NSString *path;
+@property(nonatomic, strong) SHDWAppStateIndex *index;
+@property(nonatomic) BOOL indexWasComplete;
+@property(nonatomic) BOOL indexCanCommit;
+@property(nonatomic) BOOL indexWritesFailed;
+@property(nonatomic) BOOL indexMutationStarted;
 - (void)releaseLock;
 @end
 @implementation SHDWStateDirectory
 - (instancetype)init { if ((self = [super init])) { _fd = -1; _snapshots = -1; _lock = -1; } return self; }
 - (void)releaseLock { if (_lock >= 0) { flock(_lock, LOCK_UN); close(_lock); _lock = -1; } }
-- (void)dealloc { if (_snapshots >= 0) close(_snapshots); if (_lock >= 0) { flock(_lock, LOCK_UN); close(_lock); } if (_fd >= 0) close(_fd); }
+- (void)dealloc { [_index close]; if (_snapshots >= 0) close(_snapshots); if (_lock >= 0) { flock(_lock, LOCK_UN); close(_lock); } if (_fd >= 0) close(_fd); }
 @end
 @interface SHDWAppStateStore ()
 @property(nonatomic, copy) NSString *root;
@@ -277,9 +287,11 @@ static void CollectAbandonedSnapshots(int parent) {
 @property(nonatomic) uid_t ownerUID;
 @property(nonatomic) gid_t ownerGID;
 @property(nonatomic) struct stat rootInfo;
+@property(nonatomic, weak) SHDWStateDirectory *indexOperationDirectory;
 @property(nonatomic, strong) id<SHDWAppStateBackend> backend;
 @end
 @implementation SHDWAppStateStore
+#include "StateIndex.inc"
 - (instancetype)initWithRoot:(NSString *)root backend:(id<SHDWAppStateBackend>)backend error:(NSError **)error {
     return [self initWithRoot:root ownerUID:geteuid() ownerGID:getegid() backend:backend error:error];
 }
@@ -308,12 +320,21 @@ static void CollectAbandonedSnapshots(int parent) {
 - (SHDWStateDirectory *)directory:(NSString *)bundle create:(BOOL)create exclusive:(BOOL)exclusive missing:(BOOL *)missing error:(NSError **)error {
     if (missing) *missing = NO;
     if (!BundleValue(bundle) || ![self checkRoot:error]) { if (error && !*error) FailCode(error,@"invalid_request",@"Invalid application identifier."); return nil; }
+    SHDWStateDirectory *directory = [SHDWStateDirectory new];
+    // Every writer takes the index gate before the application lock. The dirty
+    // schema marker survives interruption between source publication and indexing.
+    if(exclusive) {
+        directory.index=[[SHDWAppStateIndex alloc]initWithRoot:self.root ownerUID:self.ownerUID ownerGID:self.ownerGID error:error];
+        if(!directory.index)return nil;
+        directory.indexWasComplete=!directory.index.requiresMigration;
+        self.indexOperationDirectory=directory;
+    }
     struct stat info;
     if (fstatat(self.rootFD, bundle.fileSystemRepresentation, &info, AT_SYMLINK_NOFOLLOW)) {
         if (errno == ENOENT && !create) { if (missing) *missing = YES; return nil; }
         if (!create || errno != ENOENT || !MakeDirectory(self.rootFD, bundle.fileSystemRepresentation, self.ownerUID, self.ownerGID, YES, error)) { POSIXFail(error, @"Cannot open application backup storage."); return nil; }
     }
-    SHDWStateDirectory *directory = [SHDWStateDirectory new]; directory.path = [self.root stringByAppendingPathComponent:bundle];
+    directory.path = [self.root stringByAppendingPathComponent:bundle];
     directory.fd = openat(self.rootFD, bundle.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (directory.fd < 0 || fstat(directory.fd, &info) || !PrivateNode(info, YES, self.ownerUID, self.ownerGID)) { Fail(error, @"Application backup storage is unsafe."); return nil; } directory.info = info;
     if (create) {
@@ -478,11 +499,16 @@ static void CollectAbandonedSnapshots(int parent) {
     if (self.requester && !Same(self.requester,@"phone")) { FailCode(error,@"ownership_conflict",@"Only the phone can capture its active environment."); return nil; }
     NSString *active = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);
     if (error && *error) return nil;
+    BOOL cacheTouched=NO, cacheCommitted=NO;
+    @try {
     struct stat ownedInfo;
     if (active && !fstatat(directory.snapshots, active.fileSystemRepresentation, &ownedInfo, AT_SYMLINK_NOFOLLOW)) {
         NSDictionary *owned = [self manifest:bundle idfv:active directory:directory verify:NO error:error];
         if (!owned || ![self accessManifest:owned error:error]) return nil;
     }
+    if(![self prepareIndexMutation:directory error:error])return nil;
+    cacheTouched=YES;
+    [self recordIndexStatus:SHDWBackupStatusBackingUp bundle:bundle idfv:active];
     [self event:@"backup" stage:@"stop"];
     if (![self.backend stopTarget:context[@"target"] error:error] ||
         ![self.backend waitForStoppedTarget:context[@"target"] duration:3.0 error:error] ||
@@ -571,12 +597,18 @@ static void CollectAbandonedSnapshots(int parent) {
             if (RemoveChild(directory.fd, stage.fileSystemRepresentation, nil, &cleanupError)) { keepStage = NO; fsync(directory.fd); }
         }
         result = manifest;
+        [self recordIndexManifest:manifest fingerprint:fingerprint status:SHDWBackupStatusBackedUp];
+        directory.indexCanCommit=YES;
     } @finally {
         close(stageFD);
         if (!keepStage && !published) { NSError *cleanupError = nil; if (!RemoveChild(directory.fd, stage.fileSystemRepresentation, nil, &cleanupError) && error && !*error) *error = cleanupError; }
     }
     if (result) CollectAbandonedSnapshots(directory.fd);
+    cacheCommitted=result != nil;
     return result;
+    } @finally {
+        if(cacheTouched && !cacheCommitted) [self recordIndexStatus:SHDWBackupStatusBackupFailed bundle:bundle idfv:active];
+    }
 }
 - (NSDictionary *)backupBundle:(NSString *)bundleID metadata:(NSDictionary *)metadata error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
@@ -589,7 +621,7 @@ static void CollectAbandonedSnapshots(int parent) {
         SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:YES exclusive:YES missing:NULL error:error];
         return directory ? [self backup:bundleID metadata:metadata directory:directory error:error] : nil;
     } @catch (NSException *exception) { Fail(error, exception.reason ?: @"Backup failed."); return nil; }
-    @finally { [operationDirectory releaseLock]; }
+    @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
 - (NSDictionary *)backupAndResetBundle:(NSString *)bundleID expectedIDFV:(NSString *)idfv
     reset:(NSDictionary *(^)(NSDictionary *, NSError **))reset error:(NSError **)error {
@@ -639,7 +671,11 @@ static void CollectAbandonedSnapshots(int parent) {
         current = UUIDValue([self.backend currentVendorIdentifierForTarget:context[@"target"] error:error]);
         if (error && *error) return nil;
         if (!Same(current,expected)) { FailCode(error,@"idfv_mismatch",@"The application identity changed before reset."); return nil; }
-        stage = @"reset"; [self event:@"reset" stage:@"prepare"];
+        if(![self prepareIndexMutation:directory error:error])return nil;
+        directory.indexCanCommit=NO;
+        stage = @"reset";
+        if(createBackup) [self recordIndexStatus:SHDWBackupStatusResetting bundle:bundleID idfv:expected];
+        [self event:@"reset" stage:@"prepare"];
         if (createBackup) {
             NSDictionary *recovery=@{@"format":saved[@"format"],@"bundleID":bundleID,@"idfv":expected,
                 @"archiveSHA":saved[@"archiveInfo"][@"sha256"],@"stateArchiveSHA":saved[@"stateArchiveInfo"][@"sha256"],@"date":NSDate.date,@"phase":@"resetting",@"resetRecovery":@YES};
@@ -652,6 +688,8 @@ static void CollectAbandonedSnapshots(int parent) {
         NSString *updated = fingerprint[@"data"][@"VendorIdentifier"];
         if (Same(updated,expected) || ![fingerprint[@"locked"] boolValue]) { Fail(error,@"The reset did not create a new locked fingerprint."); return nil; }
         if (createBackup && (unlinkat(directory.fd,"pending.plist",0) || fsync(directory.fd))) { POSIXFail(error,@"Cannot finish the verified reset."); return nil; }
+        if(createBackup) [self recordIndexStatus:SHDWBackupStatusResetCompleted bundle:bundleID idfv:expected];
+        directory.indexCanCommit=YES;
         [self event:@"reset" stage:@"completed"];
         if (!createBackup) return @{@"previous_idfv":expected,@"current_idfv":updated,@"reset":@YES,@"verified":@YES,@"backup_created":@NO};
         return @{@"backup_id":[@"snapshot:" stringByAppendingString:expected],@"idfv":expected,@"previous_idfv":expected,@"current_idfv":updated,@"reset":@YES,@"verified":@YES};
@@ -661,9 +699,10 @@ static void CollectAbandonedSnapshots(int parent) {
             NSMutableDictionary *info = [(*error).userInfo mutableCopy]; info[@"step"] = info[@"step"] ?: stage;
             if (saved) info[@"backupIDFV"] = saved[@"idfv"];
             if (resetting) info[@"stateMayBePartial"] = @YES;
+            if(saved) [self recordIndexStatus:([stage isEqual:@"backup"] ? SHDWBackupStatusBackupFailed : SHDWBackupStatusResetFailed) bundle:bundleID idfv:saved[@"idfv"]];
             *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:info];
         }
-        [directory releaseLock];
+        [self finishIndexDirectory:directory failure:(error ? *error : nil)];
     }
 }
 - (NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error {
@@ -697,7 +736,7 @@ static void CollectAbandonedSnapshots(int parent) {
         } @finally { closedir(stream); }
         if (!valid || ![self checkDirectory:directory error:error]) return nil;
         [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"date"] compare:a[@"date"]]; }]; return entries;
-    } @finally { [operationDirectory releaseLock]; }
+    } @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
 // External transfer uses the same directory authority and pending protection as
 // local operations. No live target or device backend is involved.
@@ -728,7 +767,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
         if([part isEqual:@"state"]&&!Same(TransferHash(bytes),sha)){FailCode(error,@"invalid_archive",@"State checksum mismatch.");return nil;}
         if(![self checkDirectory:directory error:error])return nil;
         return @{@"data":bytes,@"manifestSHA":TransferHash(metadata),@"stateSHA":manifest[@"stateArchiveInfo"][@"sha256"],@"dataSHA":manifest[@"archiveInfo"][@"sha256"]};
-    } @finally{if(fd>=0)close(fd);[directory releaseLock];}
+    } @finally{if(fd>=0)close(fd);[self finishIndexDirectory:directory failure:(error ? *error : nil)];}
 }
 - (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)metadata state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error {
     SHDWStateDirectory *directory=nil;int source=-1,stageFD=-1,snapshots=-1,candidate=-1;NSString *stage=nil;BOOL published=NO,keepStage=NO;
@@ -751,9 +790,12 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
             char buffer[131072];for(;;){ssize_t n=read(input,buffer,sizeof(buffer));if(n<0&&errno==EINTR)continue;if(n<0)return POSIXFail(error,@"Cannot copy snapshot data.");if(!n)break;ssize_t offset=0;while(offset<n){ssize_t w=write(output,buffer+offset,(size_t)(n-offset));if(w<0&&errno==EINTR)continue;if(w<=0)return POSIXFail(error,@"Cannot stage snapshot data.");offset+=w;}}if(fsync(output))return POSIXFail(error,@"Cannot synchronize snapshot data.");
         } @finally{if(input>=0)close(input);if(output>=0)close(output);}
         SHDWStateDirectory *validation=[SHDWStateDirectory new];validation.path=[directory.path stringByAppendingPathComponent:stage];validation.snapshots=dup(snapshots);
-        NSDictionary *verified=[self manifest:bundleID idfv:canonical directory:validation verify:YES error:error];if(!verified||![self payloads:verified directory:validation error:error])return NO;
+        NSDictionary *verified=[self manifest:bundleID idfv:canonical directory:validation verify:YES error:error];
+        NSDictionary *verifiedPayloads=verified ? [self payloads:verified directory:validation error:error] : nil;
+        if(!verifiedPayloads)return NO;
         if(![self checkDirectory:directory error:error]||fsync(candidate)||fsync(snapshots)||fsync(stageFD))return Fail(error,@"Cannot synchronize imported snapshot.");
 #if defined(__APPLE__) && defined(RENAME_SWAP)
+        if(![self prepareIndexMutation:directory error:error])return NO;
         if(renameatx_np(snapshots,canonical.fileSystemRepresentation,directory.snapshots,canonical.fileSystemRepresentation,RENAME_SWAP))return POSIXFail(error,@"Cannot atomically publish imported snapshot.");
 #else
         return Fail(error,@"Atomic snapshot replacement is unavailable.");
@@ -767,8 +809,11 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 #endif
             if(published){keepStage=YES;if(error)*error=[NSError errorWithDomain:SHDWAppStateErrorDomain code:3 userInfo:@{NSLocalizedDescriptionKey:@"Imported snapshot publication could not be synchronized.",@"outcomeUnknown":@YES,@"errorCode":@"outcome_unknown"}];return NO;}
             return POSIXFail(error,@"Imported snapshot publication could not be synchronized.");
-        }return YES;
-    } @finally{if(candidate>=0)close(candidate);if(snapshots>=0)close(snapshots);if(stageFD>=0)close(stageFD);if(source>=0)close(source);if(stage&&directory&&!keepStage){RemoveChild(directory.fd,stage.fileSystemRepresentation,nil,NULL);if(published)fsync(directory.fd);}[directory releaseLock];}
+        }
+        [self recordIndexManifest:verified fingerprint:verifiedPayloads[@"fingerprint"] status:nil];
+        directory.indexCanCommit=YES;
+        return YES;
+    } @finally{if(candidate>=0)close(candidate);if(snapshots>=0)close(snapshots);if(stageFD>=0)close(stageFD);if(source>=0)close(source);if(stage&&directory&&!keepStage){RemoveChild(directory.fd,stage.fileSystemRepresentation,nil,NULL);if(published)fsync(directory.fd);}[self finishIndexDirectory:directory failure:(error ? *error : nil)];}
 }
 - (BOOL)recheckBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
@@ -779,7 +824,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
         if (!manifest || ![self accessManifest:manifest error:error]) return NO;
         manifest = [self manifest:bundleID idfv:canonical directory:directory verify:YES error:error];
         return manifest && [self payloads:manifest directory:directory error:error] && [self checkDirectory:directory error:error];
-    } @finally { [operationDirectory releaseLock]; }
+    } @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
 - (BOOL)editBundle:(NSString *)bundleID idfv:(NSString *)idfv metadata:(NSDictionary *)metadata error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
@@ -791,8 +836,11 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
         if (![self checkDirectory:directory error:error]) return NO;
         int fd = openat(directory.snapshots, canonical.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) return POSIXFail(error, @"Cannot open the snapshot.");
         CollectAbandonedSnapshots(directory.fd);
-        BOOL success = WritePlistAt(fd, @"manifest.plist", manifest, error); close(fd); return success;
-    } @finally { [operationDirectory releaseLock]; }
+        if(![self prepareIndexMutation:directory error:error]){close(fd);return NO;}
+        BOOL success = WritePlistAt(fd, @"manifest.plist", manifest, error); close(fd);
+        if(success) { [self recordIndexManifest:manifest fingerprint:nil status:nil]; directory.indexCanCommit=YES; }
+        return success;
+    } @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
 - (BOOL)deleteBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
@@ -810,13 +858,16 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
         if (![selected isKindOfClass:NSDictionary.class]) return FailCode(error,@"invalid_archive",@"Cannot determine the damaged backup's owner.");
         if (![self accessManifest:selected error:error]) return NO;
         NSString *tombstone = [@".delete-" stringByAppendingString:NSUUID.UUID.UUIDString];
+        if(![self prepareIndexMutation:directory error:error])return NO;
         if (renameat(directory.snapshots, canonical.fileSystemRepresentation, directory.fd, tombstone.fileSystemRepresentation)) return POSIXFail(error, @"Cannot remove the snapshot from the catalog.");
         if (fsync(directory.snapshots) || fsync(directory.fd)) return POSIXFail(error, @"Cannot synchronize snapshot deletion.");
+        [self removeIndexBundle:bundleID idfv:canonical];
+        directory.indexCanCommit=YES;
         // Publication is already removed atomically. Interrupted physical cleanup
         // remains outside the catalog and is retried by the next writer.
         RemoveChild(directory.fd, tombstone.fileSystemRepresentation, nil, NULL);
         return YES;
-    } @finally { [operationDirectory releaseLock]; }
+    } @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
 - (NSDictionary *)ownershipAction:(NSString *)action bundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *directory = nil; int fd = -1;
@@ -846,6 +897,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 fd = openat(directory.snapshots, canonical.fileSystemRepresentation, O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
                 if (fd < 0) { POSIXFail(error,@"Cannot open ownership metadata."); return nil; }
                 if (![self checkDirectory:directory error:error]) return nil;
+                if(![self prepareIndexMutation:directory error:error])return nil;
                 if (!WritePlistAt(fd,@"manifest.plist",updated,error)) {
                     if (error && *error) {
                         NSMutableDictionary *info=[(*error).userInfo mutableCopy];info[@"outcomeUnknown"]=@YES;
@@ -854,11 +906,13 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                     }
                     return nil;
                 }
+                [self recordIndexManifest:updated fingerprint:nil status:nil];
                 owner = next;
             }
         }
+        directory.indexCanCommit=YES;
         return @{@"idfv":canonical,@"owner":owner};
-    } @finally { if (fd >= 0) close(fd); [directory releaseLock]; }
+    } @finally { if (fd >= 0) close(fd); [self finishIndexDirectory:directory failure:(error ? *error : nil)]; }
 }
 - (NSDictionary *)ownershipBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     return [self ownershipAction:@"ownership" bundle:bundleID idfv:idfv error:error];
@@ -902,7 +956,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
 - (NSDictionary *)restoreBundle:(NSString *)bundleID idfv:(NSString *)idfv saveCurrent:(BOOL)saveCurrent error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
-        if (error) *error = nil; BOOL mutated = NO, restored = NO; NSDictionary *recovery = nil;
+        if (error) *error = nil; BOOL mutated = NO, restored = NO, indexStarted = NO; NSDictionary *recovery = nil;
         @try {
             NSString *canonical = UUIDValue(idfv); if (!canonical) { FailCode(error,@"invalid_request",@"Invalid snapshot identity."); return nil; }
             SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return nil;
@@ -941,6 +995,9 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 [ids addObject:identifier]; char *physical = realpath([target[@"containers"][identifier] fileSystemRepresentation], NULL);
                 if (!physical) { Fail(error, @"A restoration container is unavailable."); return nil; } roots[prefix] = @(physical); free(physical);
             }
+            if(![self prepareIndexMutation:directory error:error])return nil;
+            indexStarted = YES;
+            [self recordIndexManifest:manifest fingerprint:payloads[@"fingerprint"] status:SHDWBackupStatusRestoring];
             [self event:@"restore" stage:@"stop"];
             if (![self.backend stopTarget:target error:error] || ![self guard:context directory:directory refresh:YES error:error] || ![self.backend validateKeychain:payloads[@"keychain"] target:target error:error] || ![self.backend validateFingerprint:payloads[@"fingerprint"] target:target error:error] || ![self.backend validatePreferences:payloads[@"preferences"] target:target error:error]) return nil;
             if ((!saveCurrent || finalizing) &&
@@ -1003,16 +1060,23 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 if (![SHDWStateArchive synchronizeRoots:context[@"roots"] progress:progress error:error] ||
                     ![self guard:context directory:directory refresh:YES error:error]) return nil;
                 source[@"phase"] = @"identity-pending";
+                [self recordIndexStatus:SHDWBackupStatusIdentityPending bundle:bundleID idfv:canonical];
                 if (!WritePlistAt(directory.fd, @"pending.plist", source, error)) return nil;
                 [self event:@"restore" stage:@"fingerprint"];
                 if (![self guard:context directory:directory refresh:YES error:error] || ![self.backend restoreFingerprint:payloads[@"fingerprint"] target:target error:error]) return nil;
                 source[@"phase"] = @"identity-committed";
+                [self recordIndexStatus:SHDWBackupStatusIdentityCommitted bundle:bundleID idfv:canonical];
                 if (!WritePlistAt(directory.fd, @"pending.plist", source, error) || ![self guard:context directory:directory refresh:YES error:error] || ![self verifyRestoredFingerprint:payloads[@"fingerprint"] context:context error:error]) return nil;
             }
             if (![self guard:context directory:directory refresh:YES error:error] || unlinkat(directory.fd, "pending.plist", 0) || fsync(directory.fd)) { if (error && !*error) POSIXFail(error, @"Cannot complete the verified restoration."); return nil; }
-            restored = YES; return @{ @"idfv": canonical, @"restored": @YES, @"locked": @YES, @"finalized":@(finalizing) };
+            restored = YES;
+            directory.indexCanCommit=YES;
+            [self recordIndexStatus:SHDWBackupStatusRestored bundle:bundleID idfv:canonical];
+            return @{ @"idfv": canonical, @"restored": @YES, @"locked": @YES, @"finalized":@(finalizing) };
         } @catch (NSException *exception) { Fail(error, exception.reason ?: @"Restoration failed."); return nil; }
         @finally {
+            if (!restored) operationDirectory.indexCanCommit=NO;
+            if (indexStarted && !restored) [self recordIndexStatus:SHDWBackupStatusRestoreFailed bundle:bundleID idfv:UUIDValue(idfv)];
             if (mutated && !restored) {
                 if (error && !*error) Fail(error, @"Restoration failed before verification completed.");
                 BOOL pendingRetained = YES; struct stat info;
@@ -1020,7 +1084,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
                 if (error && *error) { NSMutableDictionary *details = [(*error).userInfo mutableCopy]; details[@"stateMayBePartial"] = @YES; if (!pendingRetained) details[@"pendingPersistenceFailed"] = @YES; *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:details]; }
             }
         }
-    } @finally { [operationDirectory releaseLock]; }
+    } @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
 
 @end

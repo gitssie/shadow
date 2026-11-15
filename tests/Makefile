@@ -163,6 +163,8 @@ verify-app-state:
 	python3 verify-archive-recovery.py
 	python3 verify-backup-capture-boundary.py
 	python3 verify-app-state-progress.py
+	python3 verify-app-state-index.py
+	python3 verify-app-state-index-integration.py
 	python3 verify-state-durability.py
 
 .PHONY: verify-app-state
@@ -170,6 +172,8 @@ verify-app-state:
 verify-backups: verify-app-state
 	python3 verify-app-state-client.py
 	python3 verify-backup-service.py
+	python3 verify-backup-query-request.py
+	python3 verify-backup-pagination.py
 	python3 verify-backup-keychain.py
 	python3 verify-state-backend.py
 
