@@ -71,6 +71,7 @@
         SHDWFingerprintStore *store = [SHDWFingerprintStore sharedStore];
         NSDictionary *configuration = [store configurationForApplication:self.bundleIdentifier];
         BOOL locked = [store lockedForApplication:self.bundleIdentifier];
+        cell.textLabel.textColor = locked ? UIColor.secondaryLabelColor : SHDWInk();
         NSDictionary *localization = [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration];
         NSArray *labels = @[@"iOS", SHDWText(@"Region"), SHDWText(@"Time zone"), SHDWText(@"Language"), SHDWText(@"Network"), SHDWText(@"Receipt interception"), SHDWText(@"Advertising tracking"), SHDWText(@"TLS fingerprint")];
         cell.textLabel.text = labels[indexPath.row];
@@ -101,7 +102,6 @@
         if ((indexPath.row <= 4 && indexPath.row != 2) || indexPath.row == 6) {
             cell.accessoryType = locked ? UITableViewCellAccessoryNone : UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = locked ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
-            cell.textLabel.textColor = locked ? UIColor.secondaryLabelColor : SHDWInk();
         }
     } else if (indexPath.section == 1) {
         BOOL enabledRow = indexPath.row == 0;
@@ -115,6 +115,7 @@
         BOOL enabled = [[SHDWFingerprintStore sharedStore] shadowEnabledForApplication:self.bundleIdentifier];
         cell.textLabel.text = SHDWText(@"Shadow status");
         UISwitch *status = [UISwitch new]; status.onTintColor = SHDWAccent(); status.on = enabled; status.enabled = ![[SHDWFingerprintStore sharedStore] lockedForApplication:self.bundleIdentifier]; [status addTarget:self action:@selector(shadowChanged:) forControlEvents:UIControlEventValueChanged]; status.accessibilityIdentifier = @"fingerprint.shadow-status"; cell.accessoryView = status;
+        cell.textLabel.textColor = status.enabled ? SHDWInk() : UIColor.secondaryLabelColor;
     } return cell;
 }
 - (void)enabledChanged:(UISwitch *)toggle { NSError *error = nil; if (![[SHDWFingerprintStore sharedStore] setEnabled:toggle.on forApplication:self.bundleIdentifier error:&error]) { toggle.on = !toggle.on; SHDWShowError(self, error); } }
