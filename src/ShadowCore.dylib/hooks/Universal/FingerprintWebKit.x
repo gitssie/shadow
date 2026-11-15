@@ -165,7 +165,9 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
 - (WKNavigation *)loadRequest:(NSURLRequest *)request {
     if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebFrameDiagnosticsInstall(((WKWebView *)self).configuration);
     if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebCookieDiagnosticsObserveView((WKWebView *)self, request.URL, @"loadRequest");
+#if SHDW_TRANSPORT_DIAGNOSTICS
     SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"webview.loadRequest.origin");
+#endif
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     shdw_fingerprint_webkit_select(self, caller);
     return %orig(request);
@@ -173,7 +175,9 @@ static void shdw_fingerprint_webkit_select(WKWebView *view, const void *caller) 
 - (WKNavigation *)loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL {
     if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebFrameDiagnosticsInstall(((WKWebView *)self).configuration);
     if (SHDW_TRANSPORT_DIAGNOSTICS && shdw_fingerprint_is_enabled()) SHDWWebCookieDiagnosticsObserveView((WKWebView *)self, baseURL, @"loadHTML");
+#if SHDW_TRANSPORT_DIAGNOSTICS
     SHDWNetworkDiagnosticsTraceWebHTMLOrigin(string, baseURL);
+#endif
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     shdw_fingerprint_webkit_select(self, caller);
     return %orig(string, baseURL);

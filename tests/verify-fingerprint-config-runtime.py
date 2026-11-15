@@ -83,7 +83,7 @@ int main(void) { @autoreleasepool {
     for (NSArray *pair in @[@[@"16.0.3",@"safari172_ios"], @[@"16.7.2",@"safari172_ios"],
         @[@"17.7.2",@"safari172_ios"], @[@"18.0",@"safari180_ios"], @[@"18.0.1",@"safari180_ios"],
         @[@"18.3",@"safari180_ios"], @[@"18.3.9",@"safari180_ios"], @[@"18.4",@"safari184_ios"],
-        @[@"18.4.0",@"safari184_ios"], @[@"18.6.9",@"safari184_ios"], @[@"18.7",@"safari187_ios"], @[@"18.7.1",@"safari187_ios"], @[@"18.7.8",@"safari187_ios"], @[@"18.10",@"safari187_ios"], @[@"19.0",@"safari187_ios"], @[@"27.0",@"safari187_ios"]])
+        @[@"18.4.0",@"safari184_ios"], @[@"18.6.9",@"safari184_ios"], @[@"18.7",@"safari187_ios"], @[@"18.7.1",@"safari187_ios"], @[@"18.7.8",@"safari187_ios"], @[@"18.10",@"safari187_ios"], @[@"19.0",@"safari187_ios"], @[@"26.5",@"safari187_ios"], @[@"27.0",@"safari187_ios"]])
       assert([[SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:pair[0]] isEqual:pair[1]]);
     for (id invalid in @[@"",@"18",@"18.",@".18",@"18..4",@"18.4.0.1",@"18.4beta",@" 18.4",@"18.4\n",@"１８.４",@"18.-4",@18,NSNull.null])
       assert(![SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:invalid]);
@@ -103,7 +103,7 @@ int main(void) { @autoreleasepool {
   for (NSDictionary *profile in SHDWFingerprintConfiguration.allSystemProfiles) {
     NSString *version=profile[@"Version"];
     BOOL is187=[version isEqual:@"18.7"] || [version hasPrefix:@"18.7."];
-    NSString *expectedNetwork = is187 ? @"3826.600.41" : @{@"18.4":@"3826.500.111.2.2", @"17.7.2":@"1498.700.2", @"17.6.1":@"1498.700.2", @"17.5.1":@"1496.0.7", @"17.4.1":@"1494.0.7", @"17.3.1":@"1492.0.1", @"17.2.1":@"1490.0.4", @"17.1.2":@"1485", @"17.0.3":@"1474", @"16.7.2":@"1410.0.3", @"16.6.1":@"1410.0.3", @"16.5.1":@"1408.0.4", @"16.4.1":@"1406.0.4", @"16.3.1":@"1404.0.5", @"16.2":@"1402.0.8", @"16.1.2":@"1399", @"16.0.3":@"1390"}[version];
+    NSString *expectedNetwork = is187 ? @"3826.600.41" : @{@"26.5":@"3860.600.12", @"18.4":@"3826.500.111.2.2", @"17.7.2":@"1498.700.2", @"17.6.1":@"1498.700.2", @"17.5.1":@"1496.0.7", @"17.4.1":@"1494.0.7", @"17.3.1":@"1492.0.1", @"17.2.1":@"1490.0.4", @"17.1.2":@"1485", @"17.0.3":@"1474", @"16.7.2":@"1410.0.3", @"16.6.1":@"1410.0.3", @"16.5.1":@"1408.0.4", @"16.4.1":@"1406.0.4", @"16.3.1":@"1404.0.5", @"16.2":@"1402.0.8", @"16.1.2":@"1399", @"16.0.3":@"1390"}[version];
     assert(expectedNetwork ? [profile[@"CFNetwork"] isEqual:expectedNetwork] : !profile[@"CFNetwork"]);
   }
   fixture = SHDWFingerprintConfiguration.defaultConfiguration;
@@ -196,7 +196,9 @@ int main(void) { @autoreleasepool {
   assert([SHDWFingerprintUserAgent(ua) containsString:@"OS 18_7_8 like Mac OS X"]);
   assert(SHDWFingerprintUnameValue(&value));
   assert(strstr(value.version, "xnu-11417.140.69.706.9~1/RELEASE_ARM64_T8110"));
-  NSArray *latestSystemCases = @[      @[@"17.7.2", @"21H221", @"1498.700.2", @"23.6.0"],
+  NSArray *latestSystemCases = @[
+      @[@"26.5", @"23F77", @"3860.600.12", @"25.5.0"],
+      @[@"17.7.2", @"21H221", @"1498.700.2", @"23.6.0"],
       @[@"17.6.1", @"21G101", @"1498.700.2", @"23.6.0"],
       @[@"17.5.1", @"21F90", @"1496.0.7", @"23.5.0"],
       @[@"17.4.1", @"21E236", @"1494.0.7", @"23.4.0"],

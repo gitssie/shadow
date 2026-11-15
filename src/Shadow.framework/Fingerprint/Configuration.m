@@ -192,7 +192,11 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   static NSArray<NSDictionary *> *profiles;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
-    profiles = @[@{@"ID":@"iphone14-5_ios18.7.1_22H31", @"Name":@"iOS 18.7.1", @"Version":@"18.7.1",
+    profiles = @[@{@"ID":@"iphone14-5_ios26.5_23F77", @"Name":@"iOS 26.5", @"Version":@"26.5",
+    @"Build":@"23F77", @"Darwin":@"25.5.0", @"CFNetwork":@"3860.600.12",
+    @"Kernel":@"Darwin Kernel Version 25.5.0: Thu Apr 23 20:42:25 PDT 2026; root:xnu-12377.122.4~1/RELEASE_ARM64_T8110",
+    @"ProductTypes":@[@"iPhone14,5"]},
+    @{@"ID":@"iphone14-5_ios18.7.1_22H31", @"Name":@"iOS 18.7.1", @"Version":@"18.7.1",
     @"Build":@"22H31", @"Darwin":@"24.6.0",
     @"Kernel":@"Darwin Kernel Version 24.6.0: Tue Aug 12 00:02:59 PDT 2025; root:xnu-11417.140.69.700.6~5/RELEASE_ARM64_T8110",
     @"ProductTypes":@[@"iPhone14,5"]},

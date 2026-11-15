@@ -170,14 +170,18 @@ static BOOL shdw_network_class_declares(Class cls, SEL selector) {
 
 static IMP shdw_network_request_implementation(SHDWNetworkRequestHook *cell, unsigned arguments) {
     if(arguments == 3) return imp_implementationWithBlock(^id(id session, NSURLRequest *request) {
+#if SHDW_TRANSPORT_DIAGNOSTICS
         SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"request.create.origin");
+#endif
         const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
         request = shdw_fingerprint_network_request(session, request, caller);
         id task = ((id (*)(id, SEL, NSURLRequest *))cell->original)(session, cell->selector, request);
         return task;
     });
     if(arguments == 4) return imp_implementationWithBlock(^id(id session, NSURLRequest *request, id argument) {
+#if SHDW_TRANSPORT_DIAGNOSTICS
         SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"request.create.origin");
+#endif
         const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
 #if SHDW_TRANSPORT_DIAGNOSTICS
         NSString *name = NSStringFromSelector(cell->selector);
@@ -193,7 +197,9 @@ static IMP shdw_network_request_implementation(SHDWNetworkRequestHook *cell, uns
         return task;
     });
     return imp_implementationWithBlock(^id(id session, NSURLRequest *request, id argument, id completion) {
+#if SHDW_TRANSPORT_DIAGNOSTICS
         SHDWNetworkDiagnosticsTraceRequestOrigin(request, @"request.create.origin");
+#endif
         const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
 #if SHDW_TRANSPORT_DIAGNOSTICS
         NSString *name = NSStringFromSelector(cell->selector);

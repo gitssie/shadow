@@ -52,7 +52,7 @@ static void SHDWCurlTransportTraceRequest(NSURLRequest *request, NSString *stage
 static void SHDWNetworkDiagnosticsAttachUploadData(id task, NSData *data) { (void)task;(void)data; }
 static void SHDWNetworkDiagnosticsAttachUploadFile(id task, NSURL *url) { (void)task;(void)url; }
 #endif
-static void SHDWNetworkDiagnosticsTraceRequestOrigin(NSURLRequest *request, NSString *stage) { (void)request;(void)stage; }
+
 static NSString *release=@"24.6.0", *nativeValue;
 static BOOL sourcePublicationSucceeds;
 static BOOL SHDWNetworkReplaceUserAgentCache(const void *getter,NSString *native,NSString *updated) {
