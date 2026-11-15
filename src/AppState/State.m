@@ -442,6 +442,7 @@ static void CollectAbandonedSnapshots(int parent) {
         if (fstat(fd, &info) || !PrivateNode(info, YES, self.ownerUID, self.ownerGID)) { Fail(error, @"Snapshot directory is unsafe."); return nil; }
         id value = ReadPlistAt(fd, @"manifest.plist", self.ownerUID, self.ownerGID, error);
         if (![value isKindOfClass:NSDictionary.class] || !Same(value[@"format"], StateFormat) || !Same(value[@"bundleID"], bundle) || !Same(value[@"idfv"], idfv) || !Metadata(@{ @"title": value[@"title"] ?: @0, @"note": value[@"note"] ?: @0 }, bundle, NULL) || ![value[@"date"] isKindOfClass:NSDate.class] || !PlainString(value[@"version"]) || !PlainString(value[@"build"]) || ![value[@"roots"] isKindOfClass:NSDictionary.class] || ![value[@"roots"] count] || ![value[@"archiveInfo"] isKindOfClass:NSDictionary.class] || ![value[@"keychainGroups"] isKindOfClass:NSArray.class]) { if (error && !*error) FailCode(error,@"invalid_archive",@"Snapshot manifest is invalid."); return nil; }
+        if (value[@"deleteLocked"] && CFGetTypeID((__bridge CFTypeRef)value[@"deleteLocked"]) != CFBooleanGetTypeID()) { FailCode(error,@"invalid_archive",@"Invalid backup deletion lock."); return nil; }
         if (![self ownerOfManifest:value error:error] || ![self validateArchiveOwnership:value[@"archiveInfo"] error:error]) return nil;
         NSMutableDictionary *sourceRoots = [NSMutableDictionary new];
         for (id prefix in value[@"roots"]) { id root = value[@"roots"][prefix]; if (![prefix isKindOfClass:NSString.class] || ![prefix hasPrefix:@"containers/"] || ![root isKindOfClass:NSDictionary.class] || !PlainString(root[@"containerID"]) || !PlainString(root[@"nativePath"]) || ![root[@"nativePath"] isAbsolutePath]) { FailCode(error,@"invalid_archive",@"Snapshot container mapping is invalid."); return nil; } sourceRoots[prefix] = root[@"nativePath"]; }
@@ -556,6 +557,7 @@ static void CollectAbandonedSnapshots(int parent) {
         if (!live || !again || !Same(preferences, [self.backend capturePreferencesForTarget:context[@"target"] error:error]) || !Same(live[@"data"], identity[@"data"]) || !Same(live[@"configuration"], identity[@"configuration"]) || !Same(live[@"resetBaseline"], identity[@"resetBaseline"]) || ![self records:records equal:again]) { if (error && !*error) Fail(error, @"Application state changed during backup."); return nil; }
         NSMutableDictionary *manifest = [@{ @"format": StateFormat, @"bundleID": bundle, @"idfv": idfv, @"title": display[@"title"], @"note": display[@"note"], @"date": backupDate, @"version": context[@"target"][@"version"], @"build": context[@"target"][@"build"], @"roots": context[@"mapping"], @"keychainGroups": context[@"target"][@"keychainGroups"], @"archiveInfo": archiveInfo, @"stateArchiveInfo": stateArchiveInfo } mutableCopy];
         manifest[@"owner"] = @"phone";
+        if (previous[@"deleteLocked"]) manifest[@"deleteLocked"] = previous[@"deleteLocked"];
         NSString *digest = fingerprint[@"digest"];
         NSCharacterSet *hex = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"];
         if ([digest isKindOfClass:NSString.class] && digest.length == 64 && [digest rangeOfCharacterFromSet:hex.invertedSet].location == NSNotFound) manifest[@"digest"] = digest;
@@ -842,6 +844,26 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
         return success;
     } @finally { [self finishIndexDirectory:operationDirectory failure:(error ? *error : nil)]; }
 }
+- (BOOL)setDeleteLockedBundle:(NSString *)bundleID idfv:(NSString *)idfv locked:(BOOL)locked error:(NSError **)error {
+    SHDWStateDirectory *directory = nil;
+    @try {
+        if (error) *error = nil;
+        NSString *canonical = UUIDValue(idfv);
+        if (!canonical) return FailCode(error,@"invalid_request",@"Invalid snapshot identity.");
+        if (self.requester && !Same(self.requester,@"phone")) return FailCode(error,@"ownership_conflict",@"Only the phone owner can change the deletion lock.");
+        directory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return NO;
+        NSMutableDictionary *manifest = [[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error] mutableCopy];
+        if (!manifest || ![self accessManifest:manifest error:error]) return NO;
+        manifest[@"deleteLocked"] = locked ? @YES : @NO;
+        if (![self checkDirectory:directory error:error]) return NO;
+        int fd = openat(directory.snapshots, canonical.fileSystemRepresentation, O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        if (fd < 0) return POSIXFail(error,@"Cannot open the snapshot.");
+        if (![self prepareIndexMutation:directory error:error]) { close(fd); return NO; }
+        BOOL success = WritePlistAt(fd,@"manifest.plist",manifest,error); close(fd);
+        if (success) { [self recordIndexManifest:manifest fingerprint:nil status:nil]; directory.indexCanCommit=YES; }
+        return success;
+    } @finally { [self finishIndexDirectory:directory failure:(error ? *error : nil)]; }
+}
 - (BOOL)deleteBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error {
     SHDWStateDirectory *operationDirectory = nil;
     @try {
@@ -849,14 +871,16 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
         SHDWStateDirectory *directory = operationDirectory = [self directory:bundleID create:NO exclusive:YES missing:NULL error:error]; if (!directory) return NO;
         NSDictionary *pending = [self pending:directory error:error]; if (!pending) return NO; if (Same(pending[@"idfv"], canonical)) return FailCode(error,@"restore_pending",@"The pending restoration source cannot be deleted.");
         if (![self checkDirectory:directory error:error]) return NO;
-        CollectAbandonedSnapshots(directory.fd);
         int selectedFD = openat(directory.snapshots, canonical.fileSystemRepresentation, O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         if (selectedFD < 0) return POSIXFail(error,@"Cannot inspect deletion ownership.");
         NSDictionary *selected = nil;
         @try { selected = ReadPlistAt(selectedFD,@"manifest.plist",self.ownerUID,self.ownerGID,error); }
         @finally { close(selectedFD); }
         if (![selected isKindOfClass:NSDictionary.class]) return FailCode(error,@"invalid_archive",@"Cannot determine the damaged backup's owner.");
+        if (selected[@"deleteLocked"] && CFGetTypeID((__bridge CFTypeRef)selected[@"deleteLocked"]) != CFBooleanGetTypeID()) return FailCode(error,@"invalid_archive",@"Invalid backup deletion lock.");
+        if ([selected[@"deleteLocked"] boolValue]) return FailCode(error,@"backup_locked",@"Unlock this backup before deleting it.");
         if (![self accessManifest:selected error:error]) return NO;
+        CollectAbandonedSnapshots(directory.fd);
         NSString *tombstone = [@".delete-" stringByAppendingString:NSUUID.UUID.UUIDString];
         if(![self prepareIndexMutation:directory error:error])return NO;
         if (renameat(directory.snapshots, canonical.fileSystemRepresentation, directory.fd, tombstone.fileSystemRepresentation)) return POSIXFail(error, @"Cannot remove the snapshot from the catalog.");

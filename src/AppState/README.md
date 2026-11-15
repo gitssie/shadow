@@ -22,8 +22,10 @@ meanings follow the existing catalog: `title`, `note`, `date`, `version`, `build
 saved Shadow display fingerprint. `Fingerprint_Data` is a binary plist BLOB;
 `Fingerprint_Config` is JSON TEXT with its original keys and nesting, including
 `Localization.Region`. `status` records the saved environment's workflow state;
-its shared constants live in `BackupStatus.h`. No backup manifests or archive
-formats change.
+its shared constants live in `BackupStatus.h`. `deleteLocked` is a boolean
+projection of the authoritative manifest field, defaulting to false when absent.
+It blocks snapshot deletion only and is independent of `Fingerprint_Locked`;
+index rebuilds restore the projection from each manifest.
 
 An upgrade migration imports existing snapshots across all apps in one transaction.
 The database version is committed only when that migration completes, so an

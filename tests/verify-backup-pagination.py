@@ -47,7 +47,7 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @property CGRect bounds;
 @property CGSize contentSize;
 @property UIEdgeInsets adjustedContentInset;
-@property(copy) NSString *text, *bundleIdentifier;
+@property(copy) NSString *text, *bundleIdentifier, *accessibilityLabel;
 @property(strong) id textColor, tableFooterView;
 - (void)setWorking:(BOOL)value;
 - (void)setTitle:(NSString *)title forState:(NSInteger)state;
@@ -82,6 +82,7 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @interface Service : NSObject
 @property(copy) void (^pageCompletion)(NSDictionary *, NSError *);
 @property(copy) void (^operationCompletion)(id, NSError *);
+@property(copy) void (^operationProgress)(NSDictionary *);
 @property NSUInteger offset, requests;
 @property(copy) NSString *search;
 @property BOOL refresh;
@@ -95,7 +96,7 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
     self.search=search; self.offset=offset; self.refresh=refresh; self.requests++; self.pageCompletion=completion;
 }
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(void (^)(NSDictionary *))progress completion:(void (^)(id, NSError *))completion {
-    (void)action; (void)request; (void)progress; self.operationCompletion=completion;
+    (void)action; (void)request; self.operationProgress=progress; self.operationCompletion=completion;
 }
 - (void)finishPage:(NSDictionary *)page error:(NSError *)error {
     void (^completion)(NSDictionary *, NSError *)=self.pageCompletion;
@@ -104,7 +105,7 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @end
 @interface Controller : NSObject
 @property(strong) Service *service;
-@property(strong) UIView *searchField, *status, *table, *tableHeight, *selector, *action, *pagingSpinner, *listBackground, *listSpinner, *selected, *empty, *emptyIcon;
+@property(strong) UIView *searchField, *status, *table, *tableHeight, *selector, *action, *pagingSpinner, *listBackground, *listSpinner, *selected, *emptyIcon;
 @property(nonatomic,copy) NSArray *catalog, *visibleCatalog;
 @property(copy) NSDictionary *currentBackup;
 @property(copy) NSString *liveIDFV;
@@ -139,7 +140,7 @@ static NSDictionary *Page(NSArray *items, NSUInteger next, BOOL more) {
 }
 static Controller *Fixture(void) {
     Controller *c=[Controller new]; c.service=[Service new];
-    for(NSString *key in @[@"searchField",@"status",@"table",@"tableHeight",@"selector",@"action",@"pagingSpinner",@"listBackground",@"listSpinner",@"selected",@"empty",@"emptyIcon"])
+    for(NSString *key in @[@"searchField",@"status",@"table",@"tableHeight",@"selector",@"action",@"pagingSpinner",@"listBackground",@"listSpinner",@"selected",@"emptyIcon"])
         [c setValue:[UIView new] forKey:key];
     c.searchField.text=@""; c.liveIDFV=@"active"; c.selected.bundleIdentifier=@"fixture.app"; c.refreshCatalog=YES;
     c.table.bounds=CGRectMake(0,0,320,400); c.table.contentSize=CGSizeMake(320,1000);
@@ -196,10 +197,24 @@ int main(void) { @autoreleasepool {
     // A successful write replaces any query error; its message survives refresh.
     [c loadCatalog]; [s finishPage:nil error:error];
     [c perform:@"edit" request:@{}];
+    Check(c.status.hidden && !c.status.text.length,@"operation starts without duplicate progress text");
+    s.operationProgress(@{@"stage":@"Streaming backup"});
+    Check([c.action.text isEqual:@"Streaming backup"] && c.status.hidden && !c.status.text.length,@"progress updates only the action button");
     void (^done)(id,NSError *)=s.operationCompletion; s.operationCompletion=nil; done(@{},nil);
-    Check([c.status.text isEqual:@"Backup saved"] && [c.status.textColor isEqual:UIColor.secondaryLabelColor],@"perform success message survives refresh start after query error");
+    Check(c.status.hidden && !c.status.text.length,@"successful operation has no redundant text during refresh");
     [s finishPage:Page(@[first],1,NO) error:nil];
-    Check([c.status.text isEqual:@"Backup saved"] && [c.status.textColor isEqual:UIColor.secondaryLabelColor],@"perform success message survives successful refresh");
+    Check(c.status.hidden && !c.status.text.length,@"successful refresh retains a clean operation area");
+    [c perform:@"backup" request:@{}];
+    done=s.operationCompletion; s.operationCompletion=nil; done(nil,error);
+    Check(!c.status.hidden && [c.status.text isEqual:error.localizedDescription],@"operation failures remain visible");
+    [s finishPage:Page(@[first],1,NO) error:nil];
+    c.catalog=@[]; c.searchField.text=@"no match"; [c loadCatalog];
+    Check(c.emptyIcon.hidden && c.listSpinner.animating,@"loading hides empty icon and uses spinner");
+    [s finishPage:Page(@[],0,NO) error:nil];
+    Check(!c.emptyIcon.hidden && !c.listBackground.hidden && !c.listSpinner.animating,@"empty search displays the empty icon");
+    Check([c.emptyIcon.accessibilityLabel isEqual:@"No matching backups"],@"empty search keeps an accessibility description");
+    c.searchField.text=@""; [c loadCatalog]; [s finishPage:Page(@[],0,NO) error:nil];
+    Check(!c.emptyIcon.hidden && [c.emptyIcon.accessibilityLabel isEqual:@"No backups yet"],@"empty catalog displays the icon");
     if(failures)return 1;
     puts("backup pagination: real scroll callbacks, bounded auto paging, spinner, retry, query recovery and operation messages passed");
 } return 0; }

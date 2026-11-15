@@ -13,6 +13,14 @@ SHDWAppStateCatalogEntry(NSDictionary *manifest, NSError **error) {
        ])
     if (manifest[key])
       entry[key] = manifest[key];
+  id deleteLocked = manifest[@"deleteLocked"];
+  if (deleteLocked && CFGetTypeID((__bridge CFTypeRef)deleteLocked) != CFBooleanGetTypeID()) {
+    if (error)
+      *error = [NSError errorWithDomain:@"me.jjolano.shadow.app-state" code:1
+                              userInfo:@{NSLocalizedDescriptionKey : @"Invalid backup deletion lock"}];
+    return nil;
+  }
+  entry[@"deleteLocked"] = deleteLocked ?: @NO;
   if ([manifest[@"unavailable"] boolValue]) {
     entry[@"size"] = @0;
     return entry;

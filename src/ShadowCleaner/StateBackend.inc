@@ -332,7 +332,7 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     stateInitiatingParent = getppid(); StateParent();
     Require(argc == 4 || argc == 5, @"Expected an application state action and an optional encoded request");
     NSString *identifier = [NSString stringWithUTF8String:argv[2]], *action = [NSString stringWithUTF8String:argv[3]];
-    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"queryCatalog", @"backup", @"backupAndReset",@"discardAndReset", @"restore", @"edit", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
+    Require(BundleIdentifier(identifier) && (StateExternalAction(action) || [@[@"catalog", @"queryCatalog", @"backup", @"backupAndReset",@"discardAndReset", @"restore", @"edit", @"setDeleteLocked", @"delete", @"recheck"] containsObject:action]), @"Invalid application state action");
     if(StateExternalAction(action)) {
         NSDictionary *external=@{};
         if(argc==5){NSString *encoded=[NSString stringWithUTF8String:argv[4]];NSData *bytes=nil;
@@ -344,9 +344,10 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     }
     NSDictionary *request = @{};
     if (argc == 5) { NSString *encoded = [NSString stringWithUTF8String:argv[4]]; Require(encoded.length <= 256 * 1024, @"Application state action request is too large"); id value = StateDecode([[NSData alloc] initWithBase64EncodedString:encoded options:0]); Require([value isKindOfClass:NSDictionary.class], @"Invalid application state action request"); request = value; }
-    NSArray *allowed = [action isEqual:@"queryCatalog"] ? SHDWAppStateCatalogQueryKeys() : [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"]) ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : @[@"idfv"];
+    NSArray *allowed = [action isEqual:@"queryCatalog"] ? SHDWAppStateCatalogQueryKeys() : [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"]) ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : [action isEqual:@"setDeleteLocked"] ? @[@"idfv", @"deleteLocked"] : @[@"idfv"];
     for (id key in request) Require([allowed containsObject:key], @"Unknown application state action option");
     if (![action isEqual:@"catalog"] && ![action isEqual:@"queryCatalog"] && ![action isEqual:@"backup"]) Require([request[@"idfv"] isKindOfClass:NSString.class], @"A saved fingerprint identifier is required");
+    if ([action isEqual:@"setDeleteLocked"]) Require(request[@"deleteLocked"] && CFGetTypeID((__bridge CFTypeRef)request[@"deleteLocked"]) == CFBooleanGetTypeID(), @"Invalid deletion lock option");
     if (request[@"saveCurrent"]) Require([request[@"saveCurrent"] isKindOfClass:NSNumber.class] && [@[@NO, @YES] containsObject:request[@"saveCurrent"]], @"Invalid save-current option");
     if (request[@"metadata"]) { Require([request[@"metadata"] isKindOfClass:NSDictionary.class], @"Invalid backup metadata"); for (id key in request[@"metadata"]) Require([@[@"title", @"note"] containsObject:key] && [request[@"metadata"][key] isKindOfClass:NSString.class], @"Invalid backup metadata field"); }
     stateFailureCode=@"permission_denied";Require(geteuid() == 0, @"Cannot enter the private backup storage context");
@@ -368,6 +369,12 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
             }
             if (!result) return StateErrorTerminal(error);
             return @{@"ok":@YES, @"result":[StateEncode(result) base64EncodedStringWithOptions:0]};
+        }
+        if ([action isEqual:@"setDeleteLocked"]) {
+            SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend error:&error];
+            if (!store || ![store setDeleteLockedBundle:identifier idfv:request[@"idfv"] locked:[request[@"deleteLocked"] boolValue] error:&error]) return StateErrorTerminal(error);
+            NSDictionary *result = @{@"idfv":[[NSUUID alloc] initWithUUIDString:request[@"idfv"]].UUIDString, @"deleteLocked":request[@"deleteLocked"]};
+            return @{@"ok":@YES,@"result":[StateEncode(result) base64EncodedStringWithOptions:0]};
         }
         NSDictionary *target = [backend resolveBundle:identifier error:&error]; if(!target)return StateErrorTerminal(error);
         StateWorkerValue(target[@"authority"], ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"])?@"state-fingerprint-reset-check":@"state-registration", nil);

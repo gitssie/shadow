@@ -18,6 +18,7 @@ UIButton *SHDWSheetPrimaryButton(NSString *title, NSString *symbol, id target, S
 @property(nonatomic, strong, readwrite) UIStackView *contentStack;
 @property(nonatomic, strong, readwrite) UIButton *closeButton;
 @property(nonatomic, strong) UIScrollView *scroll;
+@property(nonatomic, strong) UILabel *headerTitleLabel;
 @property(nonatomic) CGRect keyboardFrame;
 - (CGFloat)sheetHeightForWidth:(CGFloat)width;
 @end
@@ -69,8 +70,11 @@ UIButton *SHDWSheetPrimaryButton(NSString *title, NSString *symbol, id target, S
 @implementation SHDWSheetViewController
 - (instancetype)init { return [self initWithNibName:nil bundle:nil]; }
 - (instancetype)initWithNibName:(NSString *)name bundle:(NSBundle *)bundle {
-    if ((self = [super initWithNibName:name bundle:bundle])) { _sheetTitle = @""; _keyboardFrame = CGRectNull; self.modalPresentationStyle = UIModalPresentationCustom; self.transitioningDelegate = self; }
+    if ((self = [super initWithNibName:name bundle:bundle])) { _sheetTitle = @""; _headerAccessoryButtons = @[]; _keyboardFrame = CGRectNull; self.modalPresentationStyle = UIModalPresentationCustom; self.transitioningDelegate = self; }
     return self;
+}
+- (void)setSheetTitle:(NSString *)sheetTitle {
+    _sheetTitle = [sheetTitle copy]; self.headerTitleLabel.text = _sheetTitle;
 }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.backgroundColor = SHDWBackground(); self.view.layer.cornerRadius = 24; self.view.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner; self.view.clipsToBounds = YES;
@@ -78,18 +82,29 @@ UIButton *SHDWSheetPrimaryButton(NSString *title, NSString *symbol, id target, S
     UIView *header = [UIView new];
     UIImageView *icon = [[UIImageView alloc] initWithImage:self.sheetIcon]; icon.contentMode = UIViewContentModeScaleAspectFit; icon.layer.cornerRadius = 4.5; icon.clipsToBounds = YES;
     UILabel *title = [UILabel new]; title.text = self.sheetTitle; title.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleHeadline] scaledFontForFont:[UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]]; title.adjustsFontForContentSizeCategory = YES; title.textColor = SHDWInk(); title.numberOfLines = 2; title.accessibilityTraits |= UIAccessibilityTraitHeader;
+    self.headerTitleLabel = title;
     self.closeButton = [SHDWSheetCloseButton new]; [self.closeButton setImage:SHDWSymbol(@"xmark", 12) forState:UIControlStateNormal]; self.closeButton.tintColor = UIColor.secondaryLabelColor; self.closeButton.backgroundColor = UIColor.tertiarySystemFillColor; self.closeButton.layer.cornerRadius = 12; self.closeButton.accessibilityLabel = SHDWText(@"Close"); [self.closeButton addTarget:self action:@selector(close) forControlEvents:UIControlEventTouchUpInside];
     self.contentStack = [[UIStackView alloc] initWithArrangedSubviews:@[header]]; self.contentStack.axis = UILayoutConstraintAxisVertical; self.contentStack.spacing = 12;
     self.scroll = [UIScrollView new]; self.scroll.alwaysBounceVertical = NO;
     for (UIView *view in @[handle, self.scroll]) { view.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:view]; }
     self.contentStack.translatesAutoresizingMaskIntoConstraints = NO; [self.scroll addSubview:self.contentStack];
     for (UIView *view in @[icon, title, self.closeButton]) { view.translatesAutoresizingMaskIntoConstraints = NO; [header addSubview:view]; }
+    UIView *trailingControl = self.closeButton;
+    for (UIButton *button in [self.headerAccessoryButtons reverseObjectEnumerator]) {
+        button.translatesAutoresizingMaskIntoConstraints = NO; [header addSubview:button];
+        [NSLayoutConstraint activateConstraints:@[
+            [button.trailingAnchor constraintEqualToAnchor:trailingControl.leadingAnchor constant:trailingControl == self.closeButton ? -10 : 0],
+            [button.centerYAnchor constraintEqualToAnchor:self.closeButton.centerYAnchor],
+            [button.widthAnchor constraintEqualToConstant:44], [button.heightAnchor constraintEqualToConstant:44]
+        ]];
+        trailingControl = button;
+    }
     [NSLayoutConstraint activateConstraints:@[
         [handle.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:4], [handle.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor], [handle.widthAnchor constraintEqualToConstant:34], [handle.heightAnchor constraintEqualToConstant:3],
         [self.scroll.topAnchor constraintEqualToAnchor:handle.bottomAnchor constant:4], [self.scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:18], [self.scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-18], [self.scroll.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-BottomSpacing],
         [self.contentStack.topAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.topAnchor], [self.contentStack.bottomAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.bottomAnchor], [self.contentStack.leadingAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.leadingAnchor], [self.contentStack.trailingAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.trailingAnchor], [self.contentStack.widthAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.widthAnchor],
-        [header.heightAnchor constraintGreaterThanOrEqualToConstant:28], [icon.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:2], [icon.centerYAnchor constraintEqualToAnchor:header.centerYAnchor], [icon.widthAnchor constraintEqualToConstant:self.sheetIcon ? 18 : 0], [icon.heightAnchor constraintEqualToConstant:22],
-        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:self.sheetIcon ? 12 : 0], [title.centerYAnchor constraintEqualToAnchor:header.centerYAnchor], [title.topAnchor constraintGreaterThanOrEqualToAnchor:header.topAnchor], [title.bottomAnchor constraintLessThanOrEqualToAnchor:header.bottomAnchor], [title.trailingAnchor constraintLessThanOrEqualToAnchor:self.closeButton.leadingAnchor constant:-8],
+        [header.heightAnchor constraintGreaterThanOrEqualToConstant:self.headerAccessoryButtons.count ? 44 : 28], [icon.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:2], [icon.centerYAnchor constraintEqualToAnchor:header.centerYAnchor], [icon.widthAnchor constraintEqualToConstant:self.sheetIcon ? 18 : 0], [icon.heightAnchor constraintEqualToConstant:22],
+        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:self.sheetIcon ? 12 : 0], [title.centerYAnchor constraintEqualToAnchor:header.centerYAnchor], [title.topAnchor constraintGreaterThanOrEqualToAnchor:header.topAnchor], [title.bottomAnchor constraintLessThanOrEqualToAnchor:header.bottomAnchor], [title.trailingAnchor constraintLessThanOrEqualToAnchor:trailingControl.leadingAnchor constant:-8],
         [self.closeButton.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-2], [self.closeButton.centerYAnchor constraintEqualToAnchor:header.centerYAnchor], [self.closeButton.widthAnchor constraintEqualToConstant:24], [self.closeButton.heightAnchor constraintEqualToConstant:24]
     ]];
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter; [center addObserver:self selector:@selector(keyboardChanged:) name:UIKeyboardWillChangeFrameNotification object:nil]; [center addObserver:self selector:@selector(keyboardChanged:) name:UIKeyboardWillHideNotification object:nil];

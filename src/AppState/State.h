@@ -62,6 +62,7 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 - (nullable NSDictionary *)restoreBundle:(NSString *)bundleID idfv:(NSString *)idfv
                             saveCurrent:(BOOL)saveCurrent error:(NSError **)error;
 - (BOOL)editBundle:(NSString *)bundleID idfv:(NSString *)idfv metadata:(NSDictionary *)metadata error:(NSError **)error;
+- (BOOL)setDeleteLockedBundle:(NSString *)bundleID idfv:(NSString *)idfv locked:(BOOL)locked error:(NSError **)error;
 - (BOOL)deleteBundle:(NSString *)bundleID idfv:(NSString *)idfv error:(NSError **)error;
 @end
 NS_ASSUME_NONNULL_END

@@ -310,3 +310,16 @@
 
 
 "TLS fingerprint" = "TLS指纹";
+"Backup details" = "备份详情";
+"Show backup details" = "显示备份详情";
+"Show backup actions" = "显示备份操作";
+"Not set" = "未设置";
+"Backup date" = "备份时间";
+"Backup size" = "备份大小";
+"Error" = "错误";
+"Lock backup" = "锁定备份";
+"Unlock backup" = "解锁备份";
+"Backup locked" = "备份已锁定";
+"Invalid deletion lock option" = "无效的备份删除锁参数";
+"Unlock this backup before deleting it." = "备份已锁定，请先解锁再删除。";
+"Invalid backup deletion lock." = "备份删除锁数据无效。";

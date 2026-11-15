@@ -265,7 +265,8 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
                 @"TEXT NOT NULL,note TEXT NOT NULL,date REAL NOT NULL,version TEXT NOT NULL,build TEXT NOT "
                 @"NULL,digest TEXT,owner TEXT NOT NULL CHECK(owner IN ('phone','rv')),size INTEGER NOT NULL "
                 @"CHECK(size>=0),Fingerprint_Data BLOB,Fingerprint_Config TEXT CHECK(Fingerprint_Config IS "
-                @"NULL OR json_valid(Fingerprint_Config)),status TEXT NOT NULL,PRIMARY KEY(bundleID,idfv)); "
+                @"NULL OR json_valid(Fingerprint_Config)),status TEXT NOT NULL,"
+                @"deleteLocked INTEGER NOT NULL DEFAULT 0 CHECK(deleteLocked IN(0,1)),PRIMARY KEY(bundleID,idfv)); "
                 @"CREATE INDEX IF NOT EXISTS backup_entries_date ON backup_entries(bundleID,date DESC,idfv); "
                 @"CREATE INDEX IF NOT EXISTS backup_entries_region ON "
                 @"backup_entries(bundleID,json_extract(Fingerprint_Config,'$.Localization.Region')); "
@@ -402,6 +403,9 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
     for (NSString *key in @[ @"bundleID", @"idfv", @"title", @"note", @"version", @"build", @"status" ])
         if (![entry[key] isKindOfClass:NSString.class])
             return IndexError(error, @"Invalid backup index entry.");
+    id deleteLocked = entry[@"deleteLocked"];
+    if (deleteLocked && CFGetTypeID((__bridge CFTypeRef)deleteLocked) != CFBooleanGetTypeID())
+        return IndexError(error, @"Invalid indexed deletion lock.");
     id size = entry[@"size"];
     if (![entry[@"date"] isKindOfClass:NSDate.class] || !isfinite([entry[@"date"] timeIntervalSince1970]) ||
         ![size isKindOfClass:NSNumber.class] || !isfinite([size doubleValue]) ||
@@ -431,7 +435,7 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
     sqlite3_stmt *s =
         [self prepare:@"INSERT OR REPLACE INTO "
                       @"backup_entries(bundleID,idfv,title,note,date,version,build,digest,owner,size,"
-                      @"Fingerprint_Data,Fingerprint_Config,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                      @"Fingerprint_Data,Fingerprint_Config,status,deleteLocked) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                values:@[]
                 error:error];
     if (!s)
@@ -441,7 +445,7 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
         entry[@"build"], entry[@"digest"] ?: NSNull.null, entry[@"owner"] ?: @"phone", entry[@"size"],
         data ?: NSNull.null,
         json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : NSNull.null,
-        entry[@"status"]
+        entry[@"status"], deleteLocked ?: @NO
     ];
     for (NSUInteger i = 0; i < values.count; i++) {
         if (Bind(s, (int)i + 1, values[i]) != SQLITE_OK) {
@@ -485,9 +489,9 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
     NSMutableDictionary *entry = [NSMutableDictionary new];
     NSArray *keys = @[
         @"bundleID", @"idfv", @"title", @"note", @"date", @"version", @"build", @"digest", @"owner", @"size",
-        @"Fingerprint_Data", @"Fingerprint_Config", @"status"
+        @"Fingerprint_Data", @"Fingerprint_Config", @"status", @"deleteLocked"
     ];
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 14; i++) {
         if (sqlite3_column_type(s, i) == SQLITE_NULL)
             continue;
         id value = nil;
@@ -495,6 +499,8 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
             value = [NSDate dateWithTimeIntervalSince1970:sqlite3_column_double(s, i)];
         else if (i == 9)
             value = @(sqlite3_column_int64(s, i));
+        else if (i == 13)
+            value = sqlite3_column_int(s, i) ? @YES : @NO;
         else if (i == 10) {
             if (includeData) {
                 NSData *d = [NSData dataWithBytes:sqlite3_column_blob(s, i)

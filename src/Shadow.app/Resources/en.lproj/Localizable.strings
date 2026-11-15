@@ -310,3 +310,16 @@
 
 
 "TLS fingerprint" = "TLS fingerprint";
+"Backup details" = "Backup details";
+"Show backup details" = "Show backup details";
+"Show backup actions" = "Show backup actions";
+"Not set" = "Not set";
+"Backup date" = "Backup date";
+"Backup size" = "Backup size";
+"Error" = "Error";
+"Lock backup" = "Lock backup";
+"Unlock backup" = "Unlock backup";
+"Backup locked" = "Backup locked";
+"Invalid deletion lock option" = "Invalid deletion lock option";
+"Unlock this backup before deleting it." = "Unlock this backup before deleting it.";
+"Invalid backup deletion lock." = "Invalid backup deletion lock.";

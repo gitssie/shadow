@@ -174,6 +174,8 @@ verify-backups: verify-app-state
 	python3 verify-backup-service.py
 	python3 verify-backup-query-request.py
 	python3 verify-backup-pagination.py
+	python3 verify-backup-details.py
+	python3 verify-backup-delete-lock.py
 	python3 verify-backup-keychain.py
 	python3 verify-state-backend.py
 

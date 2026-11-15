@@ -58,9 +58,17 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
         completion(result, error);
     }];
 }
+- (void)setDeleteLocked:(BOOL)locked forIDFV:(NSString *)idfv completion:(SHDWBackupCompletion)completion {
+    [self performAction:@"setDeleteLocked" request:@{@"idfv":idfv, @"deleteLocked":locked ? @YES : @NO} progress:nil completion:^(id result, NSError *error) {
+        if (result && (![result isKindOfClass:NSDictionary.class] || ![result[@"idfv"] isEqual:idfv] || ![result[@"deleteLocked"] isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)result[@"deleteLocked"]) != CFBooleanGetTypeID())) {
+            result = nil; error = BackupError(6, @"The backup helper returned an invalid result.", NO);
+        }
+        completion(result, error);
+    }];
+}
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(SHDWBackupProgress)progress completion:(SHDWBackupCompletion)completion {
     BOOL readOnly = [@[@"catalog", @"queryCatalog", @"recheck"] containsObject:action]; NSError *failure = nil;
-    NSSet *allowed = [NSSet setWithArray:@[@"catalog", @"queryCatalog", @"backup", @"restore", @"edit", @"delete", @"recheck"]];
+    NSSet *allowed = [NSSet setWithArray:@[@"catalog", @"queryCatalog", @"backup", @"restore", @"edit", @"setDeleteLocked", @"delete", @"recheck"]];
     if (![allowed containsObject:action] || !self.bundleIdentifier.length || ![request isKindOfClass:NSDictionary.class]) failure = BackupError(2, @"Invalid backup request.", NO);
     @synchronized(self) {
         if (!failure && self.running) failure = BackupError(7, @"An operation is already running.", NO);

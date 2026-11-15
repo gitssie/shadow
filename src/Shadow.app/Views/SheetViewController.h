@@ -4,6 +4,7 @@ FOUNDATION_EXPORT UIButton *SHDWSheetPrimaryButton(NSString *title, NSString *sy
 @interface SHDWSheetViewController : UIViewController
 @property(nonatomic, copy) NSString *sheetTitle;
 @property(nonatomic, strong, nullable) UIImage *sheetIcon;
+@property(nonatomic, copy) NSArray<UIButton *> *headerAccessoryButtons;
 @property(nonatomic, strong, readonly) UIStackView *contentStack;
 @property(nonatomic, strong, readonly) UIButton *closeButton;
 - (void)requestSheetLayout;
