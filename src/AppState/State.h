@@ -14,6 +14,8 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 - (nullable NSDictionary *)resolveBundle:(NSString *)bundleID error:(NSError **)error;
 - (BOOL)stopTarget:(NSDictionary *)target error:(NSError **)error;
 - (BOOL)assertStopped:(NSDictionary *)target error:(NSError **)error;
+// Keep process/container authority valid throughout the minimum settling interval.
+- (BOOL)waitForStoppedTarget:(NSDictionary *)target duration:(NSTimeInterval)duration error:(NSError **)error;
 - (BOOL)flushPreferencesForTarget:(NSDictionary *)target error:(NSError **)error;
 - (nullable NSString *)currentVendorIdentifierForTarget:(NSDictionary *)target error:(NSError **)error;
 - (nullable NSDictionary *)capturePreferencesForTarget:(NSDictionary *)target error:(NSError **)error;
