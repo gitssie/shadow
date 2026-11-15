@@ -1,6 +1,7 @@
 #import <Shadow/Settings.h>
 #import <Shadow/FingerprintState.h>
 #import <Shadow/FingerprintOwner.h>
+#import <Shadow/HomeVolumeCreationTime.h>
 
 #import "../common.h"
 #import "SettingsMigration.h"
@@ -73,6 +74,10 @@ static BOOL SHDWValidFingerprintData(id value) {
   id bootUUID = value[@"BootSessionUUID"];
   id nativeBootUUID = value[@"NativeBootSessionUUID"];
   id vendorIdentifier = value[@"VendorIdentifier"];
+  id homeCreation = value[@"HomeVolumeCreationTime"];
+  if (homeCreation && (![homeCreation isKindOfClass:NSNumber.class] ||
+      !isfinite([homeCreation doubleValue]) || [homeCreation doubleValue] <= 0 ||
+      floor([homeCreation doubleValue]) != [homeCreation doubleValue])) return NO;
   if (vendorIdentifier) {
     if (![vendorIdentifier isKindOfClass:[NSString class]]) {
       return NO;
@@ -504,6 +509,14 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
     if (!generated) {
       return NO;
     }
+    // Only explicit refresh adds this optional input; normal reads and legacy
+    // fingerprint repair preserve the stored value (or its absence).
+    NSDictionary *homeTime = SHDWGenerateHomeVolumeCreationTime(
+        NSDate.date, NSTimeZone.localTimeZone, nil);
+    if (!homeTime) return NO;
+    NSMutableDictionary *withHomeTime = [generated mutableCopy];
+    [withHomeTime addEntriesFromDictionary:homeTime];
+    generated = withHomeTime;
     id previousData = app[@"Fingerprint_Data"];
     NSNumber *previousMemory = [previousData isKindOfClass:NSDictionary.class]
         ? previousData[@"MemoryDelta"] : nil;
