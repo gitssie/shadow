@@ -10,6 +10,8 @@ source = (framework / "Core+Utilities.m").read_text()
 start = source.index("+ (NSString *)getStandardizedPath:")
 end = source.index("// code from Choicy", start)
 method = source[start:end]
+aliases = (framework / "Headers/Shadow/Core+Utilities.h").read_text()
+aliases = aliases[aliases.index("static inline NSString *SHDWPathApplyingRootAliases"):aliases.index("@interface Shadow")]
 helper = source[source.index("static NSString *shdwCanonicalStockCryptexPath"):source.index("@implementation")] if "static NSString *shdwCanonicalStockCryptexPath" in source else ""
 prefix = r'''
 #import <Foundation/Foundation.h>
@@ -52,7 +54,7 @@ int main(void) { @autoreleasepool {
 with tempfile.TemporaryDirectory(prefix="shadow-cryptex-standardize-") as directory:
     directory = Path(directory)
     fixture, binary = directory / "fixture.m", directory / "fixture"
-    fixture.write_text(prefix + helper + "\n@implementation Shadow\n" + method + cases)
+    fixture.write_text(prefix + aliases + helper + "\n@implementation Shadow\n" + method + cases)
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-framework", "Foundation", "-I", str(framework / "Headers"), str(fixture), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

@@ -195,14 +195,14 @@ static BOOL shdw_url_resources_paths_enabled, restrictedPath;
 static unsigned restrictionCalls;
 @interface Shadow : NSObject
 + (NSError *)fileNoSuchFileErrorForURL:(id)url;
-+ (NSError *)fileErrorWithCode:(NSInteger)code path:(NSString *)path url:(NSURL *)url;
++ (NSError *)fileErrorWithCode:(NSInteger)code path:(NSString *)path url:(id)url;
 - (BOOL)isPathRestricted:(NSString *)path options:(NSDictionary *)options;
 @end
 @implementation Shadow
 + (NSError *)fileNoSuchFileErrorForURL:(id)url {
     (void)url; return [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadNoSuchFileError userInfo:nil];
 }
-+ (NSError *)fileErrorWithCode:(NSInteger)code path:(NSString *)path url:(NSURL *)url {
++ (NSError *)fileErrorWithCode:(NSInteger)code path:(NSString *)path url:(id)url {
     (void)path; (void)url; return [NSError errorWithDomain:NSCocoaErrorDomain code:code userInfo:nil];
 }
 - (BOOL)isPathRestricted:(NSString *)path options:(NSDictionary *)options {

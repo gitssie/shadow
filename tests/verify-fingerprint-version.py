@@ -42,7 +42,7 @@ libc_installer = (root / "src/ShadowCore.dylib/hooks/Universal/libc.x").read_tex
 descriptor_end = libc_installer.index("} shdw_hook_desc_t;") + len("} shdw_hook_desc_t;")
 descriptor_start = libc_installer.rindex("typedef struct {", 0, descriptor_end)
 descriptor = libc_installer[descriptor_start:descriptor_end]
-assert re.search(r'\{\s*"uname",\s*\(void\*\)&replaced_uname,\s*\(void\*\*\)&original_uname,\s*ANTIDBG,\s*0\s*\}', libc_installer)
+assert re.search(r'\{\s*"uname",\s*\(void\*\)&replaced_uname,\s*\(void\*\*\)&original_uname,\s*ANTIDBG,\s*0,\s*SHDW_HOOK_PROC_LIST_REBIND\s*\}', libc_installer)
 fallback = function(libc_installer, "static void shdw_libc_rebind_proclist(")
 replay = function(libc, "void shdw_universal_antidebugging_rebind_image(")
 assert replay.count('hookRebindSymbol:@"uname"') == 1
@@ -270,7 +270,9 @@ static void replaced_issetugid(void) {}
 static void *replayDlsym(void *handle, const char *name) { (void)handle; (void)name; return NULL; }
 #define dlsym replayDlsym
 '''
-install_source = install_prefix + descriptor + "\n" + fallback + "\n" + replay + "\n#undef dlsym\n"
+flag_start = libc_installer.rfind("enum {", 0, libc_installer.index("SHDW_HOOK_PROC_LIST_REBIND"))
+flag_end = libc_installer.index("};", flag_start) + 2
+install_source = install_prefix + libc_installer[flag_start:flag_end] + "\n" + descriptor + "\n" + fallback + "\n" + replay + "\n#undef dlsym\n"
 
 suffix = r'''
 static const char expectedKernel[] = "Darwin Kernel Version 24.6.0: Tue Aug 12 00:02:59 PDT 2025; root:xnu-11417.140.69.700.6~5/RELEASE_ARM64_T8110";
@@ -594,8 +596,9 @@ static void verify_cfnetwork_kernel(void) {
 }
 static void verify_uname_installs(void) {
     SHDWHookSession *session = [SHDWHookSession new];
-    shdw_hook_desc_t descriptor = {"uname", (void *)replaced_uname,
-        (void **)&original_uname, SHADW_HOOK_GROUP_ANTIDEBUG, 0};
+    shdw_hook_desc_t descriptor = {.symbol = "uname", .replacement = (void *)replaced_uname,
+        .original = (void **)&original_uname, .installGroups = SHADW_HOOK_GROUP_ANTIDEBUG,
+        .flags = SHDW_HOOK_PROC_LIST_REBIND};
     unsigned requests = rebindRequests;
     // Missing imports or a refused rebind must retain a callable original.
     original_uname = NULL; rebindPredecessor = NULL; rebindSuccess = NO;
@@ -609,7 +612,7 @@ static void verify_uname_installs(void) {
     shdw_libc_rebind_proclist(session, &descriptor, 0, (void *)nativeUname);
     descriptor.original = NULL;
     shdw_libc_rebind_proclist(session, &descriptor, SHADW_HOOK_GROUP_ANTIDEBUG, (void *)nativeUname);
-    descriptor.original = (void **)&original_uname; descriptor.symbol = "unknown";
+    descriptor.original = (void **)&original_uname; descriptor.flags = 0;
     shdw_libc_rebind_proclist(session, &descriptor, SHADW_HOOK_GROUP_ANTIDEBUG, (void *)nativeUname);
     assert(rebindRequests == requests);
     shdw_universal_antidebugging_rebind_image(session, NULL);

@@ -26,6 +26,10 @@ and do not require Theos or the `THEOS` environment variable.
 | lane/package contract | `sh tests/verify-lane-contract.sh` |
 | binary compatibility checker (synthetic tool output) | `make -C tests verify-binary-compat` |
 | hook→engine matrix drift | `sh tests/verify-hook-matrix.sh` |
+| matrix stale-entry detector | `make -C tests hook-matrix-selftest` |
+| accessx alias publication and strict leaf admission | `make -C tests verify-accessx-admission` |
+| Foundation bundle and external path policy (macOS runtime) | `make -C tests verify-foundation-path-policy` |
+| single plugin registry | `make -C tests verify-plugin-table` |
 | raw syscall metadata | `sh tests/verify-syscall-meta.sh` |
 | settings structure | `sh tests/verify-settings-structure.sh` |
 | JB-identifier data contract | `make -C tests jb-identifiers` |

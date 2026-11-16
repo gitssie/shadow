@@ -93,7 +93,7 @@ static int managerStat(const char *path, struct stat *value) {
 }
 #define sysctlbyname managerSysctl
 #define stat(path, value) managerStat(path, value)
-NSDictionary *SHDWDefaultHookSettings(void) { return @{SHDWUniversalFingerprintID:@NO}; }
+NSDictionary *SHDWDefaultHookSettings(void) { return @{SHDWUniversalFingerprintID:@YES}; }
 '''
 source += without_imports(framework / "SettingsMigration.m")
 source += "\n" + without_imports(framework / "Settings.m")
@@ -664,7 +664,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
   assert(![[defaults dictionaryForKey:backedBundle][@"Fingerprint_Data"] isEqual:backedData]);
   assert([NSFileManager.defaultManager removeItemAtPath:backupFixtureRoot error:&error]);
   puts("fingerprint configuration: validation, hardware catalog, literal radio selections, defaults, read-only legacy, locks, data isolation and rollback passed");
-  puts("fingerprint manager: default off, registration, persistence, refresh, digest stability, isolation and removal passed");
+  puts("fingerprint manager: registered default on, registration, persistence, refresh, digest stability, isolation and removal passed");
 } }
 '''
 with tempfile.TemporaryDirectory(prefix="shadow-manager-tests-") as tmp:

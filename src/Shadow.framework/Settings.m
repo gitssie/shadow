@@ -7,12 +7,12 @@
 
 #import "../common.h"
 #import "SettingsMigration.h"
-#import <Shadow/HookConfiguration.h>
 #import <Shadow/JBPath.h>
 #include <math.h>
 #include <sys/sysctl.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#import <Shadow/SHDWPlugin.h>
 
 static NSString *const kSHDWDetectorRunnerOverridesKey =
     @"Test_DetectorOverrides";
@@ -617,16 +617,14 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
 
   // Test profiles are file-authoritative so cfprefsd cannot retain an old
   // arm while the device driver swaps the backing plist.
-  if ([bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] &&
-      filePreferences) {
+  if (SHDWIsHarnessBundleID(bundleIdentifier) && filePreferences) {
     app_settings = fileAppSettings;
   }
 
   BOOL enabled = SHDWApplicationEnabled(
       app_settings, [userDefaults boolForKey:SHDWGlobalEnabledID],
       [userDefaults boolForKey:SHDWSingleToggleMigrationID],
-      [bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] ||
-          bundleIdentifier.length == 0);
+      SHDWIsHarnessBundleID(bundleIdentifier) || bundleIdentifier.length == 0);
   result[SHDWAppEnabledID] = @(enabled);
   result[SHDWUniversalFingerprintID] =
       @(enabled && SHDWFingerprintApplicationEnabled(app_settings) &&
@@ -654,29 +652,19 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
     // adapter for the harness's embedded detectors without weakening
     // normal app profiles.
     NSDictionary *overrides =
-        [bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] &&
+        SHDWIsHarnessBundleID(bundleIdentifier) &&
                 [app_settings[kSHDWDetectorRunnerOverridesKey]
                     isKindOfClass:[NSDictionary class]]
             ? app_settings[kSHDWDetectorRunnerOverridesKey]
             : nil;
-    for (NSString *key in @[
-           SHDWAdapterDeviceCheckID, SHDWAdapterFreeRASPID,
-           SHDWAdapterDeviceSecurityKitID, SHDWAdapterIOSSecuritySuiteID
-         ]) {
-      id value = overrides[key];
-      if ([value isKindOfClass:[NSNumber class]]) {
-        result[key] = @([value boolValue]);
+    for (NSString *key in overrides) {
+      // Adapter keys only: a test runner can disable its embedded SDK, never
+      // the universal groups every profile depends on.
+      if (![key hasPrefix:@"Adapter_"] || result[key] == nil ||
+          ![overrides[key] isKindOfClass:[NSNumber class]]) {
+        continue;
       }
-    }
-
-    // Harness normally records a universal baseline before SDK-specific
-    // hooks load. Its explicit test mode may opt into a fully prearmed
-    // detector run without changing any other app's behavior.
-    if ([bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"]) {
-      id baseline = [app_settings objectForKey:SHDWUniversalHarnessBaselineID];
-      if (baseline != nil) {
-        result[SHDWUniversalHarnessBaselineID] = baseline;
-      }
+      result[key] = @([overrides[key] boolValue]);
     }
   }
 

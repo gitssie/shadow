@@ -171,6 +171,7 @@ __BRANCH_FN__
 #define SHADW_RAW_CAT_AT 2
 #define SHADW_RAW_CAT_KEVENT 3
 #define SHADW_RAW_CAT_KEVENT64 4
+#define SHADW_RAW_CAT_ACCESSX 5
 static int shdw_raw_syscall_category(int n) {
     if(n == 5) return SHADW_RAW_CAT_PATH;
     if(n == 463) return SHADW_RAW_CAT_AT;

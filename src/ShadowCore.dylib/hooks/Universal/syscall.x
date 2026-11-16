@@ -11,6 +11,7 @@
 #import <limits.h>
 #import <sys/mount.h>
 #import <sys/event.h>
+#import <sys/mman.h>
 
 // Forward declaration: shared post-success csops policy, defined in the
 // csops section below (used by the raw SYS_csops dispatch case).
@@ -289,7 +290,7 @@ static long shdw_fwd_XATTR4(int number, va_list args) {
 static long shdw_fwd_ACCESSEXT(int number, va_list args) {
     // Real signature: (entries, size_t, results, uid_t) — a binary
     // buffer, NOT a path string. Forward the slots untouched; the
-    // inspection in the dispatch deliberately skips this number (CAT_NONE).
+    // dispatch walks the buffer after success (CAT_ACCESSX).
     intptr_t a1 = va_arg(args, intptr_t);
     intptr_t a2 = va_arg(args, intptr_t);
     intptr_t a3 = va_arg(args, intptr_t);
@@ -512,7 +513,7 @@ static long shdw_fwd_PROCINFO(int number, va_list args) {
 
 static long shdw_syscall_forward(int number, va_list args) {
     switch(number) {
-#define SHADW_RAWSYSCALL(NUM, ARITY, CAT, FWD) case NUM: return shdw_fwd_##FWD(NUM, args);
+#define SHADW_RAWSYSCALL(NUM, CAT, FWD, REWRITE, FD) case NUM: return shdw_fwd_##FWD(NUM, args);
 #include "RawSyscalls.def"
 #undef SHADW_RAWSYSCALL
         default:
@@ -544,11 +545,23 @@ static int shdw_raw_sysctl_original(int* name, u_int namelen, void* oldp, size_t
 // svc_patch.x).
 shdw_raw_syscall_category_t shdw_raw_syscall_category(int number) {
     switch(number) {
-#define SHADW_RAWSYSCALL(NUM, ARITY, CAT, FWD) case NUM: return SHADW_RAW_CAT_##CAT;
+#define SHADW_RAWSYSCALL(NUM, CAT, FWD, REWRITE, FD) case NUM: return SHADW_RAW_CAT_##CAT;
 #include "RawSyscalls.def"
 #undef SHADW_RAWSYSCALL
         default:
             return SHADW_RAW_CAT_NONE;
+    }
+}
+
+// Rows that return a live fd on success. Generated from the registry so a new
+// open-family syscall cannot miss the after-success alias verification.
+static BOOL shdw_raw_returns_fd(int number) {
+    switch(number) {
+#define SHADW_RAWSYSCALL(NUM, CAT, FWD, REWRITE, FD) case NUM: return FD != 0;
+#include "RawSyscalls.def"
+#undef SHADW_RAWSYSCALL
+        default:
+            return NO;
     }
 }
 
@@ -564,7 +577,7 @@ shdw_raw_syscall_category_t shdw_raw_syscall_category(int number) {
 // entries are simply never revisited. Reachable only from the
 // external-caller-gated after-success path in shdw_syscall_dispatch — the
 // classification is decided there, never re-read here.
-static long shdw_dirents_filtered(char* buf, long count, const char* dir) {
+long shdw_dirents_filtered(char* buf, long count, const char* dir) {
     char joined[PATH_MAX * 2];
     long in = 0;
     long out = 0;
@@ -699,15 +712,24 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
     void* gb_buf = NULL;
     size_t gb_size = 0;
 
+    // Raw access_extended policy args (hoisted; used after the forward).
+    void* ax_entries = NULL;
+    size_t ax_size = 0;
+    int* ax_results = NULL;
+    uid_t ax_uid = 0;
+    int ax_private_results[128];
+
     // Caller classification is read at the HOOK SITE (replaced_syscall /
     // replaced___syscall) and threaded in: this dispatch is a real, non-inlined
     // function with two callers, so an isCallerExternal() read HERE would see
     // the trampoline's own (ShadowCore) return address and misclassify every
     // caller as internal. Same explicit-caller shape the svc trampoline uses.
     shdw_raw_syscall_category_t cat = shdw_raw_syscall_category(number);
-    // Handle single pathname syscalls. NOTE: SYS_access_extended is NOT
-    // inspected — its first argument is a binary entries buffer, not a C
-    // string; it is still forwarded with its exact arity below (CAT_NONE).
+    // Handle single pathname syscalls. NOTE: SYS_access_extended's first
+    // argument is a binary entries buffer, not a C string: the ACCESSX case
+    // only captures the buffer/results pointers here and walks them AFTER
+    // success, rewriting hidden entries' slots (never pre-denying a mixed
+    // batch).
     // The category switch replaces the per-number membership chains: the
     // number→category mapping is generated from hooks/RawSyscalls.def.
     if(ext) {
@@ -752,9 +774,8 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
                 }
             } break;
 
-            // Phase 1 mutators: plain-path deny ENOENT (rmdir contract),
-            // fd variants resolve via F_GETPATH + EBADF (futimes contract),
-            // fail open when the fd has no nameable path.
+            // Plain-path mutators deny ENOENT; fd variants resolve via
+            // F_GETPATH + EBADF (futimes contract), fail open when unnamed.
             case SHADW_RAW_CAT_PATH3I:
             case SHADW_RAW_CAT_PATHMD:
             case SHADW_RAW_CAT_PATHOFF: {
@@ -859,12 +880,13 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
                 int dstfd = (int) va_arg(inspect, intptr_t);
                 const char* dst = va_arg(inspect, const char *);
 
-                if(shdw_fd_path_restricted(srcfd)) {
-                    errno = EBADF;
+                BOOL fclone = number == SYS_fclonefileat;
+                if(fclone ? shdw_fd_visible_path_restricted(srcfd)
+                          : shdw_fd_path_restricted(srcfd)) {
+                    errno = fclone ? ENOENT : EBADF;
                     va_end(inspect);
                     return -1;
                 }
-
                 if(shdw_at_path_denied(dstfd, dst)) {
                     va_end(inspect);
                     return -1;
@@ -1164,10 +1186,17 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
             case SHADW_RAW_CAT_PATH: {
                 const char* pathname = va_arg(inspect, const char *);
 
-                // Same predicate PAIR the libc path hooks apply: the ruleset
-                // AND the external-hidden set, so a raw open/stat/lstat/access
-                // cannot see an object the libc wrappers report absent.
-                if(shdw_path_is_external_hidden(pathname) || [_shadow isCPathRestricted:pathname]) {
+                // Rmdir keeps the ruleset-only nofollow lane; external-hidden
+                // mutation filtering is not observable on the read-only mount.
+                if(number == SYS_rmdir) {
+                    if(!shdw_path_is_main_bundle_exempt(pathname)
+                        && shdw_path_ruleset_denied_nofollow(pathname)) {
+                        errno = ENOENT;
+                        va_end(inspect);
+                        return -1;
+                    }
+                } else if(shdw_path_is_external_hidden(pathname)
+                          || [_shadow isCPathRestricted:pathname]) {
                     errno = ENOENT;
                     va_end(inspect);
                     return -1;
@@ -1195,6 +1224,15 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
                 sfs_buf = va_arg(inspect, struct statfs *);
             } break;
 
+            case SHADW_RAW_CAT_ACCESSX:
+                // argument (uses the real credential); capture all arguments
+                // for forwarding and after-success filtering.
+                ax_entries = va_arg(inspect, void *);
+                ax_size = va_arg(inspect, size_t);
+                ax_results = va_arg(inspect, int *);
+                ax_uid = (uid_t) va_arg(inspect, intptr_t);
+                break;
+
             case SHADW_RAW_CAT_NONE:
             case SHADW_RAW_CAT_PTRACE:
                 break;
@@ -1213,10 +1251,32 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
 
     va_end(inspect);
 
-    long result = ext && cat == SHADW_RAW_CAT_SYSCTL
-        ? shdw_raw_sysctl_fingerprint_forward(number, args, sysctl_mib, sysctl_miblen,
-            sysctl_oldp, sysctl_oldlenp, sysctl_newp, sysctl_newlen, caller)
-        : shdw_syscall_forward(number, args);
+    int ax_caller_errno = errno;
+    void *ax_snapshot = NULL;
+    shdw_accessx_snapshot_status_t ax_snapshot_status =
+        SHDW_ACCESSX_SNAPSHOT_MALFORMED;
+    BOOL ax_external = ext && cat == SHADW_RAW_CAT_ACCESSX;
+    if(ax_external) {
+        ax_snapshot_status =
+            shdw_accessx_snapshot(ax_entries, ax_size, &ax_snapshot);
+        if(ax_snapshot_status == SHDW_ACCESSX_SNAPSHOT_UNAVAILABLE) {
+            errno = ENOENT;
+            return -1;
+        }
+    }
+
+    long result;
+    if(ax_external) {
+        const void *input = ax_snapshot_status == SHDW_ACCESSX_SNAPSHOT_READY
+            ? ax_snapshot : ax_entries;
+        result = original_syscall(number, input, ax_size,
+                                  ax_private_results, ax_uid);
+    } else {
+        result = ext && cat == SHADW_RAW_CAT_SYSCTL
+            ? shdw_raw_sysctl_fingerprint_forward(number, args, sysctl_mib, sysctl_miblen,
+                sysctl_oldp, sysctl_oldlenp, sysctl_newp, sysctl_newlen, caller)
+            : shdw_syscall_forward(number, args);
+    }
 
     // After-success policies — same as the typed hooks, only on valid
     // success and only for app-origin callers.
@@ -1225,10 +1285,8 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
         // the handed-out fd, not the request spelling, decides.
         // Deterministic: the fd pins the object. (Raw stat/access keep
         // pre-check-only windows — noted as a residual.)
-        if((number == SYS_open || number == SYS_open_nocancel ||
-            number == SYS_open_extended || number == SYS_open_dprotected_np ||
-            number == SYS_openat || number == SYS_openat_nocancel) &&
-           result >= 0 && shdw_fd_names_hidden((int)result)) {
+        if(shdw_raw_returns_fd(number) && result >= 0 &&
+           shdw_fd_names_hidden((int)result)) {
             close((int)result);
             errno = ENOENT;
             return -1;
@@ -1365,6 +1423,31 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
                 }
             } break;
 
+            case SHADW_RAW_CAT_ACCESSX:
+                // Raw SYS_access_extended: the kernel answered every entry
+                // and copied the results out. Rewrite ONLY the hidden
+                // entries' slots to the ENOENT the libc access lane
+                // reports; the mixed batch's legitimate results and the
+                // caller's errno stay as the kernel left them.
+                if(result == 0 && ax_external) {
+                    if(ax_snapshot_status != SHDW_ACCESSX_SNAPSHOT_READY) {
+                        result = -1;
+                        errno = ENOENT;
+                    } else {
+                        size_t count = shdw_accessx_filter(
+                            ax_snapshot, ax_size, ax_private_results);
+                        if(count == 0) {
+                            result = -1;
+                            errno = ENOENT;
+                        } else if(!shdw_accessx_write_results(
+                                      ax_results, ax_private_results, count)) {
+                            result = -1;
+                            errno = EFAULT;
+                        }
+                    }
+                }
+                break;
+
             case SHADW_RAW_CAT_NONE:
             case SHADW_RAW_CAT_PATH:
             case SHADW_RAW_CAT_PATH3I:
@@ -1393,6 +1476,15 @@ static long shdw_syscall_dispatch(int number, BOOL ext, va_list args, const void
         }
     }
 
+    int result_errno = errno;
+    if(ax_snapshot) {
+        munmap(ax_snapshot, ax_size);
+    }
+    if(ax_external && result == 0) {
+        errno = ax_caller_errno;
+    } else {
+        errno = result_errno;
+    }
     return result;
 }
 
@@ -1411,7 +1503,7 @@ static long replaced_syscall(int number, ...) {
     // `number` (clang folds the trailing constant-true operand away and
     // lowers the rest to cmp/branch only).
     if(
-#define SHADW_RAWSYSCALL(NUM, ARITY, CAT, FWD) number != NUM &&
+#define SHADW_RAWSYSCALL(NUM, CAT, FWD, REWRITE, FD) number != NUM &&
 #include "RawSyscalls.def"
 #undef SHADW_RAWSYSCALL
     1) {
@@ -1444,7 +1536,7 @@ static long replaced___syscall(int number, ...) {
     // `number` (no helper calls — they would clobber the argument
     // registers the zero-argument forward relies on).
     if(
-#define SHADW_RAWSYSCALL(NUM, ARITY, CAT, FWD) number != NUM &&
+#define SHADW_RAWSYSCALL(NUM, CAT, FWD, REWRITE, FD) number != NUM &&
 #include "RawSyscalls.def"
 #undef SHADW_RAWSYSCALL
     1) {
@@ -1785,19 +1877,26 @@ static char*** replaced_NSGetEnviron(void) {
 // syscall/__syscall/csops are hooked on a REBIND-ONLY lane, not `hooks`.
 void shdw_universal_syscall(SHDWHookSession* hooks) {
     original_syscall = (long (*)(int, ...))shdw_resolve_libsystem("_syscall");
-    [hooks hookRebindSymbol:@"syscall" withReplacement:replaced_syscall outOldPtr:NULL];
-    [hooks hookRebindSymbol:@"csops" withReplacement:replaced_csops outOldPtr:(void **) &original_csops];
-
-    // Runtime-resolve __syscall; skipped cleanly when absent.
     shdw_syscall_c_aliases[0] = shdw_resolve_libsystem("___syscall");
     shdw_syscall_c_aliases[1] = shdw_resolve_libsystem("____syscall");
-    void* sym___syscall = shdw_syscall_c_aliases[0];
-    // Some iOS builds export syscall and __syscall as the same entry point.
-    // Address-based rebinders already cover every slot for that address; a
-    // second replacement cannot coexist and only reports a false failure.
-    if(sym___syscall && sym___syscall != (void *)syscall) {
-        original___syscall = (long (*)(int, ...))sym___syscall;
-        [hooks hookRebindSymbol:@"___syscall" withReplacement:replaced___syscall outOldPtr:NULL];
+    void *primary_alias = shdw_syscall_c_aliases[0];
+    if(original_syscall && primary_alias && primary_alias != (void *)original_syscall) {
+        original___syscall = (long (*)(int, ...))primary_alias;
+    }
+    if(original_syscall) {
+        [hooks hookRebindSymbol:@"syscall" withReplacement:replaced_syscall outOldPtr:NULL];
+    }
+    [hooks hookRebindSymbol:@"csops" withReplacement:replaced_csops outOldPtr:(void **) &original_csops];
+    const char *alias_names[] = {"__syscall", "___syscall"};
+    for(size_t i = 0; i < 2; i++) {
+        void *target = shdw_syscall_c_aliases[i];
+        void *replacement = target && target == (void *)original_syscall
+            ? (void *)replaced_syscall
+            : target && target == (void *)original___syscall
+                ? (void *)replaced___syscall : NULL;
+        if(replacement) {
+            [hooks hookRebindSymbol:@(alias_names[i]) withReplacement:replacement outOldPtr:NULL];
+        }
     }
 
     // Misc sibling surfaces: runtime-resolved, skipped cleanly when absent.

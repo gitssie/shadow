@@ -24,6 +24,22 @@ verify-realpath-buffer:
 verify-at-path-rewrite:
 	python3 verify-at-path-rewrite.py
 
+# Host check of the real chflags/lchflags/fchflags hook bodies with policy doubles.
+verify-chflags:
+	python3 verify-chflags.py
+
+# Pin path-string directory-listing denials to Cocoa's absent-file read error.
+verify-foundation-fm-listing:
+	python3 verify-foundation-fm-listing.py
+
+# Pin both Foundation filesystem-attribute denials to Cocoa's absent-file error.
+verify-foundation-fsattrs:
+	python3 verify-foundation-fsattrs.py
+
+# Pin both NSURL resource-value read denials to Cocoa's absent-file read code.
+verify-nsurl-values:
+	python3 verify-nsurl-values.py
+
 # Host check of the actual lexical path standardizer with pinned spellings.
 verify-path-standardize:
 	python3 verify-path-standardize.py
@@ -48,6 +64,11 @@ verify-proc-policy:
 # Host check of the actual raw-SVC add-image callback and initializer bodies.
 verify-svc-self-image:
 	python3 verify-svc-self-image.py
+
+# Host check of the actual accessx_np/SYS_access_extended batch filter with
+# predicate doubles and kernel-shaped descriptor buffers.
+verify-accessx-filter:
+	python3 verify-accessx-filter.py
 
 # Pure-C mount-record filter.
 verify-mount-filter:
@@ -77,7 +98,11 @@ verify-rebind-repair:
 	/tmp/shadow-rebind-import-index-test
 
 THEOS ?= /opt/theos
+SHADOW_LANE ?= rootless
 include ../build-support/hookkit.mk
+# Host regression pin for copy-source backing aliases and denial shape.
+verify-copy-source-policy:
+	python3 verify-copy-source-policy.py
 
 # Static contract checks (CWD-agnostic: every script cds to the repo root).
 lane-contract:
@@ -191,13 +216,27 @@ verify-environment-storage:
 verify-rules-generation:
 	python3 verify-rules-generation.py
 
+verify-plugin-table:
+	python3 verify-plugin-table.py
+
 verify-binary-compat:
 	bash BinaryCompatTests.sh
 
-test: verify-runtime-image-identity verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-stock-cryptex verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat
+# The matrix's own stale-entry detector must fail on a deliberate drift entry.
+hook-matrix-selftest:
+	@if sh verify-hook-matrix.sh --selftest-drift >/tmp/shadow-matrix-selftest.log 2>&1; then \
+		echo 'MATRIX SELFTEST: stale entry was not detected'; exit 1; \
+	fi
+	@grep -q 'MATRIX STALE' /tmp/shadow-matrix-selftest.log || { \
+		echo 'MATRIX SELFTEST: failure was not the stale-entry path'; exit 1; }
+
+test: verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-chflags verify-foundation-fsattrs verify-foundation-fm-listing verify-nsurl-values verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-accessx-filter verify-image-span verify-mount-filter verify-rebind-repair verify-procargs-filter verify-copy-source-policy lane-contract hook-matrix hook-matrix-selftest syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-plugin-table verify-binary-compat
+
+test: verify-runtime-image-identity verify-stock-cryptex
 
 clean:
 	rm -f harness harness.d
+.PHONY: test verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-chflags verify-foundation-fsattrs verify-foundation-fm-listing verify-nsurl-values verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-accessx-filter verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair verify-procargs-filter verify-copy-source-policy lane-contract hook-matrix hook-matrix-selftest syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-plugin-table verify-binary-compat clean
 
 .PHONY: test verify-runtime-image-identity verify-realpath-buffer verify-path-rewrite verify-at-path-rewrite verify-path-standardize verify-fd-path-freshness verify-proc-policy verify-svc-self-image verify-image-span verify-procargs-filter verify-mount-filter verify-rebind-repair lane-contract hook-matrix syscall-meta settings-structure jb-identifiers verify-environment-storage verify-rules-generation verify-binary-compat clean
 
@@ -316,3 +355,15 @@ verify-hookkit-source:
 
 .PHONY: verify-hookkit-source
 test: verify-hookkit-source
+
+verify-accessx-admission:
+	python3 verify-accessx-admission.py
+
+verify-foundation-path-policy:
+	python3 verify-foundation-path-policy.py
+
+.PHONY: verify-accessx-admission verify-foundation-path-policy
+test: verify-accessx-admission
+ifeq ($(shell uname -s),Darwin)
+test: verify-foundation-path-policy
+endif

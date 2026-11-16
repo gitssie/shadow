@@ -41,7 +41,11 @@ methods = "\n".join(function(signature) for signature in [
     "- (NSDictionary *)runtimeFingerprintDataForIdentifier:(NSString *)bundleIdentifier\n                                   vendorIdentifier:",
     "- (NSDictionary<NSString *, id> *)getPreferencesForIdentifier:",
 ]).replace("[NSBundle mainBundle]", "testBundle")
-constants = set(re.findall(r"\bSHDW[A-Za-z]+ID\b", methods))
+constants = set(re.findall(r"\bSHDW[A-Za-z]+ID\b", methods)) - {"SHDWIsHarnessBundleID"}
+plugin_header = (root / "src/Shadow.framework/Headers/Shadow/SHDWPlugin.h").read_text()
+identity_start = plugin_header.index('#define SHDWHarnessBundleID ')
+identity_end = plugin_header.index('static inline BOOL SHDWIsDetectorTestBundleID')
+helpers += "\n" + plugin_header[identity_start:identity_end]
 source = r'''
 #import <Foundation/Foundation.h>
 #import <Shadow/FingerprintState.h>

@@ -1,0 +1,95 @@
+// Canonical ordered plugin metadata.
+
+#ifndef SHDW_PLUGIN
+#error "SHDWPlugins.def requires SHDW_PLUGIN to be defined"
+#endif
+
+SHDW_PLUGIN("Universal_Dyld", NULL, SHDWPhaseAlways, SHDWCapabilityFunction,
+            1, shdw_universal_dyld)
+SHDW_PLUGIN("Universal_Filesystem_C", SHDWUniversalFilesystemID,
+            SHDWPhaseTier1, SHDWCapabilityFunction, 1,
+            shdw_universal_filesystem_c)
+SHDW_PLUGIN("Universal_Fingerprint", SHDWUniversalFingerprintID,
+            SHDWPhaseTier1, SHDWCapabilityMessage, 1,
+            shdw_universal_fingerprint)
+SHDW_PLUGIN("Universal_NetworkQueries", SHDWUniversalFingerprintID,
+            SHDWPhaseTier1, SHDWCapabilityFunction, 1,
+            shdw_universal_network_queries)
+SHDW_PLUGIN("Universal_EnvVars_C", SHDWUniversalEnvVarsID, SHDWPhaseTier1,
+            SHDWCapabilityFunction, 1, shdw_coord_envvars_c)
+SHDW_PLUGIN("Universal_EnvVars_ObjC", SHDWUniversalEnvVarsID, SHDWPhaseTier1,
+            SHDWCapabilityMessage, 1, shdw_universal_nsprocessinfo)
+SHDW_PLUGIN("Adapter_DeviceCheck", SHDWAdapterDeviceCheckID,
+            SHDWPhaseSDKFallback, SHDWCapabilityMessage, 1,
+            shdw_adapter_devicecheck)
+SHDW_PLUGIN("Adapter_FreeRASP", SHDWAdapterFreeRASPID, SHDWPhaseAlways,
+            SHDWCapabilityFunction, 1, shdw_adapter_freerasp)
+SHDW_PLUGIN("Universal_MachBootstrap", SHDWUniversalMachBootstrapID,
+            SHDWPhaseTier1, SHDWCapabilityFunction, 1,
+            shdw_universal_mach_bootstrap)
+SHDW_PLUGIN("Universal_IOKit", SHDWUniversalIOKitID, SHDWPhaseTier1,
+            SHDWCapabilityFunction, 1, shdw_universal_iokit)
+SHDW_PLUGIN("Universal_LowLevelC", SHDWUniversalLowLevelCID, SHDWPhaseTier1,
+            SHDWCapabilityFunction, 1, shdw_universal_low_level_c)
+SHDW_PLUGIN("Universal_AntiDebugging", SHDWUniversalAntiDebuggingID,
+            SHDWPhaseTier1, SHDWCapabilityFunction, 1,
+            shdw_universal_antidebugging)
+SHDW_PLUGIN("Universal_CodeSigning", SHDWUniversalCodeSigningID,
+            SHDWPhaseTier1, SHDWCapabilityFunction, 1,
+            shdw_universal_codesigning)
+SHDW_PLUGIN("Universal_ObjC", NULL, SHDWPhaseAlways, SHDWCapabilityMessage, 1,
+            shdw_universal_objc)
+SHDW_PLUGIN("Universal_ObjC_MethodImplementation", NULL, SHDWPhaseAlways,
+            SHDWCapabilityFunction, 1, shdw_universal_objc_methodimpl)
+SHDW_PLUGIN("Universal_Syscall", SHDWUniversalSyscallID, SHDWPhaseTier1,
+            SHDWCapabilityFunction, 1, shdw_universal_syscall)
+SHDW_PLUGIN("Universal_Memory", SHDWUniversalMemoryID, SHDWPhaseTier1,
+            SHDWCapabilityFunction, 1, shdw_universal_memory)
+SHDW_PLUGIN("Universal_Sandbox", SHDWUniversalSandboxID, SHDWPhaseTier1,
+            SHDWCapabilityFunction, 1, shdw_universal_sandbox)
+SHDW_PLUGIN("Universal_HideClasses", NULL, SHDWPhaseAlways,
+            SHDWCapabilityMessage, 1, shdw_universal_hide_classes)
+SHDW_PLUGIN("Universal_SymbolLookup", NULL, SHDWPhaseAlways,
+            SHDWCapabilitySymlookup, 1, shdw_coord_symlookup)
+SHDW_PLUGIN("Universal_DynamicLibrariesExtra",
+            SHDWUniversalDynamicLibrariesExtraID, SHDWPhaseEscalation,
+            SHDWCapabilityPrivateSym, 1,
+            shdw_universal_dynamic_libraries_extra)
+SHDW_PLUGIN("Universal_DetectorIntegrity", NULL, SHDWPhaseTier2,
+            SHDWCapabilityFunction, 0, shdw_coord_detector_integrity)
+SHDW_PLUGIN("Universal_Filesystem_ObjC", SHDWUniversalFilesystemID,
+            SHDWPhaseTier2, SHDWCapabilityMessage, 0,
+            shdw_coord_filesystem_objc)
+SHDW_PLUGIN("Universal_Foundation_ObjC", SHDWUniversalFoundationID,
+            SHDWPhaseTier2, SHDWCapabilityMessage, 0,
+            shdw_coord_foundation_objc)
+SHDW_PLUGIN("Universal_HideApps", SHDWUniversalHideAppsID, SHDWPhaseTier2,
+            SHDWCapabilityMessage, 0, shdw_universal_hide_apps)
+SHDW_PLUGIN("Universal_URLScheme", SHDWUniversalURLSchemeID,
+            SHDWPhaseUIKit, SHDWCapabilityMessage, 0,
+            shdw_universal_url_scheme)
+SHDW_PLUGIN("Universal_Foundation_UIKit", SHDWUniversalFoundationID,
+            SHDWPhaseUIKit, SHDWCapabilityMessage, 0,
+            shdw_universal_foundation_uikit)
+SHDW_PLUGIN("Universal_PasscodeStatus", NULL, SHDWPhaseUIKit,
+            SHDWCapabilityMessage, 0, shdw_universal_passcode_status)
+SHDW_PLUGIN("Adapter_DeviceSecurityKit", SHDWAdapterDeviceSecurityKitID,
+            SHDWPhaseSDKFallback, SHDWCapabilityMessage, 1,
+            shdw_adapter_devicesecuritykit)
+SHDW_PLUGIN("Adapter_IOSSecuritySuite", SHDWAdapterIOSSecuritySuiteID,
+            SHDWPhaseSDKFallback, SHDWCapabilityFunction, 1,
+            shdw_adapter_iossecuritysuite)
+
+SHDW_PLUGIN("Adapter_DTTJailbreakDetection",
+            SHDWAdapterDTTJailbreakDetectionID, SHDWPhaseAlways,
+            SHDWCapabilityMessage, 0, NULL)
+SHDW_PLUGIN("Adapter_SafeDevice", SHDWAdapterSafeDeviceID, SHDWPhaseAlways,
+            SHDWCapabilityMessage, 0, NULL)
+SHDW_PLUGIN("Adapter_JailMonkey", SHDWAdapterJailMonkeyID, SHDWPhaseAlways,
+            SHDWCapabilityMessage, 0, NULL)
+SHDW_PLUGIN("Universal_PathRewrite", SHDWUniversalPathRewriteID,
+            SHDWPhaseAlways, SHDWCapabilityNone, 0, NULL)
+SHDW_PLUGIN("Universal_MemoryLevelHiding", SHDWUniversalMemoryLevelHidingID,
+            SHDWPhaseAlways, SHDWCapabilityNone, 0, NULL)
+
+#undef SHDW_PLUGIN

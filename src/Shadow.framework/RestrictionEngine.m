@@ -4,6 +4,8 @@
 #import <Shadow/Core+Utilities.h>
 #import <Shadow/Core.h>
 #import <Shadow/JBPath.h>
+#import <Shadow/SHDWPlugin.h>
+#import <Shadow/WritePolicy.h>
 
 #import "../common.h"
 
@@ -12,6 +14,8 @@
 #import <string.h>
 #import <unistd.h>
 
+// The flag lives in ShadowCore (PathPolicy.m); resolve it dynamically so
+// builds omitting that translation unit can substitute their own flag.
 static BOOL shdwDetectorWritePolicyEnabled(void) {
   static BOOL (*fn)(void) = NULL;
   static BOOL didLookup = NO;
@@ -69,18 +73,12 @@ static NSString *shdwJoinWorkingDirectory(NSString *path, NSString *wd) {
 
 // Group containers: exempt when inside any group container (central strict
 // enforce helper)
-static BOOL shdwPathIsWithin(NSString *path, NSString *root) {
-  return path.length && root.length &&
-         ([path isEqualToString:root] ||
-          [path hasPrefix:[root stringByAppendingString:@"/"]]);
-}
-
 static BOOL shdwIsGroupContainerPath(ShadowRestrictionContext context,
                                      NSString *path) {
   if (!context.hasAppSandbox)
     return NO;
   for (NSString *gc in context.groupContainerPaths) {
-    if (shdwPathIsWithin(path, gc))
+    if (SHDWPathIsWithin(path, gc))
       return YES;
   }
   return NO;
@@ -90,8 +88,8 @@ static BOOL shdwIsSandboxExempt(ShadowRestrictionContext context,
                                 NSString *path) {
   if (!context.hasAppSandbox)
     return NO;
-  if (shdwPathIsWithin(path, context.bundlePath) ||
-      shdwPathIsWithin(path, context.homePath))
+  if (SHDWPathIsWithin(path, context.bundlePath) ||
+      SHDWPathIsWithin(path, context.homePath))
     return YES;
   return shdwIsGroupContainerPath(context, path);
 }
@@ -109,7 +107,7 @@ static BOOL shdwPseudoWouldDeny(ShadowRestrictionContext context,
 
   for (NSUInteger i = 0;
        i < sizeof(kPseudoStockRoots) / sizeof(kPseudoStockRoots[0]); i++) {
-    if (shdwPathIsWithin(path, kPseudoStockRoots[i]))
+    if (SHDWPathIsWithin(path, kPseudoStockRoots[i]))
       return NO;
   }
 
@@ -123,25 +121,6 @@ static BOOL shdwPseudoWouldDeny(ShadowRestrictionContext context,
       [path hasPrefix:@"/tmp/com.apple."])
     return NO;
 
-  return YES;
-}
-
-static BOOL shdwDetectorWriteDenied(ShadowRestrictionContext context,
-                                    ShadowRestrictionQuery *query,
-                                    NSString *path) {
-  if (query.operation != ShadowRestrictionOperationWrite ||
-      !context.hasAppSandbox || !shdwDetectorWritePolicyEnabled())
-    return NO;
-  NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-  if ([bundleID hasPrefix:@"me.jjolano.shadow.test."] &&
-      shdwPathIsWithin(path, @"/var/mobile/Documents/ShadowDetectorTests"))
-    return NO;
-  if (shdwPathIsWithin(path, context.bundlePath))
-    return YES;
-  if (shdwPathIsWithin(path, context.homePath) ||
-      shdwIsGroupContainerPath(context, path) ||
-      [path isEqualToString:@"/dev/null"])
-    return NO;
   return YES;
 }
 
@@ -316,23 +295,14 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
       [components addObject:component];
     }
   }
-  // The engine's lexical aliases, without NSURL or filesystem standardization.
-  if (components.count >= 2 && [components[0] isEqualToString:@"private"] &&
-      ([components[1] isEqualToString:@"var"] ||
-       [components[1] isEqualToString:@"etc"])) {
-    [components removeObjectAtIndex:0];
-  }
-  if (components.count >= 2 && [components[0] isEqualToString:@"var"] &&
-      [components[1] isEqualToString:@"tmp"]) {
-    [components removeObjectAtIndex:0];
-  }
-  path =
-      [@"/" stringByAppendingString:[components componentsJoinedByString:@"/"]];
+  // Lexical aliases only: no NSURL or filesystem work under the mount lock.
+  path = SHDWPathApplyingRootAliases([@"/"
+      stringByAppendingString:[components componentsJoinedByString:@"/"]]);
   if ([path isEqualToString:@"/"])
     return NO;
   if (shdw_is_restricted_root_with_prefix([path fileSystemRepresentation],
                                           NULL) ||
-      shdwPathIsWithin(path, mountRoot))
+      SHDWPathIsWithin(path, mountRoot))
     return YES;
   if (_context.hasAppSandbox &&
       ([path isEqualToString:@"/private/preboot"] ||
@@ -437,8 +407,7 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
                forKey:(id)key
            generation:(NSUInteger)gen
                 cache:(NSCache *)cache {
-  // Packed as (generation << 1) | restricted — one NSNumber per entry,
-  // same shape as the legacy backend cache.
+  // Packed as (generation << 1) | restricted — one NSNumber per entry.
   [cache setObject:@[
     @([NSDate timeIntervalSinceReferenceDate]),
     @(((unsigned long long)gen << 1) | (verdict ? 1 : 0))
@@ -621,7 +590,11 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
       goto done;
     }
 
-    if (shdwDetectorWriteDenied(_context, query, path)) {
+    if (query.operation == ShadowRestrictionOperationWrite &&
+        SHDWDetectorWritePathDenied(path, shdwDetectorWritePolicyEnabled(),
+                                    _context.hasAppSandbox, _context.bundlePath,
+                                    _context.homePath,
+                                    _context.groupContainerPaths, nil)) {
       restricted = YES;
       goto done;
     }
@@ -738,7 +711,7 @@ static const NSUInteger kShadowAuditRingCapacity = 256;
     BOOL checkable = [path hasPrefix:@"/var"] ||
                      [path hasPrefix:@"/private/preboot"] ||
                      [path hasPrefix:@"/usr/lib"] ||
-                     shdwPathIsWithin(path, @"/System/Developer");
+                     SHDWPathIsWithin(path, @"/System/Developer");
 
     if (!checkable) {
       if (!isWrite) {

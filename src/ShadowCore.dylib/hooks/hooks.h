@@ -38,8 +38,8 @@
 #import "../../common.h"
 #import "../HookRuntime.h"
 #import <Shadow.h>
-#import <Shadow/HookConfiguration.h>
 #import <Shadow/JBPath.h>
+#import <Shadow/SHDWPlugin.h>
 
 #import "../SHDWHookSession.h"
 
@@ -64,10 +64,10 @@
 // MUST stay on the rebind lane (currently: syscall.x — syscall, csops,
 // ___syscall, _sysctlbyname, ___sysctlbyname, _csops_audittoken,
 // _NSGetEnviron; rationale: hottest concurrent calls AND byte-integrity
-// surface). tools/hookprobe's `hooks|<symbol> prologue clean` battery pins
-// this at runtime — moving one of these to the inline lane turns that probe
-// FAIL by design. New detection-hot hooks go rebind-first; deviating needs a
-// written rationale here.
+// surface). The device probe battery's prologue-clean check pins this at
+// runtime — moving one of these to the inline lane turns that probe FAIL by
+// design. New detection-hot hooks go rebind-first; deviating needs a written
+// rationale here.
 //
 // Rebinds self-heal against anti-fishhook undos: every rebind journals its
 // import slots (SHDWHookSession.m) and specs (RebindRepair.x); slot stores
@@ -206,7 +206,7 @@ static inline const char *shdw_libc_try_rewrite(const char *pathname) {
 // images. The internal-read scope remains the truth signal before a range
 // refresh; outside ranges and scopes everyone is external.
 // The tables themselves, and the pure lookup over them, live in ranges.h so
-// the host harness can test the lookup without this file's iOS-only headers.
+// host tests can exercise the lookup without this file's iOS-only headers.
 #import "Universal/ranges.h"
 
 extern shdw_own_ranges_t _shdw_own_ranges_a;
@@ -295,6 +295,9 @@ static inline BOOL shdw_addr_is_restricted(const void *addr) {
 // current dyld image list. Called by dyld.x at install and from its add/remove
 // image callbacks.
 void shdw_own_ranges_refresh(void);
+
+long shdw_dirents_filtered(char *buf, long count, const char *dir);
+BOOL shdw_fd_visible_path_restricted(int fd);
 
 // Contiguous mapping run of one image ([min segment vmaddr, run end) + slide,
 // __PAGEZERO excluded), for both Mach-O header shapes the lanes ship. Shared by
@@ -393,7 +396,8 @@ extern void shdw_detector_detected(const char *reason);
 // Raw-syscall policy categories (hooks/Universal/syscall.x dispatch;
 // shared with the svc-patch trampoline in hooks/Universal/svc_patch.x).
 typedef enum {
-  SHADW_RAW_CAT_NONE = 0,  // forwarded, never inspected (access_extended)
+  SHADW_RAW_CAT_NONE = 0,  // forwarded, never inspected (no current row)
+  SHADW_RAW_CAT_ACCESSX,   // access_extended batch: after-success per-entry
   SHADW_RAW_CAT_PTRACE,    // PT_DENY_ATTACH short-circuit
   SHADW_RAW_CAT_PATH,      // single pathname inspection
   SHADW_RAW_CAT_AT,        // dirfd-aware *at inspection
@@ -541,12 +545,17 @@ extern int (*original_open)(const char *pathname, int oflag, ...);
 extern int replaced_open(const char *pathname, int oflag, ...);
 extern int (*original_openat)(int dirfd, const char *pathname, int oflag, ...);
 extern int replaced_openat(int dirfd, const char *pathname, int oflag, ...);
-extern int (*original_open_nocancel)(const char *pathname, int oflag, ...);
-extern int replaced_open_nocancel(const char *pathname, int oflag, ...);
-extern int (*original_openat_nocancel)(int dirfd, const char *pathname,
-                                       int oflag, ...);
-extern int replaced_openat_nocancel(int dirfd, const char *pathname, int oflag,
-                                    ...);
+extern int (*original_openx_np)(const char *pathname, int oflag,
+                                filesec_t filesec);
+extern int replaced_openx_np(const char *pathname, int oflag,
+                             filesec_t filesec);
+extern int (*original_open_dollar_nocancel)(const char *pathname, int oflag,
+                                            ...);
+extern int replaced_open_dollar_nocancel(const char *pathname, int oflag, ...);
+extern int (*original_openat_dollar_nocancel)(int dirfd, const char *pathname,
+                                              int oflag, ...);
+extern int replaced_openat_dollar_nocancel(int dirfd, const char *pathname,
+                                           int oflag, ...);
 extern DIR *(*original___opendir2)(const char *pathname, int flags);
 extern DIR *replaced___opendir2(const char *pathname, int flags);
 extern DIR *(*original_opendir)(const char *pathname);

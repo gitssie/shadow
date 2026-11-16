@@ -1,6 +1,3 @@
-// Plugin: Policy_Path — registered in SHDWPluginRegistry (HookConfiguration.m)
-#define SHDWPolicyPathPluginID "Policy_Path"
-
 // Path/fd/dirfd classification shared by the libc and raw-syscall hook
 // surfaces (hooks/libc.x, hooks/syscall.x): dirfd-aware *at classification,
 // fresh fd/DIR path resolution, readlink target resolution and
@@ -9,6 +6,7 @@
 // preserves caller errno; denial helpers set their documented policy errno.
 
 #import <Foundation/Foundation.h>
+#import <Shadow/WritePolicy.h>
 #import <dirent.h>
 #import <stddef.h>
 #import <stdint.h>
@@ -252,3 +250,15 @@ BOOL shdw_detector_c_write_path_denied(const char *path);
 // EBADF, and no staging is possible through a fd the kernel rejects).
 // Total (NULL-safe); leaves errno unchanged.
 BOOL shdw_detector_c_write_path_at_denied(int dirfd, const char *path);
+
+typedef enum {
+  SHDW_ACCESSX_SNAPSHOT_READY,
+  SHDW_ACCESSX_SNAPSHOT_MALFORMED,
+  SHDW_ACCESSX_SNAPSHOT_SOURCE_FAULT,
+  SHDW_ACCESSX_SNAPSHOT_UNAVAILABLE,
+} shdw_accessx_snapshot_status_t;
+shdw_accessx_snapshot_status_t
+shdw_accessx_snapshot(const void *entries, size_t size, void **snapshot);
+size_t shdw_accessx_filter(const void *entries, size_t size, int *results);
+BOOL shdw_accessx_write_results(int *results, const int *private_results,
+                                size_t count);

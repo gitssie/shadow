@@ -67,7 +67,7 @@ static BOOL _shdw_resultURLRestricted(NSURL* result) {
 - (BOOL)checkPromisedItemIsReachableAndReturnError:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
     if(isCallerExternal() && _shdw_resultURLRestricted(self)) {
         if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
+            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:[self path] url:self];
         }
 
         return NO;
@@ -83,7 +83,7 @@ static BOOL _shdw_resultURLRestricted(NSURL* result) {
         }
 
         if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
+            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:[self path] url:self];
         }
 
         return NO;
@@ -95,7 +95,7 @@ static BOOL _shdw_resultURLRestricted(NSURL* result) {
 - (NSDictionary<NSURLResourceKey, id> *)promisedItemResourceValuesForKeys:(NSArray<NSURLResourceKey> *)keys error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
     if(isCallerExternal() && _shdw_resultURLRestricted(self)) {
         if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
+            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:[self path] url:self];
         }
 
         return nil;
@@ -509,7 +509,7 @@ void shdw_universal_nsurl(SHDWHookSession* hooks) {
         }
 
         if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
+            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:[self path] url:self];
         }
 
         return NO;
@@ -521,7 +521,7 @@ void shdw_universal_nsurl(SHDWHookSession* hooks) {
 - (NSDictionary<NSURLResourceKey, id> *)resourceValuesForKeys:(NSArray<NSURLResourceKey> *)keys error:(NSError * _Nullable *)error __attribute__((annotate("hookkit:allow_inherited"))) {
     if(shdw_url_resources_paths_enabled && isCallerExternal() && _shdw_resultURLRestricted(self)) {
         if(error) {
-            *error = [Shadow fileNoSuchFileErrorForURL:self];
+            *error = [Shadow fileErrorWithCode:NSFileReadNoSuchFileError path:[self path] url:self];
         }
 
         return nil;

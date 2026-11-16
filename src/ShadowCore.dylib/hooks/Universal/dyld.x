@@ -975,9 +975,8 @@ static const struct mach_header* replaced_dyld_image_header_containing_address(c
 
 // The exported _dyld_get_image_header_containing_address alias (dyld4,
 // iOS 15+) leaks exactly like dyld_image_header_containing_address; hook it
-// with the same replacement. Its own original slot is unused — the body
-// resolves through the direct-linked symbol's original.
-static const struct mach_header* (*original_dyld_get_image_header_containing_address)(const void* addr);
+// with the same replacement, which forwards through the direct-linked
+// symbol's original.
 
 // --- Address-attribution siblings (plan Wave 1c): every dyld SPI that maps
 // an address or header back to an image must answer "unknown" for protected
@@ -1705,6 +1704,9 @@ static void* replaced_dlsym(void* handle, const char* symbol) {
         // every fishhook-rebound export resolves to its replacement — the
         // GOT-vs-dlsym comparison then agrees for those symbols too.
         void* extra = shdw_sym_policy_lookup_libc(symbol);
+        if(!extra) {
+            extra = shdw_sym_policy_lookup_syscall(symbol);
+        }
 
         if(!extra) {
             extra = shdw_sym_policy_lookup_mach(symbol);
@@ -1723,7 +1725,6 @@ static void* replaced_dlsym(void* handle, const char* symbol) {
         if(!extra) extra = shdw_sym_policy_lookup_localization(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_web_localization(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_fingerprint(symbol);
-        if(!extra) extra = shdw_sym_policy_lookup_syscall(symbol);
 
         if(extra) {
             return extra;
@@ -1907,6 +1908,9 @@ static void* shdw_cfbundle_symbol_replacement(CFStringRef symbolName) {
             // Same per-file fallback as replaced_dlsym: fishhook-rebound
             // libc/mach/sandbox/mem exports resolve to their replacements.
             void* extra = shdw_sym_policy_lookup_libc(name);
+            if(!extra) {
+                extra = shdw_sym_policy_lookup_syscall(name);
+            }
 
             if(!extra) {
                 extra = shdw_sym_policy_lookup_mach(name);
@@ -1929,7 +1933,6 @@ static void* shdw_cfbundle_symbol_replacement(CFStringRef symbolName) {
             if(!extra) extra = shdw_sym_policy_lookup_localization(name);
             if(!extra) extra = shdw_sym_policy_lookup_web_localization(name);
             if(!extra) extra = shdw_sym_policy_lookup_fingerprint(name);
-            if(!extra) extra = shdw_sym_policy_lookup_syscall(name);
 
             if(extra) {
                 return extra;
@@ -3079,7 +3082,7 @@ void shdw_universal_dyld(SHDWHookSession* hooks) {
     void* getImageHeaderContainingAddressPtr = [hooks findSymbolInImage:libdyldImage symbolName:@"_dyld_get_image_header_containing_address"];
 
     if(getImageHeaderContainingAddressPtr) {
-        [hooks hookFunction:getImageHeaderContainingAddressPtr withReplacement:replaced_dyld_image_header_containing_address outOldPtr:(void **) &original_dyld_get_image_header_containing_address];
+        [hooks hookFunction:getImageHeaderContainingAddressPtr withReplacement:replaced_dyld_image_header_containing_address outOldPtr:NULL];
     }
 
     void* getImageUuidPtr = [hooks findSymbolInImage:libdyldImage symbolName:@"_dyld_get_image_uuid"];

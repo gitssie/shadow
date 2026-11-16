@@ -42,16 +42,7 @@ static NSString *shdwCanonicalStockCryptexPath(NSString *path) {
             ascii,
             "/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,=:@") ==
             path.length) {
-      if ([path isEqualToString:@"/private/var"] ||
-          [path hasPrefix:@"/private/var/"] ||
-          [path isEqualToString:@"/private/etc"] ||
-          [path hasPrefix:@"/private/etc/"]) {
-        path = [path substringFromIndex:8];
-      }
-      // Independent check: /private/var/tmp also maps to /tmp.
-      if ([path isEqualToString:@"/var/tmp"] || [path hasPrefix:@"/var/tmp/"]) {
-        path = [path substringFromIndex:4];
-      }
+      path = SHDWPathApplyingRootAliases(path);
       // Preserve Foundation's path representation for later path operations.
       return [NSString pathWithComponents:[path pathComponents]];
     }
@@ -113,22 +104,7 @@ static NSString *shdwCanonicalStockCryptexPath(NSString *path) {
     }
   }
 
-  if ([path isEqualToString:@"/private/var"] ||
-      [path hasPrefix:@"/private/var/"] ||
-      [path isEqualToString:@"/private/etc"] ||
-      [path hasPrefix:@"/private/etc/"]) {
-    NSMutableArray *pathComponents = [[path pathComponents] mutableCopy];
-    [pathComponents removeObjectAtIndex:1];
-    path = [NSString pathWithComponents:pathComponents];
-  }
-
-  if ([path isEqualToString:@"/var/tmp"] || [path hasPrefix:@"/var/tmp/"]) {
-    NSMutableArray *pathComponents = [[path pathComponents] mutableCopy];
-    [pathComponents removeObjectAtIndex:1];
-    path = [NSString pathWithComponents:pathComponents];
-  }
-
-  return shdwCanonicalStockCryptexPath(path);
+  return shdwCanonicalStockCryptexPath(SHDWPathApplyingRootAliases(path));
 }
 
 // code from Choicy
