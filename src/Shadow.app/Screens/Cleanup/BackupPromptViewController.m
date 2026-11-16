@@ -62,8 +62,8 @@
     [self.service loadCatalog:^(NSArray *catalog, NSError *error) {
         typeof(self) self = weakSelf; if (!self) return;
         self.checkingCatalog = NO;
-        NSString *current = [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier][@"VendorIdentifier"];
-        self.canDiscard = !error && SHDWBackupCanDiscard(catalog, current);
+        NSDictionary *profile = [[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier];
+        self.canDiscard = !error && SHDWBackupCanCleanDirectly(catalog, profile);
         if (error) { self.message.textColor = UIColor.systemRedColor; self.message.text = error.localizedDescription; }
         else { self.message.textColor = UIColor.secondaryLabelColor; self.message.text = SHDWText(@"Cleaning removes current app data. Back up first to keep it."); }
         [self updateControls]; [self.presentationController.containerView setNeedsLayout];

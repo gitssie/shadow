@@ -12,6 +12,11 @@ static inline BOOL SHDWBackupCanDiscard(NSArray<NSDictionary *> *catalog, NSStri
     }
     return YES;
 }
+static inline BOOL SHDWBackupCanCleanDirectly(NSArray<NSDictionary *> *catalog, NSDictionary *profile) {
+    if (!catalog) return NO;
+    if (!profile.count) return YES;
+    return SHDWBackupCanDiscard(catalog, profile[@"VendorIdentifier"]);
+}
 static inline BOOL SHDWBackupFinalizationOnly(NSDictionary *snapshot, BOOL sameIDFV) {
     return sameIDFV && ![snapshot[@"unavailable"] boolValue] &&
         [snapshot[@"recoverySource"] boolValue] && [snapshot[@"finalizationPending"] boolValue];

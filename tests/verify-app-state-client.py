@@ -81,6 +81,9 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
     Check(value && !error && [value[@"data"]length]==7*1024*1024,@"external response exceeds old frame limit");
     for(NSString *action in @[@"externalClaim",@"externalRelease",@"externalOwnership",@"backupAndReset"])
         Check([client invokeAction:action bundleIdentifier:@"local.fixture.app" request:@{@"idfv":@"11111111-2222-3333-4444-555555555555"} progress:nil error:&error]!=nil,@"ownership action rejected by shared SDK");
+    NSUInteger overviewCalls=Calls(path);
+    value=[client invokeAction:@"externalBackupOverview" bundleIdentifier:@"local.fixture.app" request:@{} progress:nil error:&error];
+    Check(value && !error && Calls(path)==overviewCalls+1,@"backup overview rejected before helper dispatch");
     value=[client invokeAction:@"queryCatalog" bundleIdentifier:@"local.fixture.app" request:SHDWAppStateCatalogQuery(@"Été", @"FR", 2, 2, YES) progress:nil error:&error];
     Check(value && !error && [value[@"items"]count]==1 && [value[@"total"]isEqual:@3] && ![value[@"hasMore"]boolValue],@"paged query response lost");
     Check([value[@"items"][0][@"date"]isKindOfClass:NSDate.class] && [value[@"currentSnapshot"][@"Fingerprint_Config"][@"Localization"][@"Region"]isEqual:@"FR"],@"query metadata types/configuration lost");

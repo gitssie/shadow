@@ -280,6 +280,25 @@ static void CheckStorageOwner(NSString *root) {
         Check(S_ISDIR(info.st_mode) || (S_ISREG(info.st_mode) && info.st_nlink == 1), @"unsafe backup node");
     }
 }
+static void CheckReadOnlyExports(SHDWAppStateStore *store, FakeBackend *backend, NSString *root) {
+    NSString *savedRequester=store.requester;
+    NSData *manifest=[NSData dataWithContentsOfFile:SnapshotPath(root,A,@"manifest.plist")];
+    NSData *state=[NSData dataWithContentsOfFile:SnapshotPath(root,A,@"state.tar.zst")];
+    NSUInteger calls=backend.calls.count;
+    for(id requester in @[NSNull.null,@"phone",@"rv"]) {
+        store.requester=requester==NSNull.null?nil:requester;
+        NSError *error=nil;
+        NSDictionary *metadata=[store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error];
+        Check(metadata && !error && [metadata[@"data"]isEqual:manifest],@"read-only manifest export depends on requester/owner");
+        NSDictionary *archive=[store exportBundle:BID idfv:A part:@"state" expectedStateSHA:metadata[@"stateSHA"] error:&error];
+        Check(archive && !error && [archive[@"data"]isEqual:state],@"read-only state export depends on requester/owner");
+        Check(![store exportBundle:BID idfv:A part:@"state" expectedStateSHA:@"stale" error:&error],@"owner-independent export accepted stale hash");
+    }
+    Check([manifest isEqual:[NSData dataWithContentsOfFile:SnapshotPath(root,A,@"manifest.plist")]] &&
+          [state isEqual:[NSData dataWithContentsOfFile:SnapshotPath(root,A,@"state.tar.zst")]] && backend.calls.count==calls,
+          @"read-only export changed snapshot or called live backend");
+    store.requester=savedRequester;
+}
 static void CheckBusinessOwnership(SHDWAppStateStore *store, FakeBackend *backend, NSString *root) {
     NSError *error=nil;NSDictionary *oldFingerprint=backend.fingerprint;backend.fingerprint=FP(A,@"active-owner",YES);
     NSString *path=SnapshotPath(root,A,@"manifest.plist");NSData *original=[NSData dataWithContentsOfFile:path];
@@ -294,9 +313,10 @@ static void CheckBusinessOwnership(SHDWAppStateStore *store, FakeBackend *backen
     Check([[store claimBundle:BID idfv:A error:&error][@"owner"]isEqual:@"rv"],@"inactive claim failed");
     NSData *claimed=[NSData dataWithContentsOfFile:path];
     Check([store claimBundle:BID idfv:A error:&error]&&[claimed isEqual:[NSData dataWithContentsOfFile:path]],@"single-RV claim was not idempotent");
-    Check(![store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"phone exported RV state");
+    CheckReadOnlyExports(store,backend,root);
+    Check(![store importBundle:BID idfv:A manifest:claimed state:[NSData dataWithContentsOfFile:SnapshotPath(root,A,@"state.tar.zst")] expectedManifestSHA:Digest(path) error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"phone imported RV state");
     Check(![store recheckBundle:BID idfv:A error:&error],@"phone verified RV state");
-    Check(![store editBundle:BID idfv:A metadata:@{@"title":@"blocked"} error:&error],@"phone edited RV backup");
+    Check(![store editBundle:BID idfv:A metadata:@{@"title":@"blocked",@"note":@""} error:&error],@"phone edited RV backup");
     Check(![store deleteBundle:BID idfv:A error:&error],@"phone deleted RV backup");
     Check(![store restoreBundle:BID idfv:A saveCurrent:NO error:&error],@"phone restored RV backup");
     backend.fingerprint=FP(A,@"active-owner",YES);NSUInteger before=backend.calls.count;
@@ -312,11 +332,14 @@ static void CheckBusinessOwnership(SHDWAppStateStore *store, FakeBackend *backen
     NSData *forgedBytes=[NSPropertyListSerialization dataWithPropertyList:forged format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
     Check(![store importBundle:BID idfv:A manifest:forgedBytes state:state[@"data"] expectedManifestSHA:exported[@"manifestSHA"] error:&error],@"upload changed owner");
     Check([[store releaseBundle:BID idfv:A error:&error][@"owner"]isEqual:@"phone"],@"release failed");
-    Check(![store exportBundle:BID idfv:A part:@"manifest" expectedStateSHA:nil error:&error],@"RV accessed returned state");
+    CheckReadOnlyExports(store,backend,root);
+    Check(![store importBundle:BID idfv:A manifest:[NSData dataWithContentsOfFile:path] state:state[@"data"] expectedManifestSHA:Digest(path) error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"RV imported phone state");
+    Check(![store editBundle:BID idfv:A metadata:@{@"title":@"blocked",@"note":@""} error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"RV edited phone state");
+    Check(![store deleteBundle:BID idfv:A error:&error]&&[error.userInfo[@"errorCode"]isEqual:@"ownership_conflict"],@"RV deleted phone state");
     store.requester=nil;Check([store recheckBundle:BID idfv:A error:&error],@"phone access not restored");
     Check([original writeToFile:path options:0 error:NULL],@"restore ownership fixture metadata");backend.fingerprint=oldFingerprint;
     Check([dataSHA isEqual:Digest(SnapshotPath(root,A,@"data.tar.zst"))]&&[stateSHA isEqual:Digest(SnapshotPath(root,A,@"state.tar.zst"))],@"ownership changed archive bytes");
-    puts("app-state business ownership: active rejection, legacy defaults, RV exclusion, requester access, import protection and release passed");
+    puts("app-state business ownership: active rejection, legacy defaults, owner-independent downloads, write exclusion, import protection and release passed");
 }
 static void RejectBeforeRestore(SHDWAppStateStore *store, FakeBackend *backend, NSString *root, NSString *data, NSString *group, NSString *message) {
     NSDictionary *stored=StoreTree(root),*live=Tree(data),*groups=Tree(group),*fingerprint=backend.fingerprint;NSArray *keys=backend.keychain;NSDictionary *preferences=backend.preferences;NSError *error=nil;

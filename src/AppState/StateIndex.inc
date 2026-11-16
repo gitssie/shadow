@@ -311,6 +311,21 @@
       [index cancelMigration];
   }
 }
+- (NSDictionary *)backupOverviewBundle:(NSString *)bundleID error:(NSError **)error {
+  if (error) *error = nil;
+  if (!BundleValue(bundleID)) {
+    FailCode(error, @"invalid_request", @"Invalid application identifier.");
+    return nil;
+  }
+  if (![self checkRoot:error]) return nil;
+  SHDWAppStateIndex *index = [[SHDWAppStateIndex alloc] initWithRoot:self.root
+      ownerUID:self.ownerUID ownerGID:self.ownerGID error:error];
+  @try {
+    return [index backupOverviewForBundle:bundleID error:error];
+  } @finally {
+    [index close];
+  }
+}
 - (NSDictionary *)queryCatalogBundle:(NSString *)bundleID
                                query:(NSDictionary *)query
                                error:(NSError **)error {

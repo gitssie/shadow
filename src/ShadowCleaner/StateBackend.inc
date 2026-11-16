@@ -280,7 +280,7 @@ static NSDictionary *StateErrorTerminal(NSError *error) {
     return value;
 }
 #import "StateFingerprintQuery.inc"
-static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalActiveFingerprint",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"] containsObject:action]; }
+static BOOL StateExternalAction(NSString *action) { return [@[@"capabilities",@"externalActiveFingerprint",@"externalBackupOverview",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"] containsObject:action]; }
 static NSDictionary *StateSavedAction(SHDWAppStateStore *store,NSString *bundle,NSString *action,NSDictionary *request,NSError **error) {
     if([action isEqual:@"externalClaim"])return [store claimBundle:bundle idfv:request[@"idfv"] error:error];
     if([action isEqual:@"externalRelease"])return [store releaseBundle:bundle idfv:request[@"idfv"] error:error];
@@ -294,7 +294,7 @@ static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action
     if(request[@"requester"])Require([@[@"phone",@"rv"]containsObject:request[@"requester"]],@"Invalid backup requester");
     stateFailureCode=@"invalid_request";for(id key in request)Require([allowed containsObject:key],@"Unknown external application state option");
     NSError *error=nil;id result=nil;
-    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalActiveFingerprint",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"backupAndReset",@"discardAndReset",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
+    if([action isEqual:@"capabilities"])result=@{@"apiVersion":@1,@"format":@"ShadowAppState2",@"operations":@[@"externalActiveFingerprint",@"externalBackupOverview",@"externalCatalog",@"externalEdit",@"exportState",@"importState",@"backup",@"backupAndReset",@"discardAndReset",@"restore",@"externalDelete",@"externalVerify",@"externalClaim",@"externalRelease",@"externalOwnership"]};
     else if([action isEqual:@"externalActiveFingerprint"]) {
         stateFailureCode=@"permission_denied";Require(geteuid()==0,@"Cannot enter fingerprint settings context");
         stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,NO);
@@ -302,19 +302,21 @@ static NSDictionary *StateExternalCommand(NSString *identifier, NSString *action
     }
     else {
         stateFailureCode=@"permission_denied";Require(geteuid()==0,@"Cannot enter backup storage context");
-        stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,![@[@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action]);
+        stateFailureCode=@"operation_failed";int lock=SessionLockForAccess(identifier,![@[@"externalBackupOverview",@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action]);
         @try {
             NativeStateBackend *backend=[NativeStateBackend new];
-            BOOL reading=[@[@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action];
+            BOOL reading=[@[@"externalBackupOverview",@"externalCatalog",@"exportState",@"externalVerify",@"externalOwnership"] containsObject:action];
             struct stat storageInfo;BOOL missing=reading&&lstat(StateStorage.fileSystemRepresentation,&storageInfo)&&errno==ENOENT;
             SHDWAppStateStore *store=missing?nil:[[SHDWAppStateStore alloc]initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend readOnly:reading error:&error];
+            if(missing&&[action isEqual:@"externalBackupOverview"])result=@{@"format":@"ShadowBackupOverview1",@"bundle_id":identifier,@"backup_count":@0,@"phone_count":@0,@"rv_count":@0,@"total_size_bytes":@0,@"latest_backup_at":@""};
             if(missing&&[action isEqual:@"externalCatalog"])result=@{@"bundle_id":identifier,@"current_idfv":StateReadExternalIdentity(identifier),@"backups":@[]};
             if(missing&&!result)error=[NSError errorWithDomain:SHDWAppStateErrorDomain code:1 userInfo:@{NSLocalizedDescriptionKey:@"Snapshot is unavailable.",@"errorCode":@"snapshot_unavailable"}];
             if(store){
                 store.requester=request[@"requester"]?:@"phone";
                 store.currentIdentityProvider=^NSString *(NSString *bundle){return StateReadExternalIdentity(bundle);};
                 if([action isEqual:@"externalVerify"])store.progressHandler=StateProgressHandler(^(NSDictionary *frame){StateOutput(frame);});
-                if([action isEqual:@"externalCatalog"]){
+                if([action isEqual:@"externalBackupOverview"])result=[store backupOverviewBundle:identifier error:&error];
+                else if([action isEqual:@"externalCatalog"]){
                     NSString *current=StateReadExternalIdentity(identifier);
                     NSArray *catalog=[store catalogBundle:identifier error:&error];if(catalog)result=@{@"bundle_id":identifier,@"current_idfv":current,@"backups":StateConciseCatalog(catalog)};
                 }else if([action isEqual:@"exportState"])result=[store exportBundle:identifier idfv:request[@"idfv"] part:request[@"part"] expectedStateSHA:request[@"stateSHA"] error:&error];

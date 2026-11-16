@@ -536,6 +536,34 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
     }
     return entry;
 }
+- (NSDictionary *)backupOverviewForBundle:(NSString *)bundle error:(NSError **)error {
+    sqlite3_stmt *statement = [self prepare:
+        @"SELECT COUNT(*),COALESCE(SUM(owner='phone'),0),COALESCE(SUM(owner='rv'),0),"
+         "COALESCE(SUM(size),0),MAX(date) FROM backup_entries WHERE bundleID=?"
+        values:@[bundle] error:error];
+    if (!statement) return nil;
+    if (sqlite3_step(statement) != SQLITE_ROW) {
+        sqlite3_finalize(statement);
+        IndexError(error, @"Cannot read backup overview.");
+        return nil;
+    }
+    NSString *latest = @"";
+    if (sqlite3_column_type(statement, 4) != SQLITE_NULL) {
+        NSISO8601DateFormatter *formatter = [NSISO8601DateFormatter new];
+        formatter.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+        latest = [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:sqlite3_column_double(statement, 4)]];
+    }
+    NSDictionary *result = @{
+        @"format": @"ShadowBackupOverview1", @"bundle_id": bundle,
+        @"backup_count": @(sqlite3_column_int64(statement, 0)),
+        @"phone_count": @(sqlite3_column_int64(statement, 1)),
+        @"rv_count": @(sqlite3_column_int64(statement, 2)),
+        @"total_size_bytes": @(sqlite3_column_int64(statement, 3)),
+        @"latest_backup_at": latest
+    };
+    sqlite3_finalize(statement);
+    return result;
+}
 - (NSDictionary *)queryBundle:(NSString *)bundle
                         query:(NSDictionary *)query
                   currentIDFV:(NSString *)idfv

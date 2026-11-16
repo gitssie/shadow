@@ -53,6 +53,7 @@ FOUNDATION_EXPORT NSString *const SHDWAppStateErrorDomain;
 // Indexed Manager queries leave snapshot files and their manifests unchanged.
 + (BOOL)validateCatalogQuery:(NSDictionary *)query error:(NSError **)error;
 - (nullable NSDictionary *)queryCatalogBundle:(NSString *)bundleID query:(NSDictionary *)query error:(NSError **)error;
+- (nullable NSDictionary *)backupOverviewBundle:(NSString *)bundleID error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)catalogBundle:(NSString *)bundleID error:(NSError **)error;
 - (nullable NSDictionary *)exportBundle:(NSString *)bundleID idfv:(NSString *)idfv part:(NSString *)part expectedStateSHA:(nullable NSString *)sha error:(NSError **)error;
 - (BOOL)importBundle:(NSString *)bundleID idfv:(NSString *)idfv manifest:(NSData *)manifest state:(NSData *)state expectedManifestSHA:(NSString *)sha error:(NSError **)error;

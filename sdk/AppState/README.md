@@ -17,6 +17,7 @@ External adapters first request `capabilities` and require API version 1, format
 | --- | --- | --- |
 | capabilities | empty dictionary | apiVersion, format, operations |
 | externalActiveFingerprint | empty dictionary | bundle_id, source, available, enabled, locked, current_idfv, fingerprint_config, fingerprint_data |
+| externalBackupOverview | empty dictionary | format=ShadowBackupOverview1, bundle_id, backup_count, phone_count, rv_count, total_size_bytes, latest_backup_at |
 | externalCatalog | empty dictionary | bundle_id, current_idfv, backups |
 | externalEdit | idfv, metadata containing title/note | edited |
 | backup | optional metadata containing title and/or note | concise snapshot metadata |
@@ -40,8 +41,9 @@ are omitted from the plist result; HTTP adapters represent them as null. Existin
 configuration/data keys are preserved, with dates encoded as Unix seconds and
 binary values as base64 strings. Invalid stored data/configuration is an error.
 
-Saved-state export/import/edit/delete/verify accept optional `requester` (`phone`
-or `rv`, default phone). It must match the manifest owner. This cooperative
+Saved-state import/edit/delete/verify accept optional `requester` (`phone`
+or `rv`, default phone). It must match the manifest owner. Manifest/state exports
+do not require a requester or matching ownership. This cooperative
 single-RV context carries no credentials or generation. Backup/restore always
 operate on behalf of the phone. Ownership queries and catalog are unrestricted;
 JSON adapters supply reserved `owner_id: null` (omitted in plist transport).

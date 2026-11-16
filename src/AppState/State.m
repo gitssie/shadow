@@ -761,7 +761,7 @@ static BOOL TransferWrite(int parent, NSString *name, NSData *data, uid_t uid, g
     SHDWStateDirectory *directory=nil;int fd=-1;
     @try {if(error)*error=nil;NSString *canonical=UUIDValue(idfv);if(!canonical||![@[@"manifest",@"state"] containsObject:part]){FailCode(error,@"invalid_request",@"Invalid transfer selection.");return nil;}
         directory=[self directory:bundleID create:NO exclusive:NO missing:NULL error:error];if(!directory)return nil;
-        NSDictionary *manifest=[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error];if(!manifest || ![self accessManifest:manifest error:error])return nil;
+        NSDictionary *manifest=[self manifest:bundleID idfv:canonical directory:directory verify:NO error:error];if(!manifest)return nil;
         if([part isEqual:@"state"]&&!Same(sha,manifest[@"stateArchiveInfo"][@"sha256"])){Fail(error,@"Snapshot changed; read its manifest again.");return nil;}
         fd=openat(directory.snapshots,canonical.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(fd<0){POSIXFail(error,@"Cannot open transfer snapshot.");return nil;}
         NSData *metadata=TransferRead(fd,@"manifest.plist",16*1024*1024,self.ownerUID,self.ownerGID,error);if(!metadata)return nil;

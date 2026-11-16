@@ -265,6 +265,10 @@ Check(!SHDWBackupCanDiscard(@[first],[first[@"idfv"] lowercaseString]),@"current
 Check(!SHDWBackupCanDiscard(@[@{@"idfv":active.lowercaseString,@"unavailable":@YES}],active),@"unavailable current backup allowed direct cleanup");
 Check(SHDWBackupCanDiscard(@[first,last],active)&&SHDWBackupCanDiscard(@[],active),@"unrelated or absent backups blocked direct cleanup");
 Check(!SHDWBackupCanDiscard(nil,active)&&!SHDWBackupCanDiscard(input,nil)&&!SHDWBackupCanDiscard(input,@"invalid"),@"unknown backup or identity state allowed direct cleanup");
+Check(SHDWBackupCanCleanDirectly(@[],nil)&&SHDWBackupCanCleanDirectly(input,nil),@"first cleanup without a fingerprint was blocked");
+Check(!SHDWBackupCanCleanDirectly(nil,nil),@"catalog failure enabled first cleanup");
+Check(!SHDWBackupCanCleanDirectly(input,@{@"VendorIdentifier":active})&&SHDWBackupCanCleanDirectly(@[],@{@"VendorIdentifier":active}),@"direct cleanup changed existing identity backup protection");
+Check(!SHDWBackupCanCleanDirectly(@[],@{@"VendorIdentifier":@"invalid"}),@"malformed existing profile enabled direct cleanup");
 NSDictionary *pending=@{@"restorePending":@YES,@"recoverySource":@YES};
 Check(!SHDWBackupCanRestore(pending,YES)&&SHDWBackupCanRestore(pending,NO),@"incomplete restore bypassed identity rule");
 NSDictionary *finalizing=@{@"restorePending":@YES,@"recoverySource":@YES,@"finalizationPending":@YES};

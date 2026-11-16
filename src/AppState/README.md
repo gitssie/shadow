@@ -42,6 +42,16 @@ cannot turn an already completed backup into a failed backup operation.
 Unfinished recovery remains governed by `pending.plist`, and restore/delete/
 ownership operations continue to validate original snapshot authority.
 
+## Backup overview
+
+`externalBackupOverview` accepts no options and returns `ShadowBackupOverview1`:
+`bundle_id`, `backup_count`, `phone_count`, `rv_count`, `total_size_bytes`, and
+`latest_backup_at`. One SQL aggregate reads existing `backup_entries` rows for
+that bundle. It uses the indexed size directly and does not scan snapshots,
+read state payloads, or query current identity. Counts and totals are zero for
+an empty result. The latest date is UTC RFC3339, or an empty plist string mapped
+to JSON null by the network adapter. No requester or ownership claim is needed.
+
 ## Storage and identity
 
 ```text
@@ -95,13 +105,15 @@ an authentication boundary; no credential, generation, lease or expiry is used.
 
 `claimBundle` checks the current IDFV and pending restoration under the existing
 application lock before setting an inactive snapshot to RV. Claim/release are
-idempotent. `ownershipBundle` and catalog remain available to either side.
-All other saved-snapshot operations require `requester` to match the saved owner;
+idempotent. `ownershipBundle`, catalog, and manifest/state downloads remain available to
+either side. Downloads do not require `requester`; legacy `phone` and `rv` values
+are accepted without comparing them to the saved owner.
+Other saved-snapshot operations require `requester` to match the saved owner;
 requester defaults to phone. Active capture and restoration remain phone-only.
 An RV-owned snapshot cannot be overwritten by a phone backup or restored before
 release. Imports cannot change the owner through a supplied manifest.
 
-RV claims before downloading state, passes requester=rv while editing/transferring,
+RV claims before editing or writing back state, passes requester=rv for those writes,
 and releases only after publishing and verifying the final state. Failed writes
 never implicitly release ownership. An uncertain ownership write is reported as
 unknown so callers query ownership before deciding what to do. An unreadable
@@ -289,7 +301,8 @@ credential workers. Current identity is read separately in the mobile preference
 domain; missing identity is represented as an empty string in the property-list
 wire result. The network adapter maps that value to JSON null. Malformed identity
 is an error. Export returns raw bytes plus manifest/state/data hashes; state
-export requires the expected state hash. Import receives both complete files and
+export requires the expected state hash, but no ownership claim or matching
+requester. Downloading never changes ownership. Import receives both complete files and
 the expected current manifest hash. It rejects pending restoration sources and
 changes to immutable snapshot fields, copies the existing data archive into a
 private stage, verifies both complete archives and logical payload identity, and

@@ -26,6 +26,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)deleteBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error;
 - (BOOL)setStatus:(NSString *)status bundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error;
 - (nullable NSDictionary *)entryForBundle:(NSString *)bundle idfv:(NSString *)idfv error:(NSError **)error;
+- (nullable NSDictionary *)backupOverviewForBundle:(NSString *)bundle error:(NSError **)error;
 - (nullable NSDictionary *)queryBundle:(NSString *)bundle
                                  query:(NSDictionary *)query
                            currentIDFV:(nullable NSString *)idfv
