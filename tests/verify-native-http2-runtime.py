@@ -102,6 +102,8 @@ static void initial(void *session) {
 }
 int main(void) { @autoreleasepool {
   (void)library; (void)installed;
+  assert(SHDWH2ConfigurationParse(&configuration,"2:0;3:100;4:2097152;9:1","msap",10420225,256,0,1));
+  requestPriority=(SHDWH2Priority){0,configuration.weight,configuration.exclusive};
   originals[0]=(void *)originalSettings; originals[1]=(void *)originalWindow;
   originals[2]=(void *)originalAbsolute; originals[3]=(void *)originalRequest;
   originals[4]=(void *)originalHeaders; originals[5]=(void *)originalPriority; originals[6]=(void *)originalDelete;
@@ -224,6 +226,47 @@ int main(void) { @autoreleasepool {
   void *nullOutput=(void *)1;
   assert(createSession2(&nullOutput,NULL,NULL,NULL)==0 && !nullOutput && !sessions);
   assert(createSession2(NULL,NULL,NULL,NULL)==0 && !sessions);
+  const char *settings[]={"2:0;4:2097152;3:100","2:0;3:100;4:2097152;8:1;9:1",
+                          "2:0;3:100;4:2097152;9:1","2:0;3:100;4:2097152;9:1"};
+  for(unsigned profile=0;profile<4;profile++) {
+    assert(SHDWH2ConfigurationParse(&configuration,settings[profile],profile ? "msap" : "mspa",
+                                    profile ? 10420225 : 10485760,profile ? 256 : 255,0,profile==3));
+    requestPriority=(SHDWH2Priority){0,configuration.weight,configuration.exclusive};
+    nextSession=session; void *output=NULL;
+    assert(createSession2(&output,NULL,NULL,NULL)==0 && output==session);
+    assert(setSettings(session,0,baseline,2)==0 && tracked(session));
+    assert(savedSettingCount==configuration.count &&
+           !memcmp(savedSettings,configuration.settings,configuration.count*sizeof(*savedSettings)));
+    assert(updateWindow(session,0,0,999999)==17 && savedWindow==configuration.windowUpdate);
+    assert(updateWindow(session,0,0,1234)==17 && savedWindow==1234);
+    assert(submitRequest(session,&priorityToken,headers,6,&bodyToken,&userToken)==23);
+    if(profile==3) assert(!savedPriority);
+    else {
+      assert(savedPriority==&requestPriority);
+      const SHDWH2Priority *p=savedPriority;
+      assert(p->stream==0 && p->weight==(profile ? 256 : 255) && !p->exclusive);
+    }
+    same(savedHeaders[0],headers[2]); same(savedHeaders[1],headers[3]);
+    same(savedHeaders[2],headers[profile ? 1 : 0]); same(savedHeaders[3],headers[profile ? 0 : 1]);
+    assert(submitHeaders(session,0x25,7,&priorityToken,headers,6,&userToken)==25);
+    assert(savedFlags==(profile==3 ? 5 : 0x25));
+    assert(savedPriority==(profile==3 ? NULL : &requestPriority));
+    unsigned priorities=priorityCalls;
+    assert(submitPriority(session,0,1,&priorityToken)==0 && priorityCalls==priorities);
+    assert(submitPriority(session,0,7,&priorityToken)==(profile==3 ? 0 : 19));
+    assert(priorityCalls==priorities+(profile!=3));
+    if(profile!=3) assert(savedPriority==&requestPriority);
+    // Trailers retain their original flags and priority argument.
+    assert(submitHeaders(session,1,7,NULL,&headers[4],2,&userToken)==25);
+    assert(savedHeaderPointer==&headers[4] && savedFlags==1 && !savedPriority);
+    deleteSession(session);
+    output=NULL;
+    assert(createSession2(&output,NULL,NULL,NULL)==0);
+    assert(setSettings(session,0,baseline,2)==0);
+    assert(absoluteWindow(session,0,0,123456)==18 && savedWindow==65535+configuration.windowUpdate);
+    assert(absoluteWindow(session,0,0,1234)==18 && savedWindow==1234);
+    deleteSession(session);
+  }
   assert(constructorCalls);
   assert(settingCalls && windowCalls && absoluteCalls && requestCalls && headerCalls && priorityCalls);
 } return 0; }
@@ -234,7 +277,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-native-http2-runtime-") as tempo
     binary = directory / "runtime"
     unit.write_text(setup + wrappers + tests)
     subprocess.run(["clang", "-fobjc-arc", "-Wall", "-Wextra", "-Werror",
-                    "-framework", "Foundation", "-I", str(root / "src/Transport"),
+                    "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Transport"),
                     str(unit), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 print("Native HTTP/2 runtime wrapper checks passed")

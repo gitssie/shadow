@@ -304,3 +304,9 @@ verify-native-http2-stubs:
 
 .PHONY: verify-native-http2-stubs
 test: verify-native-http2-stubs
+
+verify-curl-http2-config:
+	python3 verify-curl-http2-config.py
+
+.PHONY: verify-curl-http2-config
+test verify-curl-transport: verify-curl-http2-config

@@ -110,6 +110,7 @@ exports = subprocess.check_output(['xcrun', 'nm', '-gU', str(library)], text=Tru
 for name in ['curl_easy_impersonate', 'curl_easy_init', 'curl_easy_setopt', 'curl_easy_perform',
              'curl_easy_getinfo', 'curl_easy_cleanup', 'curl_global_init', 'curl_slist_append',
              'curl_slist_free_all', 'curl_easy_strerror',
+             'curl_shadow_get_http2_config',
              'curl_shadow_connect_only_get_alpn', 'curl_shadow_connect_only_get_tls_snapshot',
              'curl_shadow_connect_only_shutdown_write', 'curl_shadow_connect_only_enable_external_io',
              'curl_shadow_connect_only_set_native_verify', 'curl_shadow_connect_only_get_verification_snapshot',

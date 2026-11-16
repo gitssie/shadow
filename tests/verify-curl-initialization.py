@@ -20,6 +20,7 @@ source = r'''
 #include <string.h>
 #include <stdarg.h>
 #include "CurlTransport.h"
+#include "CurlHTTP2.h"
 static unsigned loads,lookups,initializations,creates,probes,destroys,reentries;
 static unsigned sets,failAt;
 static const char *mode="success",*missing,*expectedProfile="safari184_ios";
@@ -70,6 +71,21 @@ static CURLcode set(CURL *curl,CURLoption option,...) {
     va_end(args);
     return sets==failAt ? CURLE_UNKNOWN_OPTION : CURLE_OK;
 }
+static CURLcode readHTTP2(CURL *curl,char *settings,size_t capacity,char *order,size_t orderCapacity,
+                         long *window,long *weight,long *exclusive,long *noPriority) {
+    assert(curl==(CURL *)1 && !SHDWCurlTransportReady() && !destroys);
+    if(!strcmp(mode,"snapshot")) return CURLE_NOT_BUILT_IN;
+    const char *preset=!strcmp(expectedProfile,"safari172_ios") ? "2:0;4:2097152;3:100" :
+                       !strcmp(expectedProfile,"safari180_ios") ? "2:0;3:100;4:2097152;8:1;9:1" :
+                       "2:0;3:100;4:2097152;9:1";
+    assert(capacity>strlen(preset) && orderCapacity>=5);
+    strcpy(settings,!strcmp(mode,"malformed") ? "2:0;2:1" : preset);
+    strcpy(order,!strcmp(expectedProfile,"safari172_ios") ? "mspa" : "msap");
+    *window=!strcmp(expectedProfile,"safari172_ios") ? 10485760 : 10420225;
+    *weight=!strcmp(expectedProfile,"safari172_ios") ? 255 : 256;
+    *exclusive=0; *noPriority=!strcmp(expectedProfile,"safari187_ios");
+    return CURLE_OK;
+}
 static void *openImage(const char *path,int flags) {
     assert(!strcmp(path,"/usr/lib/shadow/curl/libcurl-impersonate.4.dylib"));
     assert(flags==(RTLD_NOW|RTLD_LOCAL) && !SHDWCurlTransportReady());loads++;
@@ -89,6 +105,7 @@ static void *lookup(void *image,const char *name) {
     if(!strcmp(name,"curl_easy_init")) return (void *)create;
     if(!strcmp(name,"curl_easy_impersonate")) return (void *)impersonate;
     if(!strcmp(name,"curl_easy_setopt")) return (void *)set;
+    if(!strcmp(name,"curl_shadow_get_http2_config")) return (void *)readHTTP2;
     if(!strcmp(name,"curl_easy_cleanup")) return (void *)destroy;
     if(!strncmp(name,"curl_shadow_connect_only_",25)) return (void *)3;
     abort();
@@ -98,7 +115,16 @@ static void *lookup(void *image,const char *name) {
 #include "CurlTransport.m"
 static unsigned http2Activations, tlsAttempts;
 void SHDWNativeHTTP2Activate(void) { http2Activations++; }
-BOOL SHDWNativeHTTP2Prepare(NSString *profile) { (void)profile; return strcmp(mode,"http2")!=0; }
+BOOL SHDWNativeHTTP2Prepare(const SHDWH2Configuration *config) {
+    assert(config && SHDWH2ConfigurationValid(config));
+    BOOL oldest=!strcmp(expectedProfile,"safari172_ios");
+    assert(config->count==(oldest ? 3u : !strcmp(expectedProfile,"safari180_ios") ? 5u : 4u));
+    assert(!strcmp(config->order,oldest ? "mspa" : "msap"));
+    assert(config->windowUpdate==(oldest ? 10485760 : 10420225));
+    assert(config->weight==(oldest ? 255 : 256) && !config->exclusive);
+    assert(config->noPriority==!strcmp(expectedProfile,"safari187_ios"));
+    return strcmp(mode,"http2")!=0;
+}
 BOOL SHDWNativeTLSPrepare(NSString *profile, NSString *library, NSString *CAPath) {
     tlsAttempts++;
     assert([profile isEqual:@(expectedProfile)]);
@@ -128,8 +154,9 @@ int main(int argc,char **argv) { @autoreleasepool {
     BOOL expected=!strcmp(mode,"success");assert(SHDWCurlTransportReady()==expected);
     assert(http2Activations == (unsigned)expected);
     if(!strcmp(mode,"http2")) assert(!tlsAttempts);
+    if(!strcmp(mode,"snapshot") || !strcmp(mode,"malformed")) assert(probes==1 && destroys==1 && !tlsAttempts && !http2Activations);
     if(!strcmp(mode,"tls")) assert(tlsAttempts==1 && !http2Activations);
-    if(expected) assert(lookups==11 && initializations==1 && creates==1 && probes==1 && destroys==1);
+    if(expected) assert(lookups==12 && initializations==1 && creates==1 && probes==1 && destroys==1);
     if(missing) assert(!initializations && !creates && !probes && !destroys);
     if(!strcmp(mode,"init")) assert(initializations==1 && !creates && !probes && !destroys);
     if(!strcmp(mode,"create")) assert(initializations==1 && creates==1 && !probes && !destroys);
@@ -153,11 +180,11 @@ with tempfile.TemporaryDirectory(prefix="shadow-curl-initialization-") as tempor
                     "-fsanitize=address,undefined", "-framework", "Foundation", "-framework", "CFNetwork",
                     "-framework", "Security", "-I", str(dependency / "include"),
                     "-I", str(root / "src/Shadow.framework/Headers"),
-                    "-I", str(root / "src/ShadowCore.dylib/policy"), str(test), "-o", str(binary)], check=True)
+                    "-I", str(root / "src/ShadowCore.dylib/policy"), "-I", str(root / "src/Transport"), str(test), "-o", str(binary)], check=True)
     for profile in ("safari172_ios", "safari180_ios", "safari184_ios", "safari187_ios"):
-        for mode in ("success", "load", "init", "create", "preset", "tls", "http2"):
+        for mode in ("success", "load", "init", "create", "preset", "tls", "http2", "snapshot", "malformed"):
             subprocess.run([str(binary), mode, "", profile], check=True, timeout=20)
-        for symbol in ("curl_global_init", "curl_easy_init", "curl_easy_impersonate", "curl_easy_setopt", "curl_easy_cleanup",
+        for symbol in ("curl_global_init", "curl_easy_init", "curl_easy_impersonate", "curl_easy_setopt", "curl_easy_cleanup", "curl_shadow_get_http2_config",
                        "curl_shadow_connect_only_enable_external_io",
                        "curl_shadow_connect_only_set_native_verify", "curl_shadow_connect_only_get_verification_snapshot",
                        "curl_shadow_connect_only_set_transport", "curl_shadow_connect_only_get_io_state",

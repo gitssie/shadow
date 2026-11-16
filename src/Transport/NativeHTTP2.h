@@ -1,4 +1,5 @@
 #pragma once
 #import <Foundation/Foundation.h>
-BOOL SHDWNativeHTTP2Prepare(NSString *profile);
+#include "NativeHTTP2Policy.h"
+BOOL SHDWNativeHTTP2Prepare(const SHDWH2Configuration *configuration);
 void SHDWNativeHTTP2Activate(void);

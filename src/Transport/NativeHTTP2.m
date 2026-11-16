@@ -93,6 +93,8 @@ static int (*clientAllowed)(void *);
 static unsigned enabled;
 static BOOL installed;
 static void *library;
+static SHDWH2Configuration configuration;
+static SHDWH2Priority requestPriority;
 static pthread_mutex_t sessionsLock = PTHREAD_MUTEX_INITIALIZER;
 typedef struct H2Session { void *session; BOOL windowSet, configured, settingsSeen; struct H2Session *next; } H2Session;
 static H2Session *sessions;
@@ -173,7 +175,7 @@ static int setSettings(void *session, uint8_t flags, const SHDWH2Setting *settin
     if (!first || !nativeCaller(__builtin_return_address(0)) || flags || count > 120 ||
         !clientAllowed(session)) return original(session, flags, settings, count);
     SHDWH2Setting updated[128];
-    size_t length = SHDWH2Settings(settings, count, updated, 128);
+    size_t length = SHDWH2Settings(&configuration, settings, count, updated, 128);
     if (!length) return original(session, flags, settings, count);
     configureSession(session);
     int result = original(session, flags, updated, length);
@@ -185,7 +187,7 @@ static int updateWindow(void *session, uint8_t flags, int32_t stream, int32_t in
     WindowFunction original = H2_ORIGINAL(1, WindowFunction);
     if (stream || flags || increment <= 0 || !nativeCaller(__builtin_return_address(0)) || !claimWindow(session))
         return original(session, flags, stream, increment);
-    int32_t updated = increment == 10485760 ? 10420225 : increment;
+    int32_t updated = configuration.windowUpdate;
     int result = original(session, flags, stream, updated);
     SHDWCurlTrace(@"http2.window.applied", nil, @{@"result":@(result), @"original":@(increment), @"increment":@(updated)});
     return result;
@@ -194,14 +196,15 @@ static int absoluteWindow(void *session, uint8_t flags, int32_t stream, int32_t 
     AbsoluteWindowFunction original = H2_ORIGINAL(2, AbsoluteWindowFunction);
     if (stream || flags || size <= 0 || !nativeCaller(__builtin_return_address(0)) || !claimWindow(session))
         return original(session, flags, stream, size);
-    int result = original(session, flags, stream, 10485760);
-    SHDWCurlTrace(@"http2.window.applied", nil, @{@"result":@(result), @"original":@(size), @"absolute":@10485760});
+    int32_t updated = 65535 + configuration.windowUpdate;
+    int result = original(session, flags, stream, updated);
+    SHDWCurlTrace(@"http2.window.applied", nil, @{@"result":@(result), @"original":@(size), @"absolute":@(updated)});
     return result;
 }
 static SHDWH2Header *orderedHeaders(const SHDWH2Header *headers, size_t count) {
     if (!headers || !count || count > 4096) return NULL;
     SHDWH2Header *copy = malloc(count * sizeof(*copy));
-    if (copy && !SHDWH2Headers(headers, count, copy, count)) { free(copy); copy = NULL; }
+    if (copy && !SHDWH2Headers(&configuration, headers, count, copy, count)) { free(copy); copy = NULL; }
     return copy;
 }
 static int32_t submitRequest(void *session, const void *priority, const SHDWH2Header *headers,
@@ -210,7 +213,9 @@ static int32_t submitRequest(void *session, const void *priority, const SHDWH2He
     if (!nativeCaller(__builtin_return_address(0)) || !tracked(session))
         return original(session, priority, headers, count, body, user);
     SHDWH2Header *copy = orderedHeaders(headers, count);
-    int32_t result = original(session, NULL, copy ?: headers, count, body, user);
+    if (!copy) return original(session, priority, headers, count, body, user);
+    int32_t result = original(session, configuration.noPriority ? NULL : &requestPriority,
+                              copy, count, body, user);
     free(copy);
     return result;
 }
@@ -220,22 +225,30 @@ static int32_t submitHeaders(void *session, uint8_t flags, int32_t stream, const
     if (!nativeCaller(__builtin_return_address(0)) || !tracked(session))
         return original(session, flags, stream, priority, headers, count, user);
     SHDWH2Header *copy = orderedHeaders(headers, count);
-    int32_t result = original(session, flags & ~0x20u, stream, NULL, copy ?: headers, count, user);
+    if (!copy) return original(session, flags, stream, priority, headers, count, user);
+    int32_t result = original(session, configuration.noPriority ? flags & ~0x20u : flags,
+                              stream, configuration.noPriority ? NULL : &requestPriority,
+                              copy, count, user);
     free(copy);
     return result;
 }
 static int submitPriority(void *session, uint8_t flags, int32_t stream, const void *priority) {
-    if (nativeCaller(__builtin_return_address(0)) && tracked(session)) return 0;
+    if (nativeCaller(__builtin_return_address(0)) && tracked(session)) {
+        if (configuration.noPriority || stream == 1) return 0;
+        return H2_ORIGINAL(5, PriorityFunction)(session, flags, stream, &requestPriority);
+    }
     return H2_ORIGINAL(5, PriorityFunction)(session, flags, stream, priority);
 }
 static void deleteSession(void *session) {
     forgetSession(session);
     H2_ORIGINAL(6, DeleteFunction)(session);
 }
-BOOL SHDWNativeHTTP2Prepare(NSString *profile) {
-    if (![profile isEqualToString:@"safari187_ios"]) return YES;
+BOOL SHDWNativeHTTP2Prepare(const SHDWH2Configuration *selected) {
+    if (!SHDWH2ConfigurationValid(selected)) return NO;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        configuration = *selected;
+        requestPriority = (SHDWH2Priority){0, configuration.weight, configuration.exclusive};
         library = dlopen("/usr/lib/libapple_nghttp2.dylib", RTLD_NOW | RTLD_LOCAL);
         if (!library) return;
         const H2Version *(*version)(int) = dlsym(library, "nghttp2_version");
@@ -273,12 +286,19 @@ BOOL SHDWNativeHTTP2Prepare(NSString *profile) {
         installed = YES;
         SHDWCurlTrace(@"http2.install", nil, @{@"installed":@YES, @"version":@(info->versionString), @"entries":@(count)});
     });
-    return installed;
+    return installed && configuration.count == selected->count &&
+        !memcmp(configuration.settings, selected->settings,
+                selected->count * sizeof(*selected->settings)) &&
+        !memcmp(configuration.order, selected->order, sizeof(selected->order)) &&
+        configuration.windowUpdate == selected->windowUpdate &&
+        configuration.weight == selected->weight &&
+        configuration.exclusive == selected->exclusive &&
+        configuration.noPriority == selected->noPriority;
 }
 void SHDWNativeHTTP2Activate(void) {
     if (installed) __atomic_store_n(&enabled, 1, __ATOMIC_RELEASE);
 }
 #else
 void SHDWNativeHTTP2Activate(void) {}
-BOOL SHDWNativeHTTP2Prepare(NSString *profile) { (void)profile; return YES; }
+BOOL SHDWNativeHTTP2Prepare(const SHDWH2Configuration *selected) { (void)selected; return YES; }
 #endif

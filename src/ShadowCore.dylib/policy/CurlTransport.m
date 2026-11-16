@@ -6,6 +6,7 @@
 #import "../../Transport/NativeTLS.h"
 #import "../../Transport/NativeHTTP2.h"
 #include "../../Transport/CurlReference.h"
+#include "../../Transport/CurlHTTP2.h"
 #include "../../Transport/CurlDiagnostics.h"
 #include <dlfcn.h>
 
@@ -16,6 +17,7 @@ static struct {
     CURL *(*create)(void);
     CURLcode (*impersonate)(CURL *, const char *, int);
     CURLcode (*set)(CURL *, CURLoption, ...);
+    SHDWCurlHTTP2ConfigFunction readHTTP2;
     void (*destroy)(CURL *);
 } engine;
 
@@ -35,6 +37,7 @@ void SHDWCurlTransportPrepareProfile(NSString *profile) {
     SHDW_CURL_SYMBOL(create, "curl_easy_init");
     SHDW_CURL_SYMBOL(impersonate, "curl_easy_impersonate");
     SHDW_CURL_SYMBOL(set, "curl_easy_setopt");
+    SHDW_CURL_SYMBOL(readHTTP2, "curl_shadow_get_http2_config");
     SHDW_CURL_SYMBOL(destroy, "curl_easy_cleanup");
 #undef SHDW_CURL_SYMBOL
     const char *required[] = {
@@ -48,9 +51,12 @@ void SHDWCurlTransportPrepareProfile(NSString *profile) {
     if (engine.initialize(CURL_GLOBAL_DEFAULT) != CURLE_OK) return;
     CURL *probe = engine.create(); if (!probe) return;
     BOOL available = SHDWCurlApplyProfile(probe, transportProfile.UTF8String, engine.impersonate, engine.set) == CURLE_OK;
+    SHDWH2Configuration http2 = {0};
+    if (available)
+        available = SHDWCurlReadHTTP2Configuration(probe, engine.readHTTP2, &http2) == CURLE_OK;
     engine.destroy(probe);
     if (!available) return;
-    BOOL http2Installed = SHDWNativeHTTP2Prepare(transportProfile);
+    BOOL http2Installed = SHDWNativeHTTP2Prepare(&http2);
     SHDWCurlTrace(@"transport.nativeHTTP2.install", nil, @{@"installed":@(http2Installed), @"profile":transportProfile});
     if (!http2Installed) return;
     BOOL installed = SHDWNativeTLSPrepare(transportProfile, library, JBPath(@"/etc/ssl/cert.pem"));

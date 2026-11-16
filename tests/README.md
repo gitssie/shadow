@@ -14,6 +14,7 @@ and do not require Theos or the `THEOS` environment variable.
 | fresh fd/DIR path policy (host doubles) | `make -C tests verify-fd-path-freshness` |
 | mount filtering (pure C + static query contract) | `make -C tests verify-mount-filter` |
 | native HTTP/2 SETTINGS and header policy | `make -C tests verify-native-http2-policy` |
+| curl HTTP/2 configuration snapshot and profile propagation | `make -C tests verify-curl-http2-config` |
 | native HTTP/2 branch-stub decoding | `make -C tests verify-native-http2-stubs` |
 | native TLS bounded reads, allocation failure, peek and empty I/O | `make -C tests verify-native-tls-read` |
 | prepared function original and bounded retry (host lifecycle doubles) | `make -C tests verify-prepared-original` |
@@ -73,10 +74,14 @@ selects `safari184_ios`, and 18.7 or later selects `safari187_ios`.
 App and Networking processes freeze the selected preset at startup.
 The `safari187_ios` profile applies the issue #450 reference overrides, using the
 same `CurlReference.h` helper as the standalone probe. Its name does not prove
-exact OS-version or WKWebView equivalence. Native HTTP/2 remains responsible for
-framing, HPACK and flow control. For this preset, generation hooks normalize the
-initial SETTINGS and connection window and reorder request pseudo headers before
-encoding; legacy priority submissions are suppressed. Only newly created native
+exact OS-version or WKWebView equivalence. After applying the selected profile,
+the loader copies the final HTTP/2 configuration from the curl probe before
+destroying it. All four profiles use this snapshot for native initial SETTINGS,
+connection window, pseudo-header order and priority handling; no separate native
+profile table is maintained. The configuration getter is required in both curl
+slices; rebuild older dependencies with `scripts/prepare-curl-impersonate.sh`.
+Native HTTP/2 remains responsible for framing, HPACK and flow control.
+Only newly created native
 client sessions are eligible, and subsequent window replenishment remains native.
 Native entry discovery validates optimized branch stubs against the selected
 system library. Stub patches preserve the original function bodies and pin the

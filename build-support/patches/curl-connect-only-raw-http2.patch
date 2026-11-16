@@ -25,10 +25,56 @@
    sfd = Curl_getconnectinfo(data, connp);
  
    if(sfd == CURL_SOCKET_BAD) {
-@@ -1748,6 +1754,192 @@
+@@ -1748,6 +1754,238 @@
    }
  
    return CURLE_OK;
++}
++
++CURL_EXTERN CURLcode curl_shadow_get_http2_config(
++  CURL *curl, char *settings, size_t settings_capacity,
++  char *order, size_t order_capacity, long *window_update,
++  long *weight, long *exclusive, long *no_priority)
++{
++#ifdef USE_HTTP2
++  struct Curl_easy *data = curl;
++  const char *configured_settings, *configured_order, *streams;
++  size_t settings_length, order_length;
++  if(!data || data->multi || data->conn || !settings || !order ||
++     !window_update || !weight || !exclusive || !no_priority)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  configured_settings = CURL_EASY_STR(data, STRING_HTTP2_SETTINGS);
++  configured_order = CURL_EASY_STR(data, STRING_HTTP2_PSEUDO_HEADERS_ORDER);
++  streams = CURL_EASY_STR(data, STRING_HTTP2_STREAMS);
++  if(streams && streams[0])
++    return CURLE_NOT_BUILT_IN;
++  if(!configured_settings || !configured_settings[0] ||
++     !configured_order || !configured_order[0])
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  settings_length = strlen(configured_settings);
++  order_length = strlen(configured_order);
++  if(settings_length >= settings_capacity || order_length >= order_capacity)
++    return CURLE_BAD_FUNCTION_ARGUMENT;
++  memcpy(settings, configured_settings, settings_length + 1);
++  memcpy(order, configured_order, order_length + 1);
++  *window_update = data->set.http2_window_update ?
++    data->set.http2_window_update : 15663105;
++  *weight = data->set.weight ? data->set.weight : 256;
++  *exclusive = data->set.stream_exclusive;
++  *no_priority = data->set.http2_no_priority;
++  return CURLE_OK;
++#else
++  (void)curl;
++  (void)settings;
++  (void)settings_capacity;
++  (void)order;
++  (void)order_capacity;
++  (void)window_update;
++  (void)weight;
++  (void)exclusive;
++  (void)no_priority;
++  return CURLE_NOT_BUILT_IN;
++#endif
 +}
 +
 +CURL_EXTERN CURLcode curl_shadow_connect_only_enable_external_io(CURL *curl)

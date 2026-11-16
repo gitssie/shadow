@@ -74,6 +74,7 @@ for index in range(count):
         exports.add(name)
     for name in ("curl_easy_init", "curl_easy_impersonate", "curl_easy_setopt", "curl_easy_send",
                  "curl_easy_recv", "curl_multi_init", "curl_multi_perform",
+                 "curl_shadow_get_http2_config",
                  "curl_shadow_connect_only_get_alpn", "curl_shadow_connect_only_get_tls_snapshot",
                  "curl_shadow_connect_only_shutdown_write", "curl_shadow_connect_only_enable_external_io",
                  "curl_shadow_connect_only_set_native_verify",
