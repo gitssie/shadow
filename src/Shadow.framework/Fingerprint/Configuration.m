@@ -183,6 +183,7 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
       numbers[index] = MIN((NSUInteger)1000, numbers[index] * 10 + digit - '0');
     }
   }
+  if (numbers[0] < 17) return nil;
   if (numbers[0] < 18) return @"safari172_ios";
   if (numbers[0] == 18 && numbers[1] < 4) return @"safari180_ios";
   if (numbers[0] == 18 && numbers[1] < 7) return @"safari184_ios";

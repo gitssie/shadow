@@ -22,8 +22,8 @@ static NSString *SHDWFingerprintOSVersionString(void) { return version; }
 void SHDWCurlTransportPrepareProfile(NSString *profile) { calls++;prepared=[profile copy]; }
 ''' + implementation + r'''
 int main(void) { @autoreleasepool {
-    NSArray *versions=@[@"16.3",@"17.2",@"17.7.2",@"18.0",@"18.3.1",@"18.4",@"18.6.9",@"18.7",@"18.7.1",@"18.7.2",@"18.10",@"27.0"];
-    NSArray *profiles=@[@"safari172_ios",@"safari172_ios",@"safari172_ios",@"safari180_ios",@"safari180_ios",@"safari184_ios",@"safari184_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios"];
+    NSArray *versions=@[@"15.0",@"16.3",@"16.7.12",@"16.99.99",@"17.0",@"17.0.1",@"17.2",@"17.7.2",@"18.0",@"18.3.1",@"18.4",@"18.6.9",@"18.7",@"18.7.1",@"18.7.2",@"18.10",@"27.0"];
+    NSArray *profiles=@[NSNull.null,NSNull.null,NSNull.null,NSNull.null,@"safari172_ios",@"safari172_ios",@"safari172_ios",@"safari172_ios",@"safari180_ios",@"safari180_ios",@"safari184_ios",@"safari184_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios",@"safari187_ios"];
     (void)profiles;
     for(id selected in @[NSNull.null,@"native",@"auto",@"safari184_ios"]) {
         mode=selected==NSNull.null ? nil : selected;
@@ -32,7 +32,7 @@ int main(void) { @autoreleasepool {
             SHDWCurlTransportPrepare();
 #if SHADOW_CURL_IMPERSONATE
             assert(calls==before+1);
-            if(!mode || [mode isEqual:@"auto"] || [mode isEqual:@"safari184_ios"]) assert([prepared isEqual:profiles[i]]);
+            if((!mode || [mode isEqual:@"auto"] || [mode isEqual:@"safari184_ios"]) && profiles[i]!=NSNull.null) assert([prepared isEqual:profiles[i]]);
             else assert(!prepared);
 #else
             assert(calls==before && !prepared);

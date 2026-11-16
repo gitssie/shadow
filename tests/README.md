@@ -68,8 +68,9 @@ Build with `SHADOW_CURL_IMPERSONATE=1 ./build.sh rootless` after preparing the
 patched arm64 and arm64e dependency. The Manager's existing TLS fingerprint
 switch saves `Network.Transport=auto`; missing settings default to `auto`, while
 explicit `native` disables TLS fingerprinting.
-Selection uses the saved system fingerprint version: below 18.0 selects
-`safari172_ios`, 18.0 through 18.3 selects `safari180_ios`, 18.4 through 18.6
+Selection uses the saved system fingerprint version: below 17.0 retains native
+TLS and HTTP/2, 17.x selects `safari172_ios`, 18.0 through 18.3 selects
+`safari180_ios`, 18.4 through 18.6
 selects `safari184_ios`, and 18.7 or later selects `safari187_ios`.
 App and Networking processes freeze the selected preset at startup.
 The `safari187_ios` profile applies the issue #450 reference overrides, using the

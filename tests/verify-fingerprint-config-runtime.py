@@ -80,8 +80,10 @@ int main(void) { @autoreleasepool {
   }
   for (NSDictionary *enabled in @[transportAuto, transportLegacy, @{}, @{@"Network":@{}}, SHDWFingerprintConfiguration.defaultConfiguration]) {
     assert([SHDWFingerprintConfiguration usesCurlTransportForConfiguration:enabled]);
-    for (NSArray *pair in @[@[@"16.0.3",@"safari172_ios"], @[@"16.7.2",@"safari172_ios"],
-        @[@"17.7.2",@"safari172_ios"], @[@"18.0",@"safari180_ios"], @[@"18.0.1",@"safari180_ios"],
+    for (NSString *nativeVersion in @[@"15.0", @"16.0.3", @"16.7.2", @"16.7.12", @"16.99.99"])
+      assert(![SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:nativeVersion]);
+    for (NSArray *pair in @[@[@"17.0",@"safari172_ios"], @[@"17.0.1",@"safari172_ios"],
+        @[@"17.2",@"safari172_ios"], @[@"17.7.2",@"safari172_ios"], @[@"18.0",@"safari180_ios"], @[@"18.0.1",@"safari180_ios"],
         @[@"18.3",@"safari180_ios"], @[@"18.3.9",@"safari180_ios"], @[@"18.4",@"safari184_ios"],
         @[@"18.4.0",@"safari184_ios"], @[@"18.6.9",@"safari184_ios"], @[@"18.7",@"safari187_ios"], @[@"18.7.1",@"safari187_ios"], @[@"18.7.8",@"safari187_ios"], @[@"18.10",@"safari187_ios"], @[@"19.0",@"safari187_ios"], @[@"26.5",@"safari187_ios"], @[@"27.0",@"safari187_ios"]])
       assert([[SHDWFingerprintConfiguration curlTransportProfileForConfiguration:enabled systemVersion:pair[0]] isEqual:pair[1]]);
