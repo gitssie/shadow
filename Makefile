@@ -1,3 +1,9 @@
+SHADOW_LANE ?= rootless
+ifneq ($(SHADOW_LANE),rootless)
+$(error unsupported SHADOW_LANE '$(SHADOW_LANE)'; this branch supports rootless only)
+endif
+export SHADOW_LANE
+
 include build-support/build-lanes.mk
 include build-support/curl-impersonate.mk
 
@@ -11,11 +17,9 @@ SUBPROJECTS += src/Shadow.framework
 SUBPROJECTS += src/Shadow.dylib
 SUBPROJECTS += src/ShadowCore.dylib
 SUBPROJECTS += src/ShadowSettings.bundle
-ifneq ($(SHADOW_LANE),rootful-legacy)
 SUBPROJECTS += src/ShadowWebKit.dylib
 SUBPROJECTS += src/Shadow.app
 SUBPROJECTS += src/ShadowCleaner
-endif
 SUBPROJECTS += src/shdw
 include $(THEOS_MAKE_PATH)/aggregate.mk
 
@@ -28,9 +32,7 @@ ifeq ($(SHADOW_CURL_IMPERSONATE),1)
 	$(ECHO_NOTHING)cp "$(SHADOW_CURL_ROOT)/libcurl-impersonate.4.dylib" "$(THEOS_STAGING_DIR)/usr/lib/shadow/curl/"$(ECHO_END)
 	$(ECHO_NOTHING)cp "$(SHADOW_CURL_ROOT)"/LICENSE* "$(THEOS_STAGING_DIR)/usr/share/doc/shadow-curl/"$(ECHO_END)
 endif
-ifneq ($(SHADOW_LANE),rootful-legacy)
 	$(ECHO_NOTHING)chmod 4755 "$(THEOS_STAGING_DIR)/usr/libexec/shadow-cleaner"$(ECHO_END)
-endif
 ifeq ($(THEOS_PACKAGE_SCHEME),rootless)
 	$(ECHO_NOTHING)rm -f "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/me.jjolano.shadow.watcher.plist"$(ECHO_END)
 	$(ECHO_NOTHING)mv "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/me.jjolano.shadow.watcher.rootless.plist" "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/me.jjolano.shadow.watcher.plist"$(ECHO_END)

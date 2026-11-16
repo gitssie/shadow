@@ -3,6 +3,19 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
 cd "$ROOT"
+
+BUILD_TARGET=${1:-rootless}
+case "$BUILD_TARGET" in
+    rootless|quick)
+        [ "$#" -le 1 ] || { echo "unexpected build arguments: $*" >&2; exit 2; }
+        ;;
+    deps)
+        [ "$#" -le 2 ] && [ "${2:-rootless}" = rootless ] || {
+            echo "unsupported dependency target: ${2:-} (use deps [rootless])" >&2; exit 2;
+        }
+        ;;
+    *) echo "unsupported build target: $BUILD_TARGET (use rootless, quick, or deps [rootless])" >&2; exit 2 ;;
+esac
 : "${THEOS:?THEOS must point to Theos}"
 
 # Lane matrix lives in one place; see build-support/lanes.sh.
@@ -21,16 +34,10 @@ MAKE_PATHS=(
 )
 trap 'rm -rf "$STAGE"' EXIT
 
-case ${1:-all} in
-    all|rootful|rootful-legacy|rootful-modern|rootless|quick) ;;
-    deps) shadow_lane_field "${2:-rootful-modern}" ARCHS >/dev/null || exit 2 ;;
-    *) echo "unsupported build target: $1 (use rootful-legacy, rootful-modern, rootless, rootful, all, quick, or deps PROFILE)" >&2; exit 2 ;;
-esac
-
 rm -rf "$ROOT/build"
 mkdir -p "$ROOT/build"
 
-stage_deps() { # rootful-legacy|rootful-modern|rootless
+stage_deps() { # rootless
     local profile=$1 scheme= target sdk
     scheme=$(shadow_lane_field "$profile" SCHEME 2>/dev/null) || { echo "unknown dependency profile: $profile" >&2; return 2; }
 
@@ -43,7 +50,7 @@ stage_deps() { # rootful-legacy|rootful-modern|rootless
         echo "missing $profile dependencies; run .github/scripts/build-deps.sh $profile" >&2
         return 1
     }
-    if [ "$profile" != rootful-legacy ] && [ "${2:-manager}" != core ]; then
+    if [ "${2:-manager}" != core ]; then
         local arch
         for arch in $(shadow_lane_field "$profile" ARCHS); do
             [ -f "$PB/app-state/$profile/$arch/lib/libarchive.a" ] && [ -f "$PB/app-state/$profile/$arch/lib/libzstd.a" ] || {
@@ -64,6 +71,7 @@ stage_deps() { # rootful-legacy|rootful-modern|rootless
 
     python3 "$ROOT/scripts/check-hookkit-version.py" \
         "$ROOT/packaging/controls/control.$profile.in" "$hookkit_theos"
+    python3 "$ROOT/scripts/hookkit-source.py" check "$hookkit_theos"
 
     rm -rf "$LIBRARY_PATH" "$INCLUDE_PATH"
     mkdir -p "$LIBRARY_PATH" "$INCLUDE_PATH"
@@ -96,27 +104,12 @@ stage_deps() { # rootful-legacy|rootful-modern|rootless
 
 . "$ROOT/build-support/toolchain.sh"
 
-legacy_args() {
-    shadow_abi_require old rootful-legacy
-    LEGACY_ENV=()
-    if [ "$(uname -s)" = Darwin ]; then
-        LEGACY_ENV=("DEVELOPER_DIR=$OLDABI_DEVELOPER_DIR")
-    fi
-    LEGACY_ARGS=()
-    while IFS= read -r arg; do LEGACY_ARGS+=("$arg"); done < <(shadow_abi_args old)
-}
-
-modern_args() {
-    MODERN_ARGS=()
-    shadow_abi_require new "${1:-modern lane}"
-}
-
 prepare_scheme_framework() { # rootless
     local lane=$1
     # src/Shadow.framework/Makefile includes build-support/build-lanes.mk, which
     # derives ARCHS/TARGET/THEOS_PACKAGE_SCHEME from SHADOW_LANE -- so the scheme
     # matches the main build.
-    make -C src/Shadow.framework "SHADOW_LANE=$lane" "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
+    make -C src/Shadow.framework "SHADOW_LANE=$lane" "${MAKE_PATHS[@]}"
     rm -rf "$LIBRARY_PATH/iphone/$lane/Shadow.framework"
     mkdir -p "$LIBRARY_PATH/iphone/$lane"
     cp -R src/Shadow.framework/.theos/obj/debug/Shadow.framework "$LIBRARY_PATH/iphone/$lane/"
@@ -142,23 +135,12 @@ copy_dependency_packages() { # profile
 build_lane() { # profile
     local lane=$1 control="$STAGE/control.$1" package destination
     scripts/gen-control.sh "$lane" > "$control"
-    [ "$lane" = rootful-legacy ] || modern_args
+    shadow_abi_require new "$lane"
     stage_deps "$lane"
     make clean "SHADOW_LANE=$lane" "${MAKE_PATHS[@]}"
 
-    case "$lane" in
-        rootful-legacy)
-            legacy_args
-            env ${LEGACY_ENV[@]+"${LEGACY_ENV[@]}"} make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" ${LEGACY_ARGS[@]+"${LEGACY_ARGS[@]}"}
-            ;;
-        rootful-modern)
-            make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
-            ;;
-        rootless)
-            prepare_scheme_framework "$lane"
-            make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
-            ;;
-    esac
+    prepare_scheme_framework "$lane"
+    make package FINALPACKAGE=1 "SHADOW_LANE=$lane" "$CONTROL_VAR=$control" "${MAKE_PATHS[@]}"
 
     package=$(last_package)
     destination="$ROOT/build/$(basename "$package")"
@@ -180,20 +162,15 @@ build_lane() { # profile
 }
 
 build_quick() {
-    stage_deps rootful-modern core
-    modern_args
-    make -C src/Shadow.framework SHADOW_LANE=rootful-modern "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
-    make -C src/Shadow.dylib SHADOW_LANE=rootful-modern "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
-    make -C src/ShadowCore.dylib SHADOW_LANE=rootful-modern "${MAKE_PATHS[@]}" ${MODERN_ARGS[@]+"${MODERN_ARGS[@]}"}
+    shadow_abi_require new rootless
+    stage_deps rootless core
+    prepare_scheme_framework rootless
+    make -C src/Shadow.dylib SHADOW_LANE=rootless "${MAKE_PATHS[@]}"
+    make -C src/ShadowCore.dylib SHADOW_LANE=rootless "${MAKE_PATHS[@]}"
 }
 
-case ${1:-all} in
-    rootful-legacy) build_lane rootful-legacy ;;
-    rootful-modern) build_lane rootful-modern ;;
-    rootful) build_lane rootful-legacy; build_lane rootful-modern ;;
+case "$BUILD_TARGET" in
     rootless) build_lane rootless ;;
     quick) build_quick ;;
-    deps) stage_deps "${2:-rootful-modern}" ;;
-    all) build_lane rootless; build_lane rootful-legacy; build_lane rootful-modern ;;
-    *) echo "usage: $0 [all|rootful|rootful-legacy|rootful-modern|rootless|quick|deps PROFILE]" >&2; exit 2 ;;
+    deps) stage_deps rootless ;;
 esac

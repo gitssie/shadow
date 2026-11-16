@@ -310,3 +310,9 @@ verify-curl-http2-config:
 
 .PHONY: verify-curl-http2-config
 test verify-curl-transport: verify-curl-http2-config
+
+verify-hookkit-source:
+	python3 verify-hookkit-source.py
+
+.PHONY: verify-hookkit-source
+test: verify-hookkit-source

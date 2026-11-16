@@ -1,7 +1,7 @@
 # Shadow build configuration for upstream Theos. All lane fields live here;
 # no additional scripts are required inside the Theos checkout.
 
-shadow_lanes() { echo "rootful-legacy rootful-modern rootless"; }
+shadow_lanes() { echo "rootless"; }
 
 shadow_lane_field() { # <lane> <field>
     case "$1:$2" in

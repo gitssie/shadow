@@ -16,12 +16,13 @@
 - Finish with changed files, checks and results, and any concrete blocker. Keep routine updates brief.
 
 ## Build
-- One lane at a time: `.github/scripts/build-deps.sh <lane>` then `./build.sh <lane>`.
-- Dependency provisioning requires macOS/Xcode 12+ except for `rootful-legacy`. If matching dependencies already exist under `PREBUILT_ROOT` (default `../prebuilt`), use `build.sh` directly; check `stage_deps` there for required artifacts.
-- Lanes: `rootful-legacy|rootful-modern|rootless` (`rootful` = both rootful; `all` = everything — avoid).
-- `./build.sh quick` = compile-only check (framework + dylibs, rootful-modern); no package, no compat checks.
-- Requires upstream `$THEOS` and HookKit in the lane-resolved location defined by `build-support/hookkit.mk` (CI provisioning: `.github/scripts/install-hookkit-theos.sh <lane>`).
-- For rootless, preserve the exact HookKit dependency in `packaging/controls/control.rootless.in`. Install the matching maintained HookKit checkout into the same `$THEOS` through `.github/scripts/install-hookkit-theos.sh` (set `DEPS_SOURCE_ROOT` to use local source); `scripts/check-hookkit-version.py` rejects stale framework metadata before compilation. Check source/revision before replacing an installed compatibility build with the generic CI pin.
+- This mainline supports rootless only. Use `.github/scripts/build-deps.sh rootless`, `scripts/prepare-curl-impersonate.sh`, then `./build.sh` (or `./build.sh rootless`). All builds require macOS/Xcode 12+.
+- If matching dependencies already exist under `PREBUILT_ROOT` (default `../prebuilt`), use `build.sh` directly; check `stage_deps` there for required artifacts.
+- `./build.sh quick` compiles the rootless framework and dylibs without packaging or package compatibility checks.
+- Requires upstream `$THEOS` and HookKit in the location defined by `build-support/hookkit.mk`.
+- Preserve the exact HookKit dependency in `packaging/controls/control.rootless.in`. Provision the maintained source into the same `$THEOS` through `.github/scripts/install-hookkit-theos.sh rootless` (set `DEPS_SOURCE_ROOT` to use local source). The installer reads the repository and revision from `.github/workflows/build.yml`. Both the version guard and source/binary receipt must pass before Shadow compilation; never replace the maintained build with a same-version generic build.
+- `stable` and `v4.0.6-11` preserve the pre-TLS release and its original HookKit pairing. Historical lane metadata is retained for compatibility-checker fixtures, not mainline build support.
+- GitHub runs source and host checks only. Build packages locally; keep Sileo publication on `gh-pages` separate from mainline changes.
 
 ## Test
 - Public host checks: `make -C tests test`; maintainer-script checks separately: `sh tests/MaintainerScriptTests.sh`. Prerequisites, individual checks, and CI coverage are in `tests/README.md`.

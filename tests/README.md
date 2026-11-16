@@ -20,6 +20,7 @@ and do not require Theos or the `THEOS` environment variable.
 | prepared function original and bounded retry (host lifecycle doubles) | `make -C tests verify-prepared-original` |
 | rebind journal/repair (pure C) | `make -C tests verify-rebind-repair` |
 | KERN_PROCARGS2 payload filter (kernel-shaped payloads) | `make -C tests verify-procargs-filter` |
+| HookKit pinned source and installed artifact receipt | `make -C tests verify-hookkit-source` |
 | exact HookKit package/framework version consistency | `make -C tests verify-hookkit-version` |
 | upstream Theos toolchain and HookKit adapter | `make -C tests verify-toolchain` |
 | lane/package contract | `sh tests/verify-lane-contract.sh` |
@@ -203,6 +204,10 @@ footer loading, failed-page retries and query-error recovery with view doubles.
 
 This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.
+
+Mainline supports rootless only; historical lane fixtures exercise checker behavior.
+The `.github/workflows/build.yml` workflow verifies the maintained HookKit source
+pin and rootless build guards without compiling application packages.
 
 CI's `.github/workflows/tests.yml` runs individual checks, including maintainer
 scripts, rather than the aggregate target. It omits several aggregate checks,

@@ -2,7 +2,11 @@
 # Build pinned dependency packages and stage their exact packaged binaries.
 set -euo pipefail
 
-FLAVOR=${1:?usage: build-deps.sh <rootful-legacy|rootful-modern|rootless>}
+FLAVOR=${1:-rootless}
+if [ "$#" -gt 1 ] || [ "$FLAVOR" != rootless ]; then
+    echo "unsupported dependency target: $FLAVOR (use rootless)" >&2
+    exit 2
+fi
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export THEOS=${THEOS:-/opt/theos}
 PB=${PREBUILT_ROOT:-$ROOT/../prebuilt}
