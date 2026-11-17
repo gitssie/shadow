@@ -113,3 +113,5 @@ without a `backup_id`. Check the helper capabilities for `discardAndReset`;
 older installed helpers do not support it. Interrupted mutations are unknown,
 and failures after cleanup begins report possible partial live state. Do not
 replay the mutation after a lost response.
+
+Catalog queries accept optional `dateOrder: "asc" | "desc"` (default `"desc"`). The current IDFV remains first in either order; equal dates use IDFV ascending.

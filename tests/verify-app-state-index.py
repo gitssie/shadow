@@ -53,6 +53,10 @@ int main(int argc,char **argv){@autoreleasepool{
  assert([index entryForBundle:@"app.one" idfv:@"A" error:NULL][@"deleteLocked"]==(__bridge id)kCFBooleanFalse);
  NSDictionary *page=[index queryBundle:@"app.one" query:@{@"limit":@1} currentIDFV:@"A" error:&error];assert([page[@"total"]intValue]==3&&[page[@"hasMore"]boolValue]);assert([page[@"items"][0][@"idfv"]isEqual:@"A"]);assert(!page[@"items"][0][@"Fingerprint_Data"]);assert(page[@"items"][0][@"deleteLocked"]==(__bridge id)kCFBooleanFalse);
  page=[index queryBundle:@"app.one" query:@{@"limit":@1,@"offset":@1} currentIDFV:@"A" error:&error];assert([page[@"items"][0][@"idfv"]isEqual:@"C"]);
+ page=[index queryBundle:@"app.one" query:@{@"dateOrder":@"asc"} currentIDFV:@"C" error:&error];assert(([[page[@"items"]valueForKey:@"idfv"]isEqual:@[@"C",@"A",@"B"]]));
+ page=[index queryBundle:@"app.one" query:@{@"dateOrder":@"desc"} currentIDFV:@"A" error:&error];assert(([[page[@"items"]valueForKey:@"idfv"]isEqual:@[@"A",@"C",@"B"]]));
+ page=[index queryBundle:@"app.one" query:@{@"dateOrder":@"asc",@"offset":@1,@"limit":@1} currentIDFV:@"C" error:&error];assert([page[@"items"][0][@"idfv"]isEqual:@"A"]);
+ for(id order in @[@"ASC",@"invalid",@1])assert(![index queryBundle:@"app.one" query:@{@"dateOrder":order} currentIDFV:nil error:NULL]);
  page=[index queryBundle:@"app.one" query:@{@"region":@"FR"} currentIDFV:nil error:&error];assert([page[@"total"]intValue]==2);
  for(NSString *search in @[@"ÉTÉ",@"100%_",@"café",@"  ÉTÉ \n"]){page=[index queryBundle:@"app.one" query:@{@"search":search} currentIDFV:nil error:&error];assert([page[@"total"]intValue]==([search containsString:@"ÉTÉ"]?1:3));}
  assert([index setStatus:@"restored" bundle:@"app.one" idfv:@"A" error:&error]);assert([[index entryForBundle:@"app.one" idfv:@"A" error:&error][@"status"]isEqual:@"restored"]);

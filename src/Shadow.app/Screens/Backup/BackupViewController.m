@@ -81,7 +81,9 @@ static NSString *ProgressTitle(NSDictionary *event) {
     if (completion) completion();
 }
 - (void)close {
-    if (!self.service.running) [self dismissViewControllerAnimated:YES completion:^{ [self notifyCompletion]; }];
+    if (self.service.running) return;
+    [self notifyCompletion];
+    [self dismissViewControllerAnimated:YES completion:nil];
 }
 - (void)refreshRecoveryState {
     self.action.enabled = NO; self.saveCurrent.enabled = NO; [self.action setWorking:YES];
@@ -189,6 +191,8 @@ static NSString *ProgressTitle(NSDictionary *event) {
 @property(nonatomic) BOOL hasMore;
 @property(nonatomic) NSUInteger nextOffset;
 @property(nonatomic) BOOL queryPending;
+@property(nonatomic) BOOL dateAscending;
+@property(nonatomic, strong) UIBarButtonItem *sortButton;
 @property(nonatomic) BOOL refreshCatalog;
 @property(nonatomic, strong) UIActivityIndicatorView *pagingSpinner;
 @end
@@ -222,12 +226,22 @@ static NSString *ProgressTitle(NSDictionary *event) {
     [NSLayoutConstraint activateConstraints:@[[self.selector.topAnchor constraintEqualToAnchor:safe.topAnchor constant:12], [self.selector.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:16], [self.selector.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16], [self.action.topAnchor constraintEqualToAnchor:self.selector.topAnchor constant:86], [self.action.leadingAnchor constraintEqualToAnchor:self.selector.leadingAnchor], [self.action.trailingAnchor constraintEqualToAnchor:self.selector.trailingAnchor], [self.action.heightAnchor constraintEqualToConstant:48], [self.status.topAnchor constraintEqualToAnchor:self.action.bottomAnchor constant:8], [self.status.leadingAnchor constraintEqualToAnchor:self.action.leadingAnchor constant:4], [self.status.trailingAnchor constraintEqualToAnchor:self.action.trailingAnchor constant:-4], [self.table.topAnchor constraintEqualToAnchor:self.status.bottomAnchor constant:10], [self.table.leadingAnchor constraintEqualToAnchor:self.selector.leadingAnchor], [self.table.trailingAnchor constraintEqualToAnchor:self.selector.trailingAnchor], [self.table.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor constant:-16]]];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:SHDWSymbol(@"magnifyingglass", 16) style:UIBarButtonItemStylePlain target:self action:@selector(toggleSearch)];
     self.navigationItem.rightBarButtonItem.tintColor = SHDWAccent(); self.navigationItem.rightBarButtonItem.accessibilityLabel = SHDWText(@"Search backups"); self.navigationItem.rightBarButtonItem.accessibilityIdentifier = @"backup.search.toggle";
+    self.sortButton = [[UIBarButtonItem alloc] initWithImage:SHDWSymbol(@"clock", 16) style:UIBarButtonItemStylePlain target:self action:@selector(toggleDateOrder)];
+    self.sortButton.tintColor = SHDWAccent(); self.sortButton.accessibilityLabel = SHDWText(@"Newest first"); self.sortButton.accessibilityIdentifier = @"backup.sort.toggle";
+    self.navigationItem.rightBarButtonItems = @[self.navigationItem.rightBarButtonItem, self.sortButton];
     self.searchOverlay = [UIView new]; self.searchOverlay.backgroundColor = UIColor.whiteColor; self.searchOverlay.layer.cornerRadius = 16; self.searchOverlay.layer.shadowColor = UIColor.blackColor.CGColor; self.searchOverlay.layer.shadowOpacity = 0.12; self.searchOverlay.layer.shadowRadius = 12; self.searchOverlay.layer.shadowOffset = CGSizeMake(0, 4); self.searchOverlay.hidden = YES; self.searchOverlay.accessibilityIdentifier = @"backup.search.overlay"; self.searchOverlay.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:self.searchOverlay];
     self.searchField = [UISearchTextField new]; self.searchField.placeholder = SHDWText(@"Search titles and notes"); self.searchField.accessibilityLabel = self.searchField.placeholder; self.searchField.accessibilityIdentifier = @"backup.search.field"; self.searchField.backgroundColor = UIColor.clearColor; self.searchField.textColor = SHDWInk(); self.searchField.tintColor = SHDWAccent(); self.searchField.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:[UIFont systemFontOfSize:15]]; self.searchField.adjustsFontForContentSizeCategory = YES; self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing; self.searchField.returnKeyType = UIReturnKeyDone; self.searchField.autocorrectionType = UITextAutocorrectionTypeNo; self.searchField.autocapitalizationType = UITextAutocapitalizationTypeNone; [self.searchField addTarget:self action:@selector(searchChanged) forControlEvents:UIControlEventEditingChanged]; [self.searchField addTarget:self action:@selector(finishSearchEditing) forControlEvents:UIControlEventEditingDidEndOnExit];
     self.searchField.translatesAutoresizingMaskIntoConstraints = NO; [self.searchOverlay addSubview:self.searchField];
     [NSLayoutConstraint activateConstraints:@[[self.searchOverlay.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8], [self.searchOverlay.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:16], [self.searchOverlay.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-16], [self.searchField.topAnchor constraintEqualToAnchor:self.searchOverlay.topAnchor constant:6], [self.searchField.bottomAnchor constraintEqualToAnchor:self.searchOverlay.bottomAnchor constant:-6], [self.searchField.leadingAnchor constraintEqualToAnchor:self.searchOverlay.leadingAnchor constant:10], [self.searchField.trailingAnchor constraintEqualToAnchor:self.searchOverlay.trailingAnchor constant:-10], [self.searchField.heightAnchor constraintGreaterThanOrEqualToConstant:40], [self.table.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.keyboardLayoutGuide.topAnchor constant:-12]]];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(activityChanged) name:SHDWOperationDidChangeNotification object:nil]; [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reloadApplications) name:UIApplicationWillEnterForegroundNotification object:nil];
     UITapGestureRecognizer *outside = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(collapseSelector)]; outside.cancelsTouchesInView = NO; outside.delegate = self; [self.view addGestureRecognizer:outside];
+}
+- (void)toggleDateOrder {
+    if (self.loading || self.working || [SHDWOperationCoordinator isRunning]) return;
+    self.dateAscending = !self.dateAscending;
+    self.sortButton.tintColor = self.dateAscending ? UIColor.secondaryLabelColor : SHDWAccent();
+    self.sortButton.accessibilityLabel = SHDWText(self.dateAscending ? @"Oldest first" : @"Newest first");
+    [self loadCatalog];
 }
 - (void)toggleSearch {
     if (!self.searchOverlay.hidden) { [self closeSearch]; return; }
@@ -296,7 +310,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     self.refreshCatalog = NO;
     [self updateControls];
     __weak typeof(self) weakSelf = self;
-    [self.service loadCatalogForSearch:search offset:offset refresh:refresh completion:^(NSDictionary *page, NSError *error) {
+    [self.service loadCatalogForSearch:search offset:offset refresh:refresh ascending:self.dateAscending completion:^(NSDictionary *page, NSError *error) {
         typeof(self) self = weakSelf; if (!self || generation != self.loadGeneration) return;
         self.loading = NO; self.loadingMore = NO;
         if (self.reloadPending && !self.working && ![SHDWOperationCoordinator isRunning]) { [self reloadApplications]; return; }
@@ -305,6 +319,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
         if (page) {
             self.catalog = append ? [self.catalog arrayByAddingObjectsFromArray:page[@"items"]] : page[@"items"];
             self.currentBackup = [page[@"currentSnapshot"] count] ? page[@"currentSnapshot"] : nil;
+            self.liveIDFV = CanonicalIDFV(self.currentBackup[@"idfv"]) ?: CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]);
             self.restorePending = [page[@"restorePending"] boolValue];
             self.nextOffset = [page[@"nextOffset"] unsignedIntegerValue];
             self.hasMore = [page[@"hasMore"] boolValue];
@@ -316,6 +331,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
 }
 - (NSDictionary *)currentSnapshot { return self.currentBackup; }
 - (void)updateControls {
+    self.sortButton.enabled = !self.loading && !self.working && ![SHDWOperationCoordinator isRunning];
     self.tableHeight.constant = self.visibleCatalog.count ? self.visibleCatalog.count * 60 + (self.hasMore ? 44 : 0) : 140;
     BOOL busy = self.working || [SHDWOperationCoordinator isRunning]; BOOL pending = self.restorePending; self.selector.enabled = !busy && !self.loading; self.table.userInteractionEnabled = !busy && (!self.loading || self.loadingMore) && !self.catalogFailed; self.action.enabled = self.selected && self.liveIDFV && !self.loading && !self.catalogFailed && !busy && !pending && SHDWBackupPhoneOwned([self currentSnapshot]); self.action.alpha = self.action.enabled || self.working || self.loading ? 1 : 0.5; [self.action setWorking:self.working || (self.loading && !self.loadingMore)];
     if (!self.working) [self.action setTitle:SHDWText([self currentSnapshot] ? @"Update current backup" : @"Back up current data") forState:UIControlStateNormal];
@@ -356,7 +372,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     UIImageView *fingerprint = [[UIImageView alloc] initWithImage:SHDWSymbol(@"touchid", 12)]; fingerprint.tintColor = [SHDWAccent() colorWithAlphaComponent:0.65]; fingerprint.contentMode = UIViewContentModeScaleAspectFit;
     UILabel *digest = [UILabel new]; digest.text = Abbreviate(item[@"digest"]); digest.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular]; digest.textColor = UIColor.secondaryLabelColor;
     UILabel *detail = [UILabel new]; detail.font = [UIFont systemFontOfSize:10]; detail.textColor = UIColor.secondaryLabelColor; detail.textAlignment = NSTextAlignmentRight; detail.text = [NSString stringWithFormat:@"%@ · %@", BackupDate(item[@"date"]), [NSByteCountFormatter stringFromByteCount:[item[@"size"] longLongValue] countStyle:NSByteCountFormatterCountStyleFile]];
-    NSString *workflow = [item[@"status"] isEqual:SHDWBackupStatusBackedUp] ? nil : SHDWBackupStatusTitle(item[@"status"]);
+    NSString *workflow = [@[SHDWBackupStatusBackedUp, SHDWBackupStatusRestored] containsObject:item[@"status"] ?: @""] ? nil : SHDWBackupStatusTitle(item[@"status"]);
     if (workflow.length) { detail.numberOfLines = 2; detail.text = [NSString stringWithFormat:@"%@\n%@", workflow, detail.text]; }
     if ([item[@"unavailable"] boolValue]) { detail.text = SHDWText(@"Backup unavailable"); detail.textColor = UIColor.systemRedColor; }
     UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem]; [more setImage:SHDWSymbol(@"ellipsis", 17) forState:UIControlStateNormal]; more.tintColor = SHDWInk(); more.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", item[@"title"], SHDWText(@"Backup actions")]; more.accessibilityIdentifier = [@"backup.actions." stringByAppendingString:item[@"idfv"]]; [more addTarget:self action:@selector(showActions:) forControlEvents:UIControlEventTouchUpInside];

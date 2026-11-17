@@ -32,6 +32,13 @@ int main(void){@autoreleasepool{
  if(![SHDWAppStateStore validateCatalogQuery:decoded error:&error]){fprintf(stderr,"FAIL: Manager query append=%d refresh=%d: %s\n",append,refreshCatalog,error.localizedDescription.UTF8String);return 1;}
  assert(CFGetTypeID((__bridge CFTypeRef)decoded[@"refresh"])==CFBooleanGetTypeID());
  }
+ for(NSString *order in @[@"asc",@"desc"]){
+ NSMutableDictionary *request=[SHDWAppStateCatalogQuery(search,nil,0,100,NO)mutableCopy];request[@"dateOrder"]=order;
+ NSData *data=[NSPropertyListSerialization dataWithPropertyList:request format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+ NSDictionary *decoded=[NSPropertyListSerialization propertyListWithData:data options:0 format:NULL error:NULL];
+ assert([SHDWAppStateStore validateCatalogQuery:decoded error:NULL]);
+ }
+ assert(![SHDWAppStateStore validateCatalogQuery:@{@"dateOrder":@"ASC"} error:NULL]);
  NSDictionary *invalid=@{@"refresh":@1};
  assert(![SHDWAppStateStore validateCatalogQuery:invalid error:NULL]);
  puts("shared catalog query: initial/search/refresh/paging factory survives plist IPC and helper validation; integer boolean rejected");

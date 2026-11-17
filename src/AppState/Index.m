@@ -599,8 +599,8 @@ static int Bind(sqlite3_stmt *statement, int column, id value) {
     }
     NSString *sql = [NSString
         stringWithFormat:
-            @"SELECT * FROM backup_entries%@ ORDER BY (idfv=?) DESC,date DESC,idfv ASC LIMIT ? OFFSET ?",
-            where];
+            @"SELECT * FROM backup_entries%@ ORDER BY (idfv=?) DESC,date %@,idfv ASC LIMIT ? OFFSET ?",
+            where, [query[@"dateOrder"] isEqual:@"asc"] ? @"ASC" : @"DESC"];
     [values addObjectsFromArray:@[ idfv ?: @"", @(limit), @(offset) ]];
     sqlite3_stmt *s = [self prepare:sql values:values error:error];
     if (!s)

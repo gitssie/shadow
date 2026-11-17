@@ -323,3 +323,6 @@
 "Invalid deletion lock option" = "无效的备份删除锁参数";
 "Unlock this backup before deleting it." = "备份已锁定，请先解锁再删除。";
 "Invalid backup deletion lock." = "备份删除锁数据无效。";
+
+"Newest first" = "最新优先";
+"Oldest first" = "最早优先";

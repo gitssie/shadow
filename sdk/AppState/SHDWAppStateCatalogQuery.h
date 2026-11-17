@@ -7,7 +7,7 @@ static const NSUInteger SHDWAppStateCatalogPageSize = 100;
 static const NSUInteger SHDWAppStateCatalogMaximumPageSize = 200;
 
 static inline NSArray<NSString *> *SHDWAppStateCatalogQueryKeys(void) {
-  return @[ @"search", @"region", @"offset", @"limit", @"refresh" ];
+  return @[ @"search", @"region", @"offset", @"limit", @"refresh", @"dateOrder" ];
 }
 
 // Wire keys and boolean encoding are shared by Manager, SDK and storage.
@@ -52,6 +52,9 @@ static inline NSString *SHDWAppStateCatalogQueryError(id query) {
                  (long long)SHDWAppStateCatalogMaximumPageSize))))
       return @"Invalid backup page bounds.";
   }
+  id dateOrder = query[@"dateOrder"];
+  if (dateOrder && ![@[@"asc", @"desc"] containsObject:dateOrder])
+    return @"Invalid backup date order.";
   id refresh = query[@"refresh"];
   if (refresh &&
       (![refresh isKindOfClass:NSNumber.class] ||

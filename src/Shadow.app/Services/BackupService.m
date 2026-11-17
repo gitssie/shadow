@@ -45,9 +45,11 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
         completion(result, error);
     }];
 }
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh
+- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending
                   completion:(void (^)(NSDictionary *, NSError *))completion {
-    [self queryCatalog:SHDWAppStateCatalogQuery(search, nil, offset, SHDWAppStateCatalogPageSize, refresh) completion:completion];
+    NSMutableDictionary *query = [SHDWAppStateCatalogQuery(search, nil, offset, SHDWAppStateCatalogPageSize, refresh) mutableCopy];
+    query[@"dateOrder"] = ascending ? @"asc" : @"desc";
+    [self queryCatalog:query completion:completion];
 }
 - (void)queryCatalog:(NSDictionary *)query completion:(void (^)(NSDictionary *, NSError *))completion {
     [self performAction:@"queryCatalog" request:query progress:nil completion:^(id result, NSError *error) {

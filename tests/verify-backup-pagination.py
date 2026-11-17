@@ -29,6 +29,7 @@ PRELUDE = r'''
 enum { UIControlStateNormal, UIAccessibilityAnnouncementNotification };
 static void UIAccessibilityPostNotification(int value, id message) { (void)value; (void)message; }
 static NSString *SHDWText(NSString *value) { return value; }
+static id SHDWAccent(void) { return @"accent"; }
 static NSString *CanonicalIDFV(NSString *value) { return value; }
 static NSString *ProgressTitle(NSDictionary *event) { return event[@"stage"]; }
 typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
@@ -48,7 +49,7 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @property CGSize contentSize;
 @property UIEdgeInsets adjustedContentInset;
 @property(copy) NSString *text, *bundleIdentifier, *accessibilityLabel;
-@property(strong) id textColor, tableFooterView;
+@property(strong) id textColor, tableFooterView, image, tintColor;
 - (void)setWorking:(BOOL)value;
 - (void)setTitle:(NSString *)title forState:(NSInteger)state;
 - (void)reloadData;
@@ -85,15 +86,16 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @property(copy) void (^operationProgress)(NSDictionary *);
 @property NSUInteger offset, requests;
 @property(copy) NSString *search;
-@property BOOL refresh;
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh completion:(void (^)(NSDictionary *, NSError *))completion;
+@property BOOL refresh, ascending;
+@property BOOL running;
+- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending completion:(void (^)(NSDictionary *, NSError *))completion;
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(void (^)(NSDictionary *))progress completion:(void (^)(id, NSError *))completion;
 - (void)finishPage:(NSDictionary *)page error:(NSError *)error;
 @end
 @implementation Service
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh completion:(void (^)(NSDictionary *, NSError *))completion {
+- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending completion:(void (^)(NSDictionary *, NSError *))completion {
     NSCAssert(!self.pageCompletion, @"overlapping requests");
-    self.search=search; self.offset=offset; self.refresh=refresh; self.requests++; self.pageCompletion=completion;
+    self.ascending=ascending; self.search=search; self.offset=offset; self.refresh=refresh; self.requests++; self.pageCompletion=completion;
 }
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(void (^)(NSDictionary *))progress completion:(void (^)(id, NSError *))completion {
     (void)action; (void)request; self.operationProgress=progress; self.operationCompletion=completion;
@@ -105,13 +107,14 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @end
 @interface Controller : NSObject
 @property(strong) Service *service;
-@property(strong) UIView *searchField, *status, *table, *tableHeight, *selector, *action, *pagingSpinner, *listBackground, *listSpinner, *selected, *emptyIcon;
+@property(strong) UIView *searchField, *status, *table, *tableHeight, *selector, *action, *pagingSpinner, *listBackground, *listSpinner, *selected, *emptyIcon, *sortButton;
 @property(nonatomic,copy) NSArray *catalog, *visibleCatalog;
 @property(copy) NSDictionary *currentBackup;
 @property(copy) NSString *liveIDFV;
-@property BOOL loading, loadingMore, working, queryPending, catalogFailed, refreshCatalog, reloadPending, restorePending, hasMore, catalogErrorVisible;
+@property BOOL loading, loadingMore, working, queryPending, catalogFailed, refreshCatalog, reloadPending, restorePending, hasMore, catalogErrorVisible, dateAscending;
 @property NSUInteger loadGeneration, nextOffset;
 - (void)loadCatalog;
+- (void)toggleDateOrder;
 - (void)loadMore;
 - (void)loadMoreIfNeeded;
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView;
@@ -129,6 +132,22 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 - (void)collapseSelector {}
 '''
 
+RESTORE = r'''
+@end
+@interface RestoreController : NSObject
+@property(strong) Service *service;
+@property(copy) void (^completion)(void);
+@property BOOL dismissed;
+- (void)notifyCompletion;
+- (void)close;
+- (void)dismissViewControllerAnimated:(BOOL)animated completion:(void (^)(void))completion;
+@end
+@implementation RestoreController
+- (void)dismissViewControllerAnimated:(BOOL)animated completion:(void (^)(void))completion {
+    (void)animated; (void)completion; self.dismissed=YES;
+}
+'''
+
 SCENARIOS = r'''
 @end
 static NSUInteger failures;
@@ -140,14 +159,22 @@ static NSDictionary *Page(NSArray *items, NSUInteger next, BOOL more) {
 }
 static Controller *Fixture(void) {
     Controller *c=[Controller new]; c.service=[Service new];
-    for(NSString *key in @[@"searchField",@"status",@"table",@"tableHeight",@"selector",@"action",@"pagingSpinner",@"listBackground",@"listSpinner",@"selected",@"emptyIcon"])
+    for(NSString *key in @[@"searchField",@"status",@"table",@"tableHeight",@"selector",@"action",@"pagingSpinner",@"listBackground",@"listSpinner",@"selected",@"emptyIcon",@"sortButton"])
         [c setValue:[UIView new] forKey:key];
+    c.sortButton.image=@"clock";
     c.searchField.text=@""; c.liveIDFV=@"active"; c.selected.bundleIdentifier=@"fixture.app"; c.refreshCatalog=YES;
     c.table.bounds=CGRectMake(0,0,320,400); c.table.contentSize=CGSizeMake(320,1000);
     c.table.adjustedContentInset=(UIEdgeInsets){0,0,20,0};
     return c;
 }
 int main(void) { @autoreleasepool {
+    RestoreController *restore=[RestoreController new]; restore.service=[Service new];
+    __block NSUInteger refreshes=0;
+    restore.completion=^{refreshes++;}; restore.service.running=YES; [restore close];
+    Check(!restore.dismissed && refreshes==0,@"running restore cannot close or refresh");
+    restore.service.running=NO; [restore close];
+    Check(restore.dismissed && refreshes==1,@"restore close refreshes without waiting for animation completion");
+    [restore close]; Check(refreshes==1,@"restore close refreshes only once");
     Controller *c=Fixture(); Service *s=c.service;
     NSDictionary *first=@{@"idfv":@"one"}, *second=@{@"idfv":@"two"};
     NSError *error=[NSError errorWithDomain:@"fixture" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Temporary query failure"}];
@@ -194,6 +221,19 @@ int main(void) { @autoreleasepool {
     c.searchField.text=@"new search"; [c loadCatalog];
     [s finishPage:Page(@[first],1,NO) error:nil];
     Check([s.search isEqual:@"new search"] && !c.catalogFailed && !c.status.text.length && ![c.status.textColor isEqual:UIColor.systemRedColor],@"new successful search clears first-page query error");
+    // Toggle starts a fresh query, preserving search and carrying order to paging.
+    c.searchField.text=@"sort search"; [c toggleDateOrder];
+    Check(c.dateAscending && s.ascending && s.offset==0 && [s.search isEqual:@"sort search"] && [c.sortButton.image isEqual:@"clock"] && [c.sortButton.tintColor isEqual:UIColor.secondaryLabelColor],@"ascending toggle queries first page with current search");
+    [c toggleDateOrder]; Check(c.dateAscending,@"in-flight query blocks another toggle");
+    [s finishPage:Page(@[first],1,YES) error:nil]; [c loadMore];
+    Check(s.ascending && s.offset==1,@"pagination retains ascending order");
+    [s finishPage:Page(@[second],2,NO) error:nil]; [c toggleDateOrder];
+    Check(!c.dateAscending && !s.ascending && s.offset==0 && [c.sortButton.image isEqual:@"clock"] && [c.sortButton.tintColor isEqual:SHDWAccent()],@"second toggle returns to descending first page");
+    [s finishPage:Page(@[second],1,NO) error:nil];
+    // A restore can change identity after the controller sampled preferences.
+    c.liveIDFV=@"previous";
+    [c loadCatalog]; [s finishPage:Page(@[first],1,NO) error:nil];
+    Check([c.liveIDFV isEqual:@"active"],@"refreshed current backup replaces the pre-restore identity");
     // A successful write replaces any query error; its message survives refresh.
     [c loadCatalog]; [s finishPage:nil error:error];
     [c perform:@"edit" request:@{}];
@@ -226,13 +266,15 @@ def main():
         raise SystemExit("This optional check requires macOS Foundation")
     source = SOURCE.read_text()
     signatures = [
-        "- (void)setCatalog:", "- (void)loadCatalog {", "- (void)loadMore {",
+        "- (void)setCatalog:", "- (void)toggleDateOrder {", "- (void)loadCatalog {", "- (void)loadMore {",
         "- (void)loadMoreIfNeeded {", "- (void)scrollViewDidScroll:",
         "- (void)scrollViewWillBeginDragging:",
         "- (void)loadPage:", "- (NSDictionary *)currentSnapshot",
         "- (void)updateControls {", "- (void)perform:",
     ]
-    code = PRELUDE + "\n".join(method(source, s) for s in signatures) + SCENARIOS
+    code = (PRELUDE + "\n".join(method(source, s) for s in signatures)
+            + RESTORE + method(source, "- (void)notifyCompletion {")
+            + method(source, "- (void)close {") + SCENARIOS)
     with tempfile.TemporaryDirectory(prefix="shadow-backup-pagination-") as directory:
         temp = Path(directory)
         harness = temp / "main.m"

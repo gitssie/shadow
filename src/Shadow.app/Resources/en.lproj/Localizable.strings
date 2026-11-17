@@ -323,3 +323,6 @@
 "Invalid deletion lock option" = "Invalid deletion lock option";
 "Unlock this backup before deleting it." = "Unlock this backup before deleting it.";
 "Invalid backup deletion lock." = "Invalid backup deletion lock.";
+
+"Newest first" = "Newest first";
+"Oldest first" = "Oldest first";
