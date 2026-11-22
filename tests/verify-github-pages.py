@@ -133,6 +133,29 @@ with tempfile.TemporaryDirectory(prefix="shadow-pages-test-") as temporary:
     publisher.validate_immutable_packages(combined, combined_metadata)
     rejected(lambda: publisher.publish("rootless", False))
     original_run = publisher.run
+    def local_run(*args, cwd=ROOT, capture=False):
+        if args[:3] == ('git', 'rev-parse', 'HEAD'):
+            return 'local-fixture\n'
+        if args[:2] in (('git', 'archive'), ('tar', '-xf')):
+            return 0
+        if args[:2] == ('bash', './build.sh'):
+            source = Path(cwd)
+            (source / '.theos').mkdir()
+            (source / '.theos/last_package').write_text(package.name)
+            (source / 'build').mkdir()
+            (source / 'build' / package.name).write_bytes(package.read_bytes())
+            return 0
+        if args[0] == 'python3' and Path(args[1]).name == 'render-github-pages.py':
+            options = dict(zip(args[2::2], args[3::2]))
+            pages.render(Path(options['--package']), options['--lane'], options['--tag'],
+                         Path(options['--output']), hookkit_package=Path(options['--hookkit-package']))
+            return 0
+        raise AssertionError('local validation invoked an unexpected or remote operation: ' + str(args))
+    publisher.run = local_run
+    try:
+        publisher.publish('rootless', False, hookkit)
+    finally:
+        publisher.run = original_run
     def unexpected_run(*args, **kwargs):
         raise AssertionError("disabled publishing invoked a build or remote operation")
     publisher.run = unexpected_run

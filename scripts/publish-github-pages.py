@@ -4,13 +4,10 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-REPO = "gitssie/shadow"
-REMOTE = "git@github.com:gitssie/shadow.git"
 
 
 def run(*args, cwd=ROOT, capture=False):
@@ -48,7 +45,7 @@ def publish(lane, enabled, hookkit_package=None):
     revision = run('git', 'rev-parse', 'HEAD', capture=True).strip()
     with tempfile.TemporaryDirectory(prefix='shadow-pages-') as directory:
         temporary = Path(directory)
-        source, site, repository = [temporary / name for name in ('source', 'site', 'repository')]
+        source, site = [temporary / name for name in ('source', 'site')]
         source.mkdir()
         archive = temporary / 'source.tar'
         run('git', 'archive', '--format=tar', '--output=' + str(archive), revision)
@@ -64,26 +61,7 @@ def publish(lane, enabled, hookkit_package=None):
             render_args.extend(['--hookkit-package', str(hookkit_package)])
         run(*render_args)
         metadata = json.loads((site / 'publication.json').read_text())
-        run('git', 'clone', '--quiet', '--single-branch', '--branch', 'gh-pages', REMOTE, str(repository))
-        validate_immutable_packages(repository, metadata)
-        if not enabled:
-            print('Validated locally; no remote changes: ' + json.dumps(metadata))
-            return
-        # Keep the publication branch separate from the user's source worktree.
-        # Retain older pool files so clients with an older index can still download.
-        for item in repository.iterdir():
-            if item.name not in ('.git', 'pool'):
-                shutil.rmtree(item) if item.is_dir() else item.unlink()
-        shutil.copytree(site, repository, dirs_exist_ok=True)
-        run('git', 'add', '--all', cwd=repository)
-        name = run('git', 'config', 'user.name', capture=True).strip()
-        email = run('git', 'config', 'user.email', capture=True).strip()
-        run('git', '-c', 'user.name=' + name, '-c', 'user.email=' + email, 'commit', '--quiet',
-            '-m', 'repo: publish locally built Shadow ' + metadata['version'], cwd=repository)
-        run('git', 'push', 'origin', 'HEAD:gh-pages', cwd=repository)
-        run('gh', 'api', '--method', 'PUT', f'repos/{REPO}/pages', '-f', 'build_type=legacy',
-            '-f', 'source[branch]=gh-pages', '-f', 'source[path]=/')
-        print('Published local build: https://gitssie.github.io/shadow/')
+        print('Validated locally; public distribution is disabled: ' + json.dumps(metadata))
 
 
 if __name__ == '__main__':
