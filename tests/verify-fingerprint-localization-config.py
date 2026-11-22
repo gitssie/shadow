@@ -29,6 +29,21 @@ static NSDictionary *validate(NSDictionary *base, id localization) {
 int main(void) { @autoreleasepool {
   NSDictionary *base = SHDWFingerprintConfiguration.defaultConfiguration;
   assert([base[@"Localization"] isEqual:(@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"})]);
+  NSArray *modes = [SHDWFingerprintConfiguration supportedAdvertisingModes];
+  NSArray *radios = [SHDWFingerprintConfiguration supportedRadioTechnologies];
+  assert([modes isEqual:(@[@"perApp", @"zero", @"system"])]);
+  assert([radios isEqual:(@[@"4g", @"5g"])]);
+  assert(![modes isKindOfClass:NSMutableArray.class] && ![radios isKindOfClass:NSMutableArray.class]);
+  for (NSString *mode in modes) {
+    NSMutableDictionary *candidate = [base mutableCopy];
+    candidate[@"System"] = @{@"Mode":@"native"};
+    candidate[@"Advertising"] = @{@"Mode":mode};
+    for (NSArray *selection in @[@[], @[radios[0]], @[radios[1]], radios, @[radios[1], radios[0]]]) {
+      candidate[@"Network"] = @{@"RadioTechnologies":selection};
+      NSDictionary *validated = [SHDWFingerprintConfiguration configurationByValidating:candidate error:nil];
+      assert(validated && [validated[@"Network"][@"RadioTechnologies"] isEqual:selection]);
+    }
+  }
   NSArray *regions = [SHDWFingerprintConfiguration supportedLocalizationRegions];
   assert([regions isEqual:(@[@"FR", @"GB", @"US"])] && ![regions isKindOfClass:NSMutableArray.class]);
   NSArray *presets = @[

@@ -3,6 +3,8 @@ NS_ASSUME_NONNULL_BEGIN
 __attribute__((visibility("default")))
 @interface SHDWFingerprintConfiguration : NSObject
 + (NSDictionary *)defaultConfiguration;
++ (NSArray<NSString *> *)supportedAdvertisingModes;
++ (NSArray<NSString *> *)supportedRadioTechnologies;
 + (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration;
 + (nullable NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(nullable NSString *)systemVersion;
 // Region determines language and time zone, including native pass-through.

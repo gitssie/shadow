@@ -85,7 +85,7 @@
         else if (indexPath.row == 4) {
             NSArray *technologies = configuration[@"Network"][@"RadioTechnologies"];
             NSMutableArray *values = [NSMutableArray new];
-            for (NSString *value in @[@"4g", @"5g"]) if ([technologies containsObject:value]) [values addObject:value.uppercaseString];
+            for (NSString *value in [SHDWFingerprintConfiguration supportedRadioTechnologies]) if ([technologies containsObject:value]) [values addObject:value.uppercaseString];
             cell.detailTextLabel.text = values.count ? [values componentsJoinedByString:@" / "] : @"—";
         } else if (indexPath.row == 6) {
             NSString *mode=configuration[@"Advertising"][@"Mode"] ?: @"zero";
@@ -153,10 +153,17 @@
     NSString *localizationKey = indexPath.row == 1 ? @"Region" : indexPath.row == 3 ? @"Language" : nil;
     if (indexPath.row == 6) {
         controller.title=SHDWText(@"Advertising tracking");
-        controller.options=@[@{@"ID":@"perApp",@"Name":SHDWText(@"Advertising fingerprint")},@{@"ID":@"zero",@"Name":SHDWText(@"Disable tracking")},@{@"ID":@"system",@"Name":SHDWText(@"Follow system")}];
+        NSMutableArray *options = [NSMutableArray new];
+        NSDictionary *names = @{@"perApp":@"Advertising fingerprint", @"zero":@"Disable tracking", @"system":@"Follow system"};
+        for (NSString *mode in [SHDWFingerprintConfiguration supportedAdvertisingModes])
+            [options addObject:@{@"ID":mode, @"Name":SHDWText(names[mode] ?: mode)}];
+        controller.options = options;
         controller.selection=[NSMutableSet setWithObject:configuration[@"Advertising"][@"Mode"] ?: @"zero"];
     } else if (controller.multiple) {
-        controller.options = @[@{@"ID": @"4g", @"Name": @"4G"}, @{@"ID": @"5g", @"Name": @"5G"}];
+        NSMutableArray *options = [NSMutableArray new];
+        for (NSString *radio in [SHDWFingerprintConfiguration supportedRadioTechnologies])
+            [options addObject:@{@"ID":radio, @"Name":radio.uppercaseString}];
+        controller.options = options;
         controller.selection = [NSMutableSet setWithArray:configuration[@"Network"][@"RadioTechnologies"] ?: @[]];
     } else if (localizationKey) {
         controller.searchable = NO;
@@ -190,7 +197,7 @@
             latest[@"Advertising"]=@{@"Mode":selection.anyObject ?: @"zero"};
         } else if (network) {
             NSMutableArray *technologies = [NSMutableArray new];
-            for (NSString *value in @[@"4g", @"5g"]) if ([selection containsObject:value]) [technologies addObject:value];
+            for (NSString *value in [SHDWFingerprintConfiguration supportedRadioTechnologies]) if ([selection containsObject:value]) [technologies addObject:value];
             NSMutableDictionary *networkConfiguration = [latest[@"Network"] mutableCopy] ?: [NSMutableDictionary new];
             networkConfiguration[@"RadioTechnologies"] = technologies;
             latest[@"Network"] = networkConfiguration;

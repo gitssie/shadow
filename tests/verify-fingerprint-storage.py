@@ -30,6 +30,7 @@ helpers += function(settings, "static NSDictionary *SHDWRepairedFingerprintVendo
 helpers += function(settings, "static NSDictionary *SHDWNewFingerprintData(")
 for signature in ["static NSUUID *SHDWStoredVendorIdentifier(",
                   "static NSDictionary *SHDWStoredFingerprintApplication(",
+                  "static NSDictionary *SHDWFingerprintBootSnapshot(",
                   "static NSDictionary *SHDWFingerprintRuntimeSnapshot("]:
     helpers += "\n" + function(settings, signature).replace("NSUserDefaults *defaults", "FileDefaults *defaults")
 methods = function(settings, "- (NSDictionary *)fingerprintDataForIdentifier:") + "\n"
@@ -314,6 +315,32 @@ int main(int argc, const char **argv) { @autoreleasepool {
             assert(!nativeBootFallback[@"BootTimeOffset"]);
             assert([nativeBootFallback[@"VendorIdentifier"] isEqual:profile[@"VendorIdentifier"]]);
             assert([store.values[@"guarded.app"] isEqual:guarded]);
+            statFailure = NO;
+        }
+
+        // Runtime reads require persisted IDFV; guarded reads retain their older
+        // data-only validation and never repair or write a missing IDFV.
+        NSMutableDictionary *withoutVendor = [profile mutableCopy];
+        [withoutVendor removeObjectForKey:@"VendorIdentifier"];
+        withoutVendor[@"NativeBootTimestamp"] = @(nativeBoot - 123);
+        assert(SHDWValidFingerprintData(withoutVendor));
+        assert(!SHDWFingerprintRuntimeSnapshot(withoutVendor));
+        for (NSString *flag in @[@"Fingerprint_Enabled", @"Fingerprint_Locked"]) {
+            NSDictionary *guarded = @{@"Fingerprint_Data":withoutVendor,
+                                      flag:@([flag isEqual:@"Fingerprint_Locked"])};
+            store.values[@"missing-vendor.app"] = guarded;
+            NSMutableDictionary *expected = [withoutVendor mutableCopy];
+            expected[@"BootTimeOffset"] = @121;
+            expected[@"NativeBootTimestamp"] = @(nativeBoot);
+            NSDictionary *snapshot = [sharedSettings fingerprintDataForIdentifier:@"missing-vendor.app"];
+            assert([snapshot isEqual:expected] && !snapshot[@"VendorIdentifier"]);
+            assert([store.values[@"missing-vendor.app"] isEqual:guarded]);
+            statFailure = YES;
+            expected = [withoutVendor mutableCopy];
+            [expected removeObjectForKey:@"BootTimeOffset"];
+            snapshot = [sharedSettings fingerprintDataForIdentifier:@"missing-vendor.app"];
+            assert([snapshot isEqual:expected]);
+            assert([store.values[@"missing-vendor.app"] isEqual:guarded]);
             statFailure = NO;
         }
 

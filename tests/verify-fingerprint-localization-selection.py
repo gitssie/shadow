@@ -163,11 +163,20 @@ int main(void) { @autoreleasepool {
     assert(!region.saveSelection([NSSet setWithObject:@"FR"]) && store.writes == 5);
     store.locked = NO;
     SHDWConfigurationSelectionController *network = Open(detail, 4);
+    assert([[network.options valueForKey:@"ID"] isEqual:[SHDWFingerprintConfiguration supportedRadioTechnologies]]);
     before = store.configuration;
     assert(network.multiple && network.saveSelection([NSSet setWithObject:@"4g"]) && store.writes == 6);
     assert([store.configuration[@"Network"][@"RadioTechnologies"] isEqual:@[@"4g"]]);
     assert([store.configuration[@"Network"][@"Transport"] isEqual:@"safari184_ios"]);
     for (NSString *key in before) if (![key isEqual:@"Network"]) assert([before[key] isEqual:store.configuration[key]]);
+    assert(network.saveSelection([NSSet setWithArray:@[@"5g", @"4g", @"unknown"]]));
+    assert([store.configuration[@"Network"][@"RadioTechnologies"] isEqual:[SHDWFingerprintConfiguration supportedRadioTechnologies]]);
+    SHDWConfigurationSelectionController *advertising = Open(detail, 6);
+    assert([[advertising.options valueForKey:@"ID"] isEqual:[SHDWFingerprintConfiguration supportedAdvertisingModes]]);
+    for (NSString *mode in [SHDWFingerprintConfiguration supportedAdvertisingModes]) {
+        assert(advertising.saveSelection([NSSet setWithObject:mode]));
+        assert([store.configuration[@"Advertising"][@"Mode"] isEqual:mode]);
+    }
     puts("Manager localization selection: real picker catalogs/callbacks, linked triplets, latest-state preservation, native reset, lock and readonly timezone passed");
 } return 0; }
 '''

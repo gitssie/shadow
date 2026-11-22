@@ -1,4 +1,5 @@
 #import <Shadow/FingerprintConfiguration.h>
+#import <Shadow/FingerprintVersion.h>
 #import <CoreFoundation/CoreFoundation.h>
 #include <sys/sysctl.h>
 #include <math.h>
@@ -16,6 +17,19 @@ static BOOL SHDWConfigurationKeys(NSDictionary *value, NSArray *required, NSArra
   for (id key in value) if (![allowed containsObject:key]) return NO;
   for (id key in required) if (!value[key]) return NO;
   return YES;
+}
+static NSArray<NSDictionary *> *SHDWConfigurationLocalizationPresets(void) {
+  static NSArray<NSDictionary *> *presets;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    presets = @[
+      @{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"},
+      @{@"Region":@"FR", @"Language":@"fr-FR", @"TimeZone":@"Europe/Paris"},
+      @{@"Region":@"GB", @"Language":@"en-GB", @"TimeZone":@"Europe/London"},
+      @{@"Region":@"US", @"Language":@"en-US", @"TimeZone":@"America/New_York"}
+    ];
+  });
+  return presets;
 }
 static NSString *SHDWConfigurationCurrentProductType(void) {
   char product[128] = {0}; size_t length = sizeof(product);
@@ -93,12 +107,15 @@ static NSString *SHDWConfigurationLanguage(id value) {
   return [parts componentsJoinedByString:@"-"];
 }
 static NSDictionary *SHDWConfigurationLocalization(id value) {
-  if (!value) return @{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"};
+  if (!value) return [SHDWFingerprintConfiguration localizationForRegion:@"native"];
   if (!SHDWConfigurationKeys(value, @[@"Region",@"Language",@"TimeZone"], @[])) return nil;
   NSString *region = SHDWConfigurationRegion(value[@"Region"]);
   NSString *language = SHDWConfigurationLanguage(value[@"Language"]);
   id storedZone = value[@"TimeZone"];
-  if (![@[@"native",@"Europe/Paris",@"Europe/London",@"America/New_York"] containsObject:storedZone]) return nil;
+  BOOL validZone = NO;
+  for (NSDictionary *preset in SHDWConfigurationLocalizationPresets())
+    if ([preset[@"TimeZone"] isEqual:storedZone]) { validZone = YES; break; }
+  if (!validZone) return nil;
   return region && language ? [SHDWFingerprintConfiguration localizationForRegion:region] : nil;
 }
 static NSDictionary *SHDWConfigurationNativeLocalization(void) {
@@ -116,23 +133,24 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
 }
 
 @implementation SHDWFingerprintConfiguration
++ (NSArray<NSString *> *)supportedAdvertisingModes {
+  return @[@"perApp", @"zero", @"system"];
+}
++ (NSArray<NSString *> *)supportedRadioTechnologies {
+  return @[@"4g", @"5g"];
+}
 + (NSArray<NSString *> *)supportedLocalizationRegions {
-  return @[@"FR", @"GB", @"US"];
+  NSMutableArray *regions = [NSMutableArray new];
+  for (NSDictionary *preset in SHDWConfigurationLocalizationPresets())
+    if (![preset[@"Region"] isEqual:@"native"]) [regions addObject:preset[@"Region"]];
+  return [regions copy];
 }
 + (NSDictionary *)localizationForRegion:(NSString *)region {
   NSString *code = SHDWConfigurationRegion(region);
   if (!code) return nil;
-  static NSDictionary *presets;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    presets = @{
-      @"native":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"},
-      @"FR":@{@"Region":@"FR", @"Language":@"fr-FR", @"TimeZone":@"Europe/Paris"},
-      @"GB":@{@"Region":@"GB", @"Language":@"en-GB", @"TimeZone":@"Europe/London"},
-      @"US":@{@"Region":@"US", @"Language":@"en-US", @"TimeZone":@"America/New_York"}
-    };
-  });
-  return presets[code];
+  for (NSDictionary *preset in SHDWConfigurationLocalizationPresets())
+    if ([preset[@"Region"] isEqual:code]) return preset;
+  return nil;
 }
 + (NSDictionary *)localizationForLanguage:(NSString *)language {
   NSString *canonical = SHDWConfigurationLanguage(language);
@@ -159,29 +177,18 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
     }
   }
   return @{@"Version":@1, @"System":system,
-    @"Network":@{@"RadioTechnologies":@[@"4g",@"5g"], @"Transport":@"auto"},
+    @"Network":@{@"RadioTechnologies":self.supportedRadioTechnologies, @"Transport":@"auto"},
     @"Receipts":@{@"InterceptEnabled":@YES}, @"Advertising":@{@"Mode":@"zero"},
-    @"Localization":@{@"Region":@"native", @"Language":@"native", @"TimeZone":@"native"}};
+    @"Localization":[self localizationForRegion:@"native"]};
 }
 + (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration {
   id transport = configuration[@"Network"][@"Transport"];
   return !transport || [transport isEqual:@"auto"] || [transport isEqual:@"safari184_ios"];
 }
 + (NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(NSString *)systemVersion {
-  if (![self usesCurlTransportForConfiguration:configuration] || ![systemVersion isKindOfClass:NSString.class] ||
-      !systemVersion.length || systemVersion.length > 32) return nil;
-  NSArray<NSString *> *parts = [systemVersion componentsSeparatedByString:@"."];
-  if (parts.count < 2 || parts.count > 3) return nil;
   NSUInteger numbers[3] = {0};
-  for (NSUInteger index = 0; index < parts.count; index++) {
-    NSString *part = parts[index];
-    if (!part.length) return nil;
-    for (NSUInteger offset = 0; offset < part.length; offset++) {
-      unichar digit = [part characterAtIndex:offset];
-      if (digit < '0' || digit > '9') return nil;
-      numbers[index] = MIN((NSUInteger)1000, numbers[index] * 10 + digit - '0');
-    }
-  }
+  if (![self usesCurlTransportForConfiguration:configuration] ||
+      !SHDWFingerprintParseSystemVersion(systemVersion, numbers)) return nil;
   if (numbers[0] < 17) return nil;
   if (numbers[0] < 18) return @"safari172_ios";
   if (numbers[0] == 18 && numbers[1] < 4) return @"safari180_ios";
@@ -374,13 +381,13 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   }
   id advertising=value[@"Advertising"];
   if (advertising && (!SHDWConfigurationKeys(advertising,@[@"Mode"],@[]) ||
-      ![@[@"system",@"zero",@"perApp"] containsObject:advertising[@"Mode"]])) return SHDWConfigurationInvalid(error);
+      ![self.supportedAdvertisingModes containsObject:advertising[@"Mode"]])) return SHDWConfigurationInvalid(error);
   NSArray *radios=network[@"RadioTechnologies"];
-  if (![radios isKindOfClass:NSArray.class] || radios.count > 2)
+  if (![radios isKindOfClass:NSArray.class] || radios.count > self.supportedRadioTechnologies.count)
     return SHDWConfigurationInvalid(error);
   NSMutableSet *seen=[NSMutableSet new];
   for (id radio in radios) {
-    if (![@[@"4g",@"5g"] containsObject:radio] || [seen containsObject:radio]) return SHDWConfigurationInvalid(error);
+    if (![self.supportedRadioTechnologies containsObject:radio] || [seen containsObject:radio]) return SHDWConfigurationInvalid(error);
     [seen addObject:radio];
   }
   id intercept=receipts[@"InterceptEnabled"];

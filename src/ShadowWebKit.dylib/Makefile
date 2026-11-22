@@ -9,7 +9,7 @@ ShadowWebKit_FILES += ../Localization/Bootstrap.m ../Localization/Environment.m 
 ShadowWebKit_CCFLAGS += -std=c++17
 ShadowWebKit_FRAMEWORKS = Foundation CoreFoundation
 ShadowWebKit_EXTRA_FRAMEWORKS = HookKit
-ShadowWebKit_CFLAGS = -fobjc-arc -fvisibility=hidden $(SHADOW_HOOKKIT_CFLAGS)
+ShadowWebKit_CFLAGS = -fobjc-arc -fvisibility=hidden $(SHADOW_HOOKKIT_CFLAGS) -I../Shadow.framework/Headers
 ShadowWebKit_CFLAGS += -DSHADOW_CURL_IMPERSONATE=$(SHADOW_CURL_IMPERSONATE)
 ShadowWebKit_LDFLAGS = -Wl,-x $(SHADOW_HOOKKIT_LDFLAGS) -rpath /Library/Frameworks -rpath /var/jb/Library/Frameworks
 ifeq ($(SHADOW_CURL_IMPERSONATE),1)
@@ -18,7 +18,7 @@ ShadowWebKit_FILES += ../Transport/Bootstrap.m ../Transport/NetworkDiagnostics.m
 ShadowWebKit_FRAMEWORKS += CFNetwork Security Network
 ShadowWebKit_LIBRARIES += sandy
 ShadowWebKit_EXTRA_FRAMEWORKS += Shadow
-ShadowWebKit_CFLAGS += -I$(SHADOW_CURL_ROOT)/include -I../Shadow.framework/Headers
+ShadowWebKit_CFLAGS += -I$(SHADOW_CURL_ROOT)/include
 ShadowWebKit_LDFLAGS += -F../ -rpath /usr/lib -rpath /var/jb/usr/lib
 endif
 

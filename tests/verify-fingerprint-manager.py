@@ -44,6 +44,7 @@ source = r'''
 #import <Shadow/SHDWPlugin.h>
 #import <Shadow/Fingerprint.h>
 #import <Shadow/FingerprintConfiguration.h>
+#import <Shadow/FingerprintVersion.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <Shadow/FingerprintState.h>
 #import <Shadow/FingerprintOwner.h>

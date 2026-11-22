@@ -94,6 +94,15 @@ static BOOL install(NSString *version) {
 int main(int argc,char **argv) { @autoreleasepool {
     assert(argc==2);
     if(!strcmp(argv[1],"validation")) {
+        NSUInteger parts[3] = {7, 8, 9};
+        assert(!SHDWFingerprintParseSystemVersion(@"18..7", parts));
+        assert(parts[0] == 7 && parts[1] == 8 && parts[2] == 9);
+        assert(SHDWFingerprintParseSystemVersion(@"18.7", parts));
+        assert(parts[0] == 18 && parts[1] == 7 && parts[2] == 0);
+        assert(SHDWFingerprintParseSystemVersion(@"00018.0007.0008", parts));
+        assert(parts[0] == 18 && parts[1] == 7 && parts[2] == 8);
+        assert(SHDWFingerprintParseSystemVersion(@"999999999999999999999999.4", parts));
+        assert(parts[0] == 1000 && parts[1] == 4 && parts[2] == 0);
         assert(!install(nil));
         for(id value in @[NSNull.null,@42,@"",@"16",@"16_4",@" 16.4",@"16.4 ",@"16.4\n",@"16..4",@"16.4.1.2",@"16.4(a)",@"１６.４",@"1.222222222222222222222222222222222"])
             assert(!install((NSString *)value));
@@ -154,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-web-user-agent-") as directory:
     subprocess.run([
         "xcrun", "clang++", "-std=c++17", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-fno-sanitize=function", "-framework", "Foundation", "-I",
-        str(root / "src/ShadowCore.dylib/policy"), str(source_path), "-o", str(binary),
+        str(root / "src/ShadowCore.dylib/policy"), "-I", str(root / "src/Shadow.framework/Headers"), str(source_path), "-o", str(binary),
     ], check=True)
     for scenario in ("validation", "retry", "missing-factory", "snapshot", "terminal", "fallback", "without-original"):
         subprocess.run([str(binary), scenario], check=True, timeout=10)

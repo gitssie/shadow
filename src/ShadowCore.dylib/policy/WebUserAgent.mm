@@ -1,4 +1,5 @@
 #import "WebUserAgent.h"
+#import <Shadow/FingerprintVersion.h>
 #import "../../Localization/FunctionHook.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -30,17 +31,7 @@ static SHDWWebUserAgentString MarketingVersion(void) {
 
 BOOL SHDWWebUserAgentVersionIsValid(NSString *version) {
     int saved = errno;
-    if (![version isKindOfClass:NSString.class] || !version.length || version.length > 32) {
-        errno = saved;
-        return NO;
-    }
-    static NSRegularExpression *format;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        format = [NSRegularExpression regularExpressionWithPattern:@"[0-9]+(?:\\.[0-9]+){1,2}" options:0 error:NULL];
-    });
-    NSRange whole = NSMakeRange(0, version.length);
-    BOOL valid = NSEqualRanges([format rangeOfFirstMatchInString:version options:0 range:whole], whole);
+    BOOL valid = SHDWFingerprintParseSystemVersion(version, NULL);
     errno = saved;
     return valid;
 }

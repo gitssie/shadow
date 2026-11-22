@@ -3,6 +3,7 @@
 #import "../ShadowCore.dylib/SHDWHookSession.h"
 #include "ExternalTLS.h"
 #include "CurlDiagnostics.h"
+#include "Profiles.h"
 #import <Network/Network.h>
 #import <Security/Security.h>
 #include <dlfcn.h>
@@ -493,7 +494,7 @@ static BOOL selectSessionProfile(SHDWNativeSessionState *s, id parameters) {
     s.ca = configuredCA;
   }
   if(resolver) s.profile = [resolver(parameters) copy];
-  return [@[@"safari172_ios", @"safari180_ios", @"safari184_ios", @"safari187_ios"] containsObject:s.profile];
+  return SHDWTransportProfileIsSupported(s.profile);
 }
 
 static uint64_t observeHandshake(void *legacy) {
@@ -651,9 +652,7 @@ BOOL SHDWNativeTLSSetProfileResolver(SHDWNativeTLSProfileResolver resolver) {
 BOOL SHDWNativeTLSInstall(NSString *profile, NSString *libraryPath,
                           NSString *CAPath, SHDWHookSession *hooks) {
   @synchronized(SHDWNativeSessionState.class) {
-    if (!hooks || ![@[
-          @"safari172_ios", @"safari180_ios", @"safari184_ios", @"safari187_ios"
-        ] containsObject:profile] ||
+    if (!hooks || !SHDWTransportProfileIsSupported(profile) ||
         !libraryPath.length || !CAPath.length)
       return NO;
     if (adapterEnabled) {

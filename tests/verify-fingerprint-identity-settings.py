@@ -23,6 +23,7 @@ helpers = "\n".join(function(signature) for signature in [
     "static BOOL SHDWValidFingerprintData(",
     "static NSUUID *SHDWStoredVendorIdentifier(",
     "static NSDictionary *SHDWStoredFingerprintApplication(",
+    "static NSDictionary *SHDWFingerprintBootSnapshot(",
     "static NSDictionary *SHDWFingerprintRuntimeSnapshot(",
 ])
 helpers += "\n" + (root / "src/Shadow.framework/Headers/Shadow/FingerprintOwner.h").read_text()

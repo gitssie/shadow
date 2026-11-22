@@ -191,8 +191,7 @@ static NSDictionary *SHDWStoredFingerprintApplication(NSUserDefaults *defaults,
   return nil;
 }
 
-static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
-  if (!SHDWValidFingerprintData(data) || !SHDWStoredVendorIdentifier(data)) return nil;
+static NSDictionary *SHDWFingerprintBootSnapshot(NSDictionary *data) {
   NSMutableDictionary *snapshot = [data mutableCopy];
   double nativeBoot = SHDWNativeBootTimestamp();
   double now = [[NSDate date] timeIntervalSince1970];
@@ -207,6 +206,11 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
     snapshot[@"NativeBootTimestamp"] = @(nativeBoot);
   }
   return [snapshot copy];
+}
+
+static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
+  if (!SHDWValidFingerprintData(data) || !SHDWStoredVendorIdentifier(data)) return nil;
+  return SHDWFingerprintBootSnapshot(data);
 }
 
 @implementation ShadowSettings
@@ -392,21 +396,7 @@ static NSDictionary *SHDWFingerprintRuntimeSnapshot(NSDictionary *data) {
       if (!SHDWValidFingerprintData(existing)) {
         return nil;
       }
-      NSMutableDictionary *snapshot = [existing mutableCopy];
-      double nativeBoot = SHDWNativeBootTimestamp();
-      double now = [[NSDate date] timeIntervalSince1970];
-      NSInteger minimumOffset, maximumOffset;
-      if (!SHDWNativeBootSessionUUID() ||
-          !SHDWFingerprintBootOffsetBounds(nativeBoot, now, &minimumOffset,
-                                           &maximumOffset)) {
-        [snapshot removeObjectForKey:@"BootTimeOffset"];
-      } else {
-        NSInteger offset = [existing[@"BootTimeOffset"] integerValue];
-        snapshot[@"BootTimeOffset"] =
-            @(MIN(maximumOffset, MAX(minimumOffset, offset)));
-        snapshot[@"NativeBootTimestamp"] = @(nativeBoot);
-      }
-      return [snapshot copy];
+      return SHDWFingerprintBootSnapshot(existing);
     }
 
     if (SHDWValidFingerprintData(data)) {

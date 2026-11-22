@@ -42,7 +42,7 @@ NSArray<NSDictionary *> *SHDWBackupDetailFields(NSDictionary *snapshot, NSString
     NSString *tls = config ? SHDWLocalizedText([SHDWFingerprintConfiguration usesCurlTransportForConfiguration:@{@"Network":network ?: @{}}] ? @"Enabled" : @"Disabled") : nil;
     NSMutableArray *radios = [NSMutableArray new];
     if ([network[@"RadioTechnologies"] isKindOfClass:NSArray.class])
-        for (NSString *radio in @[@"4g", @"5g"]) if ([network[@"RadioTechnologies"] containsObject:radio]) [radios addObject:radio.uppercaseString];
+        for (NSString *radio in [SHDWFingerprintConfiguration supportedRadioTechnologies]) if ([network[@"RadioTechnologies"] containsObject:radio]) [radios addObject:radio.uppercaseString];
     NSString *mode = String(Dictionary(config[@"Advertising"])[@"Mode"]) ?: (config ? @"zero" : nil);
     NSString *advertising = mode ? SHDWLocalizedText([mode isEqual:@"zero"] ? @"Disable tracking" : [mode isEqual:@"system"] ? @"Follow system" : @"Advertising fingerprint") : nil;
     id receipts = Dictionary(config[@"Receipts"])[@"InterceptEnabled"];

@@ -19,6 +19,7 @@ setter = production[start:end]
 source = r'''
 #import <Foundation/Foundation.h>
 #include <assert.h>
+#include "Profiles.h"
 typedef NSString * _Nullable (^SHDWNativeTLSProfileResolver)(id);
 @interface SHDWNativeSessionState:NSObject
 @property(nonatomic,copy) NSString *profile, *library, *ca;
@@ -41,6 +42,11 @@ int main(void) { @autoreleasepool {
     SHDWNativeSessionState *a = [SHDWNativeSessionState new], *b = [SHDWNativeSessionState new];
     assert(selectSessionProfile(a, @"a") && [a.profile isEqual:@"safari172_ios"]);
     assert(selectSessionProfile(b, @"b") && [b.profile isEqual:@"safari187_ios"]);
+    for(NSString *profile in @[@"safari172_ios", @"safari180_ios", @"safari184_ios", @"safari187_ios"]) {
+        profiles[@"selected"] = profile;
+        SHDWNativeSessionState *session = [SHDWNativeSessionState new];
+        assert(selectSessionProfile(session, @"selected") && [session.profile isEqual:profile]);
+    }
     profiles[@"a"] = @"safari180_ios";
     assert([a.profile isEqual:@"safari172_ios"] && [b.profile isEqual:@"safari187_ios"]);
     SHDWNativeSessionState *unknown = [SHDWNativeSessionState new];
@@ -58,5 +64,5 @@ with tempfile.TemporaryDirectory(prefix="shadow-tls-profile-") as directory:
     path = Path(directory) / "main.m"
     binary = Path(directory) / "test"
     path.write_text(source)
-    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", "-framework", "Foundation", str(path), "-o", str(binary)], check=True)
+    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", "-framework", "Foundation", "-I", str(root / "src/Transport"), str(path), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0", UBSAN_OPTIONS="halt_on_error=1"))
