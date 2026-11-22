@@ -46,6 +46,10 @@ int main(void) { @autoreleasepool {
     NSDictionary *globalBefore = [NSUserDefaults.standardUserDefaults persistentDomainForName:NSGlobalDomain];
     assert(SHDWLocalizationIsWebContentService("com.apple.WebKit.WebContent"));
     assert(!SHDWLocalizationIsWebContentService(NULL));
+    assert(SHDWLocalizationIsNetworkingService("com.apple.WebKit.Networking"));
+    assert(!SHDWLocalizationIsNetworkingService(NULL));
+    for (const char *name : (const char *[]){"com.apple.WebKit.Networking.Development", "com.apple.WebKit.WebContent", "com.apple.WebKit.NetworkingX", ""})
+        assert(!SHDWLocalizationIsNetworkingService(name));
     for (const char *name : (const char *[]){"com.apple.WebKit.WebContent.Development", "com.apple.WebKit.Networking", "com.apple.WebKit.WebContentX", ""}) {
         assert(!SHDWLocalizationIsWebContentService(name));
     }

@@ -1,5 +1,6 @@
 #import "UniversalHooks.h"
 #import "../../policy/FingerprintLocalization.h"
+#import "../../policy/FingerprintPolicy.h"
 #import "../../policy/WebLocalization.h"
 #import "../../../Localization/Environment.h"
 #import <CoreFoundation/CoreFoundation.h>
@@ -7,6 +8,49 @@
 static NSLocale *shdw_localization_locale;
 static NSTimeZone *shdw_localization_zone;
 static NSArray *shdw_localization_preferred_languages;
+
+static NSString *shdw_localization_contact_country;
+static id (*shdw_original_contactCountry)(id, SEL);
+static id (*shdw_original_phoneCountry)(id, SEL);
+static id (*shdw_original_iosContactCountry)(id, SEL);
+
+static id shdw_localization_contact_country_value(id self, SEL command, id (*original)(id, SEL)) {
+    int saved = errno;
+    BOOL applies = shdw_localization_contact_country && ![Shadow shdwIsInternalRead];
+    errno = saved;
+    if(!applies) return original(self, command);
+    return shdw_localization_contact_country;
+}
+
+static id shdw_localization_contactCountry(id self, SEL command) {
+    return shdw_localization_contact_country_value(self, command, shdw_original_contactCountry);
+}
+
+static id shdw_localization_iosContactCountry(id self, SEL command) {
+    return shdw_localization_contact_country_value(self, command, shdw_original_iosContactCountry);
+}
+
+static id shdw_localization_phoneCountry(id self, SEL command) {
+    return shdw_localization_contact_country_value(self, command, shdw_original_phoneCountry);
+}
+
+static void shdw_localization_install_country_getter(SHDWHookSession *hooks,
+    const char *className, const char *selectorName, BOOL classMethod,
+    void *replacement, void **original) {
+    [hooks performWhenTargetAvailable:^BOOL(SHDWHookSession *session) {
+        Class cls = objc_getClass(className);
+        if(!cls) return NO;
+        if(classMethod) cls = object_getClass(cls);
+        SEL selector = sel_registerName(selectorName);
+        Method method = class_getInstanceMethod(cls, selector);
+        char result[8] = {0};
+        if(method) method_getReturnType(method, result, sizeof(result));
+        if(method && method_getNumberOfArguments(method) == 2 && result[0] == '@')
+            [session hookMessageInClass:cls withSelector:selector
+                withReplacement:replacement outOldPtr:original];
+        return YES;
+    }];
+}
 
 static BOOL shdw_localization_applies(void) {
     return shdw_localization_locale && ![Shadow shdwIsInternalRead];
@@ -97,6 +141,17 @@ void *shdw_sym_policy_lookup_localization(const char *name) {
 
 void shdw_universal_fingerprint_localization(SHDWHookSession *hooks) {
     NSDictionary *resolved = SHDWFingerprintLocalization();
+    SHADOW_INTERNAL_SCOPE {
+        shdw_localization_contact_country = [SHDWFingerprintCountryCodeOverride() lowercaseString];
+    }
+    if(shdw_localization_contact_country.length) {
+        shdw_localization_install_country_getter(hooks, "CNContactsUserDefaults", "countryCode", NO,
+            shdw_localization_contactCountry, (void **)&shdw_original_contactCountry);
+        shdw_localization_install_country_getter(hooks, "CNiOSABContactsUserDefaults", "countryCode", NO,
+            shdw_localization_iosContactCountry, (void **)&shdw_original_iosContactCountry);
+        shdw_localization_install_country_getter(hooks, "CNPhoneNumber", "defaultCountryCode", YES,
+            shdw_localization_phoneCountry, (void **)&shdw_original_phoneCountry);
+    }
     if(![resolved[@"OverridesSystem"] boolValue]) return;
     BOOL applied = NO;
     SHADOW_INTERNAL_SCOPE {
@@ -140,5 +195,6 @@ void shdw_universal_fingerprint_localization(SHDWHookSession *hooks) {
     SHDW_LOCALIZATION_FUNCTION(CFTimeZoneCopySystem, copySystemZone);
     SHDW_LOCALIZATION_FUNCTION(CFTimeZoneCopyDefault, copyDefaultZone);
 #undef SHDW_LOCALIZATION_FUNCTION
+    shdw_universal_fingerprint_resources(hooks, resolved);
     SHDWFingerprintInstallWebLocalization();
 }

@@ -17,6 +17,7 @@ BOOL SHDWFingerprintVersionQuery(const char *name, void *value, size_t *length, 
 BOOL SHDWFingerprintBootName(const char *name);
 BOOL SHDWFingerprintBootQuery(const char *name, void *value, size_t *length, int *result);
 SHDWFingerprintCoordinate SHDWFingerprintCountryCenter(void);
+NSString *SHDWFingerprintCountryCodeOverride(void);
 SHDWFingerprintCoordinate SHDWFingerprintCountryCenterForCode(NSString *country);
 uint64_t SHDWFingerprintMemorySize(NSString *bundleID, uint64_t nativeSize);
 NSDictionary<NSString *, NSString *> *SHDWFingerprintRadioTechnologies(NSDictionary<NSString *, NSString *> *services);

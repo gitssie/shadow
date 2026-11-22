@@ -5,7 +5,7 @@ __attribute__((visibility("default")))
 + (NSDictionary *)defaultConfiguration;
 + (BOOL)usesCurlTransportForConfiguration:(NSDictionary *)configuration;
 + (nullable NSString *)curlTransportProfileForConfiguration:(NSDictionary *)configuration systemVersion:(nullable NSString *)systemVersion;
-// Linked selection presets; stored configurations retain their language semantics.
+// Region determines language and time zone, including native pass-through.
 + (NSArray<NSString *> *)supportedLocalizationRegions;
 + (nullable NSDictionary *)localizationForRegion:(NSString *)region;
 + (nullable NSDictionary *)localizationForLanguage:(NSString *)language;

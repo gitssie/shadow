@@ -99,8 +99,7 @@ static NSDictionary *SHDWConfigurationLocalization(id value) {
   NSString *language = SHDWConfigurationLanguage(value[@"Language"]);
   id storedZone = value[@"TimeZone"];
   if (![@[@"native",@"Europe/Paris",@"Europe/London",@"America/New_York"] containsObject:storedZone]) return nil;
-  NSString *zone = [SHDWFingerprintConfiguration timeZoneForRegion:region];
-  return region && language && zone ? @{@"Region":region, @"Language":language, @"TimeZone":zone} : nil;
+  return region && language ? [SHDWFingerprintConfiguration localizationForRegion:region] : nil;
 }
 static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   static NSDictionary *native;
@@ -336,18 +335,12 @@ static NSDictionary *SHDWConfigurationNativeLocalization(void) {
   if (!chosen) return nil;
   NSDictionary *native = SHDWConfigurationNativeLocalization();
   BOOL nativeRegion = [chosen[@"Region"] isEqualToString:@"native"];
-  BOOL nativeLanguage = [chosen[@"Language"] isEqualToString:@"native"];
   NSString *country = nativeRegion ? native[@"CountryCode"] : chosen[@"Region"];
-  NSArray *languages = nativeLanguage ? native[@"Languages"] : @[chosen[@"Language"]];
+  NSArray *languages = nativeRegion ? native[@"Languages"] : @[chosen[@"Language"]];
   NSString *locale = native[@"LocaleIdentifier"];
-  if (!nativeRegion || !nativeLanguage) {
-    NSString *source = nativeLanguage ? native[@"LocaleIdentifier"] : chosen[@"Language"];
-    NSDictionary *components = [NSLocale componentsFromLocaleIdentifier:source];
-    NSMutableDictionary *selected = nativeLanguage ? [NSMutableDictionary new] : [components mutableCopy];
-    selected[NSLocaleLanguageCode] = components[NSLocaleLanguageCode] ?: @"en";
-    if (components[NSLocaleScriptCode]) selected[NSLocaleScriptCode] = components[NSLocaleScriptCode];
-    if ([country length]) selected[NSLocaleCountryCode] = country;
-    else [selected removeObjectForKey:NSLocaleCountryCode];
+  if (!nativeRegion) {
+    NSMutableDictionary *selected = [[NSLocale componentsFromLocaleIdentifier:chosen[@"Language"]] mutableCopy];
+    selected[NSLocaleCountryCode] = country;
     locale = [NSLocale localeIdentifierFromComponents:selected];
   }
   NSString *zone = [chosen[@"TimeZone"] isEqualToString:@"native"] ? native[@"TimeZone"] : chosen[@"TimeZone"];

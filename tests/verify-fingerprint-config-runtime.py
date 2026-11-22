@@ -244,6 +244,21 @@ int main(void) { @autoreleasepool {
   }
   chosen[@"Receipts"] = @{@"InterceptEnabled":@NO}; fixture = [chosen copy];
   assert(!SHDWFingerprintInterceptsReceipts());
+  for (NSString *region in [SHDWFingerprintConfiguration supportedLocalizationRegions]) {
+    chosen[@"Localization"] = @{@"Region":region,@"Language":@"zh-Hant-TW",@"TimeZone":@"native"};
+    fixture = [chosen copy];
+    assert([SHDWFingerprintCountryCodeOverride() isEqual:region]);
+    SHDWFingerprintCoordinate actual = SHDWFingerprintCountryCenter();
+    SHDWFingerprintCoordinate expected = SHDWFingerprintCountryCenterForCode(region);
+    assert(actual.latitude == expected.latitude && actual.longitude == expected.longitude);
+  }
+  for (NSString *language in @[@"native", @"en-US", @"zh-Hant-TW"]) {
+    chosen[@"Localization"] = @{@"Region":@"native",@"Language":language,@"TimeZone":@"native"};
+    fixture = [chosen copy];
+    assert(!SHDWFingerprintCountryCodeOverride());
+  }
+  [chosen removeObjectForKey:@"Localization"]; fixture = [chosen copy];
+  assert(!SHDWFingerprintCountryCodeOverride());
   NSArray *countries = @[@"FR",@"GB",@"US",@"CN",@""];
   const double latitude[] = {46.227638,55.378051,37.09024,37.09024,37.09024};
   const double longitude[] = {2.213749,-3.435973,-95.712891,-95.712891,-95.712891};

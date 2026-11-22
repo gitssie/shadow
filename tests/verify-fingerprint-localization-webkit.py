@@ -166,16 +166,12 @@ static void ParentTests(void) {
     xpc_object_t foreignEvent = Event(); xpc_dictionary_set_string(foreignEvent, "client-bundle-identifier", "other.app");
     Check(!SHDWLocalizationSnapshot(ReceivedMessage, foreignEvent), "payload not bound to exact owner");
     SetBootstrap(network, original);
-#if SHADOW_CURL_IMPERSONATE
     xpc_object_t networkEvent = Event();
     xpc_dictionary_set_string(networkEvent, "service-name", "com.apple.WebKit.Networking");
     NSDictionary *networkLocale = SHDWLocalizationNetworkingSnapshot(ReceivedMessage, networkEvent);
     Check([networkLocale[@"LocaleIdentifier"] isEqual:Resolved[@"LocaleIdentifier"]] &&
           [networkLocale[@"Languages"] isEqual:Resolved[@"Languages"]], "Networking lost selected localization");
     Check(!SHDWLocalizationSnapshot(ReceivedMessage, networkEvent), "WebContent receiver accepted Networking event");
-#else
-    Check(ReceivedMessage == original, "disabled build modified Networking launch");
-#endif
     Internal = YES; SetBootstrap(web, original); Internal = NO; Check(SHDWLocalizationSnapshot(ReceivedMessage, Event()) != nil, "internal launch lost configured payload");
     SetBootstrap(nil, original); Check(ReceivedMessage == original, "nil connection modified");
     Resolved = @{@"OverridesSystem":@NO}; SetBootstrap(web, original); Check([SHDWLocalizationSnapshot(ReceivedMessage, Event())[@"TimeZone"] isEqual:Custom()[@"TimeZone"]], "installed parent snapshot changed");
@@ -233,7 +229,7 @@ static void ChildTests(NSString *mode) {
     }
     CurrentBootstrap = SHDWLocalizationBootstrapMessage(Message(), Custom(), @"local.sdkprobe.app");
     ExpectedConnection = FixtureConnection("com.apple.WebKit.WebContent"); ExpectedEvent = Event();
-    ExpectCustom = [mode isEqual:@"valid"] || [mode isEqual:@"reentrant"];
+    ExpectCustom = [mode isEqual:@"valid"] || [mode isEqual:@"reentrant"] || [mode isEqual:@"failed-timezone"];
     if ([mode isEqual:@"nil"]) CurrentBootstrap = nil;
     else if ([mode isEqual:@"nil-event"]) ExpectedEvent = nil;
     else if ([mode isEqual:@"missing-payload"]) CurrentBootstrap = Message();
@@ -259,12 +255,15 @@ static void ChildTests(NSString *mode) {
     Check(ReentrantCalls == ([mode isEqual:@"reentrant"] ? 1u : 0u), "unrelated event did not reenter configuration safely");
     ReentrantHandler = nil;
     FailEnvironment = NO; FailTimeZone = NO;
-    CurrentBootstrap = SHDWLocalizationBootstrapMessage(Message(), Custom(), @"local.sdkprobe.app");
+    NSDictionary *retryConfiguration = [mode isEqual:@"failed-environment"] ?
+        @{@"OverridesSystem":@YES, @"LocaleIdentifier":@"fr_FR", @"Languages":@[@"fr-FR"], @"TimeZone":@"Europe/Paris"} : Custom();
+    CurrentBootstrap = SHDWLocalizationBootstrapMessage(Message(), retryConfiguration, @"local.sdkprobe.app");
     ExpectedEvent = Event(); ExpectCustom = YES;
     errno = ERANGE; primary(ExpectedEvent);
     Check(errno == ENOTTY, "original event handler errno result changed");
     Check(NativeCalls == 2 && CopyCalls == ([mode isEqual:@"reentrant"] ? 3u : 2u), "valid retry not delivered");
     Check(EnvironmentCalls == ([mode isEqual:@"failed-environment"] ? 2u : 1u), "environment application did not retry exactly until success");
+    Check(TimeZoneCalls == 1, "timezone installation retried after a terminal attempt");
     NSDictionary *arguments = [defaults volatileDomainForName:NSArgumentDomain];
     Check([arguments[@"AppleLocale"] isEqual:@"en_US"] && [arguments[@"AppleLanguages"] isEqual:@[@"en-US", @"fr-FR"]] && [arguments[@"FixtureValue"] isEqual:@"keep"], "retry environment differs from payload");
     NSUInteger copies = CopyCalls, applications = EnvironmentCalls, zones = TimeZoneCalls;
@@ -403,7 +402,8 @@ with tempfile.TemporaryDirectory(prefix="shadow-webcontent-bootstrap-") as direc
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-framework", "Foundation", f"-DSHADOW_CURL_IMPERSONATE={curl_enabled}",
                         "-I", str(ROOT / "src"), "-I", str(ROOT / "src/Shadow.framework/Headers"),
                         "-I", str(ROOT / "src/Localization"), str(source), str(ROOT / "src/Localization/Environment.m"),
-                        str(ROOT / "src/Localization/Bootstrap.m"), str(ROOT / "src/Transport/Bootstrap.m"),
+                        str(ROOT / "src/Localization/Bootstrap.m"),
+                        *([str(ROOT / "src/Transport/Bootstrap.m")] if curl_enabled else []),
                         str(ROOT / "src/WebUserAgent/Bootstrap.m"), str(ROOT / "src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(binary)], check=True)
         modes = ["parent", "ua-parent", "ua-independent", "ua-independent-locale", "ua-valid", "ua-owner-conflict", "ua-wrong-owner", "ua-wrong-service", "ua-native", "rejected-hook", "partial-hook", "valid", "reentrant", "nil", "nil-event", "missing-payload", "wrong-payload", "wrong-version-type", "invalid-version", "mismatched", "unsupported", "native", "failed-environment", "failed-timezone"]
         if curl_enabled:

@@ -580,14 +580,14 @@ int main(int argc, const char **argv) { @autoreleasepool {
     NSDictionary *legacyReadback = [store configurationForApplication:@"config.legacy"];
     assert(!legacyReadback[@"WebKit"]);
     assert([legacyReadback[@"System"] isEqual:restored[@"System"]]);
-    assert([legacyReadback[@"Localization"] isEqual:restored[@"Localization"]]);
+    assert([legacyReadback[@"Localization"] isEqual:[SHDWFingerprintConfiguration localizationForRegion:@"US"]]);
     assert([legacyReadback[@"Network"] isEqual:restored[@"Network"]]);
     assert([[defaults dictionaryForKey:@"config.legacy"] isEqual:storedApp]);
     assert([store setConfiguration:restored forApplication:@"config.legacy" error:&error]);
     NSDictionary *readback = [store configurationForApplication:@"config.legacy"];
     assert(!readback[@"WebKit"]);
     assert([readback[@"System"] isEqual:restored[@"System"]]);
-    assert([readback[@"Localization"] isEqual:restored[@"Localization"]]);
+    assert([readback[@"Localization"] isEqual:[SHDWFingerprintConfiguration localizationForRegion:@"US"]]);
     assert([readback[@"Network"] isEqual:restored[@"Network"]]);
   }
   NSMutableDictionary *transportConfiguration = [chosen mutableCopy];

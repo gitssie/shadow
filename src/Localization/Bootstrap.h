@@ -2,6 +2,7 @@
 #include <xpc/xpc.h>
 
 BOOL SHDWLocalizationIsWebContentService(const char *service);
+BOOL SHDWLocalizationIsNetworkingService(const char *service);
 BOOL SHDWLocalizationBootstrapHasPayload(xpc_object_t bootstrap);
 
 // Returns the original message when there is no valid explicit override.

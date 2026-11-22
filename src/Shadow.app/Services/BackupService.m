@@ -8,6 +8,9 @@
 static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
     return [NSError errorWithDomain:@"me.jjolano.shadow.backup" code:code userInfo:@{NSLocalizedDescriptionKey:SHDWLocalizedText(message), @"stateMayBePartial":@(partial)}];
 }
+static BOOL ValidCurrentIDFV(id value) {
+    return [value isKindOfClass:NSString.class] && (![value length] || [[NSUUID alloc] initWithUUIDString:value] != nil);
+}
 @interface SHDWBackupService ()
 - (void)queryCatalog:(NSDictionary *)query completion:(void (^)(NSDictionary * _Nullable page, NSError * _Nullable error))completion;
 @property(atomic, readwrite) BOOL running;
@@ -45,6 +48,16 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
         completion(result, error);
     }];
 }
+- (void)loadCatalogWithIdentity:(void (^)(NSDictionary *, NSError *))completion {
+    [self performAction:@"catalog" request:@{@"includeCurrentIDFV":@YES} progress:nil completion:^(id result, NSError *error) {
+        if (result && (![result isKindOfClass:NSDictionary.class] || ![result[@"items"] isKindOfClass:NSArray.class] ||
+                       !ValidCurrentIDFV(result[@"currentIDFV"]))) {
+            error = BackupError(6, @"The backup helper returned an invalid result.", NO);
+            result = nil;
+        }
+        completion(result, error);
+    }];
+}
 - (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending
                   completion:(void (^)(NSDictionary *, NSError *))completion {
     NSMutableDictionary *query = [SHDWAppStateCatalogQuery(search, nil, offset, SHDWAppStateCatalogPageSize, refresh) mutableCopy];
@@ -56,6 +69,11 @@ static NSError *BackupError(NSInteger code, NSString *message, BOOL partial) {
         BOOL valid = [result isKindOfClass:NSDictionary.class] && [result[@"items"] isKindOfClass:NSArray.class] &&
             [result[@"currentSnapshot"] isKindOfClass:NSDictionary.class] && [result[@"restorePending"] isKindOfClass:NSNumber.class] &&
             [result[@"total"] isKindOfClass:NSNumber.class] && [result[@"nextOffset"] isKindOfClass:NSNumber.class] && [result[@"hasMore"] isKindOfClass:NSNumber.class];
+        if (valid) {
+            NSDictionary *snapshot = result[@"currentSnapshot"];
+            valid = ValidCurrentIDFV(result[@"currentIDFV"]) &&
+                (!snapshot.count || [snapshot[@"idfv"] isEqual:result[@"currentIDFV"]]);
+        }
         if (result && !valid) { error = BackupError(6, @"The backup helper returned an invalid result.", NO); result = nil; }
         completion(result, error);
     }];

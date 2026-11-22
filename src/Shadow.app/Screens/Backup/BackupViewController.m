@@ -88,7 +88,8 @@ static NSString *ProgressTitle(NSDictionary *event) {
 - (void)refreshRecoveryState {
     self.action.enabled = NO; self.saveCurrent.enabled = NO; [self.action setWorking:YES];
     __weak typeof(self) weakSelf = self;
-    [self.service loadCatalog:^(NSArray *catalog, NSError *error) {
+    [self.service loadCatalogWithIdentity:^(NSDictionary *result, NSError *error) {
+        NSArray *catalog = result[@"items"];
         typeof(self) self = weakSelf; if (!self) return;
         [self.action setWorking:NO];
         if (error) return;
@@ -96,7 +97,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
         for (NSDictionary *item in catalog) if ([CanonicalIDFV(item[@"idfv"]) isEqual:CanonicalIDFV(self.snapshot[@"idfv"])]) { updated = item; break; }
         if (!updated) return;
         self.snapshot = updated;
-        NSString *current = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.application.bundleIdentifier][@"VendorIdentifier"]);
+        NSString *current = CanonicalIDFV(result[@"currentIDFV"]);
         self.sameIDFV = [current isEqual:CanonicalIDFV(updated[@"idfv"])];
         self.requiresRecovery = self.requiresRecovery || [updated[@"restorePending"] boolValue];
         self.saveRow.hidden = self.sameIDFV || self.requiresRecovery;
@@ -274,7 +275,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
 - (void)showSelection {
     ++self.loadGeneration; self.loading = NO; self.loadingMore = NO; self.queryPending = NO; self.refreshCatalog = YES;
     if (self.selected) [NSUserDefaults.standardUserDefaults setObject:self.selected.bundleIdentifier forKey:SelectedApplicationKey];
-    self.liveIDFV = self.selected ? CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]) : nil;
+    self.liveIDFV = nil;
     [self.selector showApplication:self.selected fingerprint:self.selected ? [[SHDWFingerprintStore sharedStore] deviceFingerprintForApplication:self.selected.bundleIdentifier] : nil]; [self.selector showApplications:self.applications selected:self.selected]; self.selector.hidden = !self.applications.count;
     self.service = self.selected ? [[SHDWBackupService alloc] initWithBundleIdentifier:self.selected.bundleIdentifier] : nil; self.catalog = @[]; self.currentBackup = nil; self.restorePending = NO; self.hasMore = NO; [self.table reloadData]; [self loadCatalog];
 }
@@ -319,7 +320,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
         if (page) {
             self.catalog = append ? [self.catalog arrayByAddingObjectsFromArray:page[@"items"]] : page[@"items"];
             self.currentBackup = [page[@"currentSnapshot"] count] ? page[@"currentSnapshot"] : nil;
-            self.liveIDFV = CanonicalIDFV(self.currentBackup[@"idfv"]) ?: CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]);
+            self.liveIDFV = CanonicalIDFV(page[@"currentIDFV"]);
             self.restorePending = [page[@"restorePending"] boolValue];
             self.nextOffset = [page[@"nextOffset"] unsignedIntegerValue];
             self.hasMore = [page[@"hasMore"] boolValue];
@@ -418,8 +419,7 @@ static NSString *ProgressTitle(NSDictionary *event) {
     [self presentViewController:controller animated:YES completion:nil];
 }
 - (void)showRestore:(NSDictionary *)snapshot {
-    NSString *currentIDFV = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]);
-    BOOL sameIDFV = [currentIDFV isEqual:CanonicalIDFV(snapshot[@"idfv"])];
+    BOOL sameIDFV = [self.liveIDFV isEqual:CanonicalIDFV(snapshot[@"idfv"])];
     if (!SHDWBackupCanRestore(snapshot, sameIDFV)) { self.status.hidden = NO; self.status.text = SHDWText(!SHDWBackupPhoneOwned(snapshot) ? @"Controlled by RV" : @"This backup belongs to the current IDFV and cannot be restored."); self.status.textColor = UIColor.secondaryLabelColor; return; }
     SHDWRestoreViewController *controller = [SHDWRestoreViewController new]; controller.application = self.selected; controller.snapshot = snapshot; controller.sameIDFV = sameIDFV; controller.requiresCurrentBackup = self.currentBackup != nil; controller.service = self.service; __weak typeof(self) weakSelf = self; controller.completion = ^{ [weakSelf reloadApplications]; }; [self presentViewController:controller animated:YES completion:nil]; }
 - (void)perform:(NSString *)action request:(NSDictionary *)request {
@@ -437,7 +437,6 @@ static NSString *ProgressTitle(NSDictionary *event) {
         NSString *message = error ? error.localizedDescription : SHDWText([action isEqual:@"recheck"] ? @"Backup verified" : ([action isEqual:@"delete"] ? @"Backup deleted" : @"Backup saved"));
         self.status.textColor = UIColor.systemRedColor; self.status.text = error.localizedDescription; self.status.hidden = error == nil;
         UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, message);
-        self.liveIDFV = CanonicalIDFV([[SHDWFingerprintStore sharedStore] profileForBundleIdentifier:self.selected.bundleIdentifier][@"VendorIdentifier"]);
         self.refreshCatalog = YES; [self loadCatalog];
     }];
 }

@@ -10,9 +10,7 @@
 #include <sys/sysctl.h>
 #include <sys/mount.h>
 #import <Shadow/FingerprintVolumeTime.h>
-#import <Shadow/FingerprintAdvertising.h>
 #import "../../../Shadow.framework/Fingerprint/DiagnosticsInternal.h"
-#import <AdSupport/ASIdentifierManager.h>
 #import <objc/message.h>
 
 static char shdw_map_bundle[PATH_MAX], shdw_map_canonical_bundle[PATH_MAX];
@@ -26,7 +24,6 @@ static unsigned shdw_pasteboard_install_state;
 static unsigned shdw_memory_install_state;
 static unsigned shdw_version_install_state;
 static unsigned shdw_volume_time_install_state;
-static unsigned shdw_advertising_install_state;
 
 static BOOL shdw_map_app_caller(const void *caller) {
     if(!shdw_caller_is_external(caller)) return NO;
@@ -158,7 +155,7 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
 %hook MKMapView
 - (instancetype)initWithFrame:(CGRect)frame {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
-    BOOL candidate = frame.size.width < 0 && frame.size.height < 0 && shdw_map_app_caller(caller);
+    BOOL candidate = shdw_map_app_caller(caller);
     MKMapView *map = %orig(frame);
     if(map && candidate)
         objc_setAssociatedObject(map, &shdw_map_candidate_key, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -167,7 +164,8 @@ static void shdw_map_explicit(MKMapView *map, const void *caller) {
 - (CLLocationCoordinate2D)centerCoordinate {
     const void *caller = __builtin_extract_return_addr(__builtin_return_address(0));
     if(objc_getAssociatedObject(self, &shdw_map_candidate_key) &&
-       !self.superview && !self.window && shdw_map_app_caller(caller)) {
+       !self.superview && !self.window && shdw_map_app_caller(caller) &&
+       SHDWFingerprintCountryCodeOverride()) {
         SHDWFingerprintCoordinate value = SHDWFingerprintCountryCenter();
         CLLocationCoordinate2D center = {value.latitude, value.longitude};
         return center;
@@ -306,37 +304,6 @@ static NSDate *shdw_home_volume_creation_date(NSURL *url, const void *caller) {
     return nil;
 }
 
-%group shadowhook_fingerprint_advertising
-%hook ASIdentifierManager
-- (NSUUID *)advertisingIdentifier {
-    const void *caller=__builtin_extract_return_addr(__builtin_return_address(0));
-    NSUUID *native=%orig;
-    if (!shdw_fingerprint_enabled || !shdw_fingerprint_resource_caller(caller)) return native;
-    SHADOW_INTERNAL_SCOPE {
-        BOOL authorized;
-        if (@available(iOS 14.0, *)) {
-            static Class tracking;
-            static dispatch_once_t trackingOnce;
-            dispatch_once(&trackingOnce, ^{
-                dlopen("/System/Library/Frameworks/AppTrackingTransparency.framework/AppTrackingTransparency", RTLD_LAZY | RTLD_LOCAL);
-                tracking=NSClassFromString(@"ATTrackingManager");
-            });
-            SEL status=NSSelectorFromString(@"trackingAuthorizationStatus");
-            authorized=tracking && [tracking respondsToSelector:status] &&
-                ((NSUInteger (*)(id,SEL))objc_msgSend)(tracking,status)==3;
-        } else authorized=((BOOL (*)(id,SEL))objc_msgSend)(ASIdentifierManager.sharedManager,NSSelectorFromString(@"isAdvertisingTrackingEnabled"));
-        if (!authorized) return native;
-        NSDictionary *config=SHDWFingerprintConfig(shdw_fingerprint_bundle_id);
-        NSString *mode=config[@"Advertising"][@"Mode"] ?: @"zero";
-        NSString *value=SHDWFingerprintAdvertisingValue(mode,
-            SHDWFingerprintData(shdw_fingerprint_bundle_id)[@"AdvertisingIdentifier"],native.UUIDString,authorized);
-        return value ? [[NSUUID alloc] initWithUUIDString:value] : native;
-    }
-    return native;
-}
-%end
-%end
-
 %group shadowhook_fingerprint_volume_time
 %hook NSURL
 - (BOOL)getResourceValue:(id *)value forKey:(NSURLResourceKey)key error:(NSError **)error __attribute__((annotate("hookkit:allow_inherited"))) {
@@ -405,6 +372,7 @@ void shdw_universal_fingerprint_prepare(SHDWHookSession *hooks) {
     if(!hooks) return;
     shdw_universal_fingerprint_identity_prepare(hooks);
     if(!shdw_fingerprint_enabled) return;
+    shdw_universal_fingerprint_advertising(hooks, shdw_fingerprint_bundle_id);
     shdw_universal_fingerprint_receipts_prepare(hooks);
     shdw_universal_fingerprint_network_prepare(hooks);
     shdw_universal_fingerprint_webkit_prepare(hooks);
@@ -412,11 +380,6 @@ void shdw_universal_fingerprint_prepare(SHDWHookSession *hooks) {
     shdw_universal_fingerprint_environment_prepare(hooks);
     SHDWHookSession *previous = SHDWHookSessionSetCurrent(hooks);
     @try {
-        unsigned advertisingExpected=0;
-        if (__atomic_compare_exchange_n(&shdw_advertising_install_state,&advertisingExpected,1,NO,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
-            %init(shadowhook_fingerprint_advertising);
-            __atomic_store_n(&shdw_advertising_install_state,2,__ATOMIC_RELEASE);
-        }
         unsigned expected = 0;
         if(__atomic_compare_exchange_n(&shdw_volume_time_install_state, &expected, 1, NO,
            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {

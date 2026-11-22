@@ -233,6 +233,16 @@ static BOOL StateFailure(NSError **error, NSException *exception) {
     @try { StateParent(); Require([self assertStopped:target error:error], @"The application must remain stopped before its fingerprint is restored"); mutated = YES; StateWorkerValue(target[@"authority"], @"state-fingerprint-restore", @{@"fingerprint":fingerprint}); return YES; } @catch (NSException *exception) { return StateFailure(error, exception); }
 }
 @end
+static NSString *StateCatalogCurrentIDFV(NativeStateBackend *backend, NSDictionary *target, NSError **error) {
+    NSString *value = [backend currentVendorIdentifierForTarget:target error:error];
+    if (!value.length) return value;
+    NSString *canonical = [[NSUUID alloc] initWithUUIDString:value].UUIDString;
+    if (!canonical && error)
+        *error = [NSError errorWithDomain:SHDWAppStateErrorDomain code:1
+                                userInfo:@{NSLocalizedDescriptionKey:@"Invalid current IDFV"}];
+    return canonical;
+}
+
 static NSArray *StateConciseCatalog(NSArray *catalog) {
     NSMutableArray *result = [NSMutableArray new];
     for (NSDictionary *manifest in catalog) {
@@ -346,10 +356,11 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
     }
     NSDictionary *request = @{};
     if (argc == 5) { NSString *encoded = [NSString stringWithUTF8String:argv[4]]; Require(encoded.length <= 256 * 1024, @"Application state action request is too large"); id value = StateDecode([[NSData alloc] initWithBase64EncodedString:encoded options:0]); Require([value isKindOfClass:NSDictionary.class], @"Invalid application state action request"); request = value; }
-    NSArray *allowed = [action isEqual:@"queryCatalog"] ? SHDWAppStateCatalogQueryKeys() : [action isEqual:@"catalog"] ? @[] : [action isEqual:@"backup"] ? @[@"metadata"] : ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"]) ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : [action isEqual:@"setDeleteLocked"] ? @[@"idfv", @"deleteLocked"] : @[@"idfv"];
+    NSArray *allowed = [action isEqual:@"queryCatalog"] ? SHDWAppStateCatalogQueryKeys() : [action isEqual:@"catalog"] ? @[@"includeCurrentIDFV"] : [action isEqual:@"backup"] ? @[@"metadata"] : ([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"]) ? @[@"idfv"] : [action isEqual:@"restore"] ? @[@"idfv", @"saveCurrent"] : [action isEqual:@"edit"] ? @[@"idfv", @"metadata"] : [action isEqual:@"setDeleteLocked"] ? @[@"idfv", @"deleteLocked"] : @[@"idfv"];
     for (id key in request) Require([allowed containsObject:key], @"Unknown application state action option");
     if (![action isEqual:@"catalog"] && ![action isEqual:@"queryCatalog"] && ![action isEqual:@"backup"]) Require([request[@"idfv"] isKindOfClass:NSString.class], @"A saved fingerprint identifier is required");
     if ([action isEqual:@"setDeleteLocked"]) Require(request[@"deleteLocked"] && CFGetTypeID((__bridge CFTypeRef)request[@"deleteLocked"]) == CFBooleanGetTypeID(), @"Invalid deletion lock option");
+    if (request[@"includeCurrentIDFV"]) Require(CFGetTypeID((__bridge CFTypeRef)request[@"includeCurrentIDFV"]) == CFBooleanGetTypeID(), @"Invalid catalog identity option");
     if (request[@"saveCurrent"]) Require([request[@"saveCurrent"] isKindOfClass:NSNumber.class] && [@[@NO, @YES] containsObject:request[@"saveCurrent"]], @"Invalid save-current option");
     if (request[@"metadata"]) { Require([request[@"metadata"] isKindOfClass:NSDictionary.class], @"Invalid backup metadata"); for (id key in request[@"metadata"]) Require([@[@"title", @"note"] containsObject:key] && [request[@"metadata"][key] isKindOfClass:NSString.class], @"Invalid backup metadata field"); }
     stateFailureCode=@"permission_denied";Require(geteuid() == 0, @"Cannot enter the private backup storage context");
@@ -359,14 +370,18 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
         Require([Canonical(StateStorage.stringByDeletingLastPathComponent) isEqual:StateStorage.stringByDeletingLastPathComponent], @"Backup storage parent is not canonical"); NativeStateBackend *backend = [NativeStateBackend new]; NSError *error = nil;
         if ([action isEqual:@"queryCatalog"]) {
             if (![SHDWAppStateStore validateCatalogQuery:request error:&error]) return StateErrorTerminal(error);
+            NSDictionary *target = [backend resolveBundle:identifier error:&error];
+            if (!target) return StateErrorTerminal(error);
+            NSString *current = StateCatalogCurrentIDFV(backend, target, &error);
+            if (!current) return StateErrorTerminal(error);
             struct stat storageInfo;
             BOOL missing = lstat(StateStorage.fileSystemRepresentation, &storageInfo) && errno == ENOENT;
             NSDictionary *result;
-            if (missing) result = @{@"items":@[], @"total":@0, @"nextOffset":@0, @"hasMore":@NO, @"currentSnapshot":@{}, @"restorePending":@NO};
+            if (missing) result = @{@"items":@[], @"total":@0, @"nextOffset":@0, @"hasMore":@NO, @"currentIDFV":current, @"currentSnapshot":@{}, @"restorePending":@NO};
             else {
                 SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend readOnly:YES error:&error];
                 if (!store) return StateErrorTerminal(error);
-                store.currentIdentityProvider = ^NSString *(NSString *bundle) { return StateReadExternalIdentity(bundle); };
+                store.currentIdentityProvider = ^NSString *(NSString *bundle) { (void)bundle; return current; };
                 result = [store queryCatalogBundle:identifier query:request error:&error];
             }
             if (!result) return StateErrorTerminal(error);
@@ -383,7 +398,19 @@ static NSDictionary *StateCommand(int argc, const char *argv[]) {
         SHDWAppStateStore *store = [[SHDWAppStateStore alloc] initWithRoot:StateStorage ownerUID:501 ownerGID:501 backend:backend error:&error]; if(!store)return StateErrorTerminal(error);
         store.progressHandler=StateProgressHandler(^(NSDictionary *frame){StateOutput(frame);});
         id result = nil;
-        if ([action isEqual:@"catalog"]) { NSArray *catalog = [store catalogBundle:identifier error:&error]; if (catalog) result = StateConciseCatalog(catalog); }
+        if ([action isEqual:@"catalog"]) {
+            NSArray *catalog = [store catalogBundle:identifier error:&error];
+            if (catalog) {
+                NSArray *items = StateConciseCatalog(catalog);
+                if ([request[@"includeCurrentIDFV"] boolValue]) {
+                    NSString *current = StateCatalogCurrentIDFV(backend, target, &error);
+                    if (!current) return StateErrorTerminal(error);
+                    result = @{@"items":items, @"currentIDFV":current};
+                } else {
+                    result = items;
+                }
+            }
+        }
         else if ([action isEqual:@"backup"]) { NSDictionary *manifest = [store backupBundle:identifier metadata:request[@"metadata"] error:&error]; if (manifest) result = StateConciseCatalog(@[manifest]).firstObject; }
         else if (([action isEqual:@"backupAndReset"] || [action isEqual:@"discardAndReset"])) {
             NSDictionary *(^reset)(NSDictionary *,NSError **)=^NSDictionary *(NSDictionary *resolved,NSError **resetError){

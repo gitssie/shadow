@@ -35,12 +35,12 @@ static void SetBootstrap(xpc_connection_t connection, xpc_object_t bootstrap) {
                     localizationSnapshot, ownerIdentifier);
                 message = SHDWWebUserAgentBootstrapMessage(message, userAgentVersion, ownerIdentifier);
             }
-#if SHADOW_CURL_IMPERSONATE
-            if (SHDWTransportIsNetworkingService(xpc_connection_get_name(connection))) {
+            if (SHDWLocalizationIsNetworkingService(xpc_connection_get_name(connection))) {
                 message = SHDWLocalizationBootstrapMessage(message, localizationSnapshot, ownerIdentifier);
+#if SHADOW_CURL_IMPERSONATE
                 message = SHDWTransportBootstrapMessage(message, transportProfile, ownerIdentifier);
-            }
 #endif
+            }
         }
     }
     errno = saved;

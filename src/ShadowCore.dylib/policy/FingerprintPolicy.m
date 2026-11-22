@@ -157,7 +157,16 @@ BOOL SHDWFingerprintBootQuery(const char *name, void *value, size_t *length, int
 }
 
 SHDWFingerprintCoordinate SHDWFingerprintCountryCenter(void) {
-    return SHDWFingerprintCountryCenterForCode([NSLocale.currentLocale objectForKey:NSLocaleCountryCode]);
+    NSDictionary *resolved = [SHDWFingerprintConfiguration
+        resolvedLocalizationForConfiguration:SHDWFingerprintCurrentConfiguration()];
+    return SHDWFingerprintCountryCenterForCode(resolved[@"CountryCode"]);
+}
+
+NSString *SHDWFingerprintCountryCodeOverride(void) {
+    NSDictionary *configuration = SHDWFingerprintCurrentConfiguration();
+    NSString *region = configuration[@"Localization"][@"Region"];
+    if(!region || [region isEqualToString:@"native"]) return nil;
+    return [SHDWFingerprintConfiguration resolvedLocalizationForConfiguration:configuration][@"CountryCode"];
 }
 
 SHDWFingerprintCoordinate SHDWFingerprintCountryCenterForCode(NSString *country) {

@@ -152,8 +152,91 @@ with tempfile.TemporaryDirectory(prefix="shadow-networking-session-") as tempora
     test, binary = Path(temporary) / "test.m", Path(temporary) / "test"
     test.write_text(source)
     subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
-                    "-Wno-pointer-bool-conversion", "-fsanitize=address,undefined", "-framework", "Foundation",
+                    "-Wno-pointer-bool-conversion", "-DSHADOW_CURL_IMPERSONATE=1", "-fsanitize=address,undefined", "-framework", "Foundation",
                     "-I", str(root / "src/Transport"), str(test), str(root / "src/Transport/Bootstrap.m"), str(root / "src/Localization/Bootstrap.m"),
                     "-o", str(binary)], check=True)
     for profile in ("safari172_ios", "safari180_ios", "safari184_ios", "safari187_ios", "native"):
         subprocess.run([str(binary), profile], check=True)
+
+
+# Compile the localization receiver without any transport sources or doubles.
+OFF_HARNESS = r'''
+#import <Foundation/Foundation.h>
+#import <xpc/xpc.h>
+#import "Bootstrap.h"
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
+static unsigned applications, hookAttempts, deliveries;
+static BOOL failEnvironment = YES;
+static NSDictionary *applied;
+static BOOL SHDWLocalizationApplyEnvironment(NSDictionary *values) {
+    applications++; applied = [values copy]; errno = ENOMEM; return !failEnvironment;
+}
+static xpc_object_t launchBootstrap;
+static xpc_handler_t installedHandler;
+static xpc_object_t FixtureBootstrap(void) { return launchBootstrap; }
+static void OriginalSetter(xpc_connection_t connection, xpc_handler_t handler) {
+    assert(!connection && errno == EDOM); installedHandler = [handler copy]; errno = EINTR;
+}
+static BOOL SHDWLocalizationHookFunction(const char *name, void *target, void *replacement, void **original) {
+    assert(!strcmp(name, "xpc_connection_set_event_handler") && target == (void *)OriginalSetter && replacement);
+    hookAttempts++; *original = target; return YES;
+}
+static void *FixtureDlsym(void *handle, const char *name) {
+    (void)handle; assert(!strcmp(name, "xpc_connection_set_event_handler")); return (void *)OriginalSetter;
+}
+@interface FixtureBundle : NSObject
+@property(nonatomic, copy) NSString *bundleIdentifier;
++ (instancetype)mainBundle;
+@end
+@implementation FixtureBundle
++ (instancetype)mainBundle { static id bundle; if(!bundle) bundle = [self new]; return bundle; }
+@end
+#define xpc_copy_bootstrap FixtureBootstrap
+#define NSBundle FixtureBundle
+#define dlsym FixtureDlsym
+__NETWORKING__
+#undef dlsym
+#undef NSBundle
+#undef xpc_copy_bootstrap
+static xpc_object_t Event(const char *owner) {
+    xpc_object_t event = xpc_dictionary_create(NULL, NULL, 0);
+    xpc_dictionary_set_string(event, "message-name", "bootstrap");
+    xpc_dictionary_set_string(event, "service-name", "com.apple.WebKit.Networking");
+    xpc_dictionary_set_string(event, "client-bundle-identifier", owner); return event;
+}
+static void Deliver(xpc_object_t event) {
+    errno = ERANGE; installedHandler(event); assert(errno == ENOTTY);
+}
+int main(void) { @autoreleasepool {
+    [FixtureBundle mainBundle].bundleIdentifier = @"ordinary.app";
+    FixtureInstall(); assert(!hookAttempts);
+    [FixtureBundle mainBundle].bundleIdentifier = @"com.apple.WebKit.Networking";
+    errno = EDOM; FixtureInstall(); assert(hookAttempts == 1 && errno == EDOM);
+    NSDictionary *locale = @{@"LocaleIdentifier":@"fr_FR", @"Languages":@[@"fr-FR"], @"TimeZone":@"Europe/Paris", @"OverridesSystem":@YES};
+    launchBootstrap = SHDWLocalizationBootstrapMessage(xpc_dictionary_create(NULL,NULL,0), locale, @"test.Owner");
+    errno = EDOM;
+    SetHandler(nil, ^(xpc_object_t event) { assert(event && errno == ERANGE); deliveries++; errno = ENOTTY; });
+    assert(errno == EINTR);
+    Deliver(Event("wrong.Owner")); assert(!applications);
+    xpc_object_t valid = Event("test.Owner"); Deliver(valid); assert(applications == 1);
+    failEnvironment = NO; Deliver(valid); assert(applications == 2 && [applied[@"Languages"] isEqual:@[@"fr-FR"]]);
+    Deliver(valid); assert(applications == 2);
+    launchBootstrap = SHDWLocalizationBootstrapMessage(xpc_dictionary_create(NULL,NULL,0), locale, @"other.Owner");
+    Deliver(Event("other.Owner")); assert(applications == 2 && deliveries == 5);
+    errno = EDOM; SetHandler(nil,nil); assert(!installedHandler && errno == EINTR);
+    puts("networking localization: transport-free compilation, bootstrap constructor, owner scope, retry, once-only apply and errno passed");
+} return 0; }
+'''
+networking = implementation("src/ShadowWebKit.dylib/Networking.m").replace(
+    'extern xpc_object_t xpc_copy_bootstrap(void) __attribute__((weak_import, ns_returns_retained));', '').replace(
+    '__attribute__((constructor)) static void Install(void)', 'static void FixtureInstall(void)')
+with tempfile.TemporaryDirectory(prefix="shadow-networking-localization-") as temporary:
+    test, binary = Path(temporary) / "test.m", Path(temporary) / "test"
+    test.write_text(OFF_HARNESS.replace("__NETWORKING__", networking))
+    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+                    "-Wno-pointer-bool-conversion", "-DSHADOW_CURL_IMPERSONATE=0", "-fsanitize=address,undefined",
+                    "-framework", "Foundation", "-I", str(root / "src/Localization"), str(test),
+                    str(root / "src/Localization/Bootstrap.m"), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)

@@ -1723,6 +1723,7 @@ static void* replaced_dlsym(void* handle, const char* symbol) {
         if(!extra) extra = shdw_sym_policy_lookup_network(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_system_version(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_localization(symbol);
+        if(!extra) extra = shdw_sym_policy_lookup_resources(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_web_localization(symbol);
         if(!extra) extra = shdw_sym_policy_lookup_fingerprint(symbol);
 
@@ -1931,6 +1932,7 @@ static void* shdw_cfbundle_symbol_replacement(CFStringRef symbolName) {
             if(!extra) extra = shdw_sym_policy_lookup_network(name);
             if(!extra) extra = shdw_sym_policy_lookup_system_version(name);
             if(!extra) extra = shdw_sym_policy_lookup_localization(name);
+            if(!extra) extra = shdw_sym_policy_lookup_resources(name);
             if(!extra) extra = shdw_sym_policy_lookup_web_localization(name);
             if(!extra) extra = shdw_sym_policy_lookup_fingerprint(name);
 

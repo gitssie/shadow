@@ -4,6 +4,7 @@
 #import <Security/Security.h>
 #import <LocalAuthentication/LocalAuthentication.h>
 #import "jb-identifiers.h"
+#import "../../policy/FingerprintPreferences.h"
 
 %group shadowhook_UIApplication
 %hook UIApplication
@@ -145,12 +146,18 @@ BOOL shdw_nsuserdefaults_suite_restricted(NSString* suitename) {
 }
 
 - (NSDictionary *)persistentDomainForName:(NSString *)domainName __attribute__((annotate("hookkit:allow_inherited"))) {
-    if(isCallerExternal() && shdw_nsuserdefaults_suite_restricted(domainName)) {
+    int saved = errno;
+    BOOL external = isCallerExternal();
+    if(external && shdw_nsuserdefaults_suite_restricted(domainName)) {
         shdw_detector_detected("nsuserdefaults");
+        errno = saved;
         return nil;
     }
-
-    return %orig;
+    NSDictionary *overrides = external ? SHDWFingerprintPreferenceOverrides((__bridge CFStringRef)domainName,
+        kCFPreferencesCurrentUser, kCFPreferencesAnyHost) : nil;
+    errno = saved;
+    NSDictionary *native = %orig;
+    return SHDWFingerprintPreferencesByApplying(native, nil, overrides);
 }
 %end
 %end

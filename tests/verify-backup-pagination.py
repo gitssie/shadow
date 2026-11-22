@@ -30,7 +30,7 @@ enum { UIControlStateNormal, UIAccessibilityAnnouncementNotification };
 static void UIAccessibilityPostNotification(int value, id message) { (void)value; (void)message; }
 static NSString *SHDWText(NSString *value) { return value; }
 static id SHDWAccent(void) { return @"accent"; }
-static NSString *CanonicalIDFV(NSString *value) { return value; }
+static NSString *CanonicalIDFV(NSString *value) { return value.length ? value : nil; }
 static NSString *ProgressTitle(NSDictionary *event) { return event[@"stage"]; }
 typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @interface UIColor : NSObject
@@ -71,14 +71,6 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @end
 @implementation SHDWOperationCoordinator
 + (BOOL)isRunning { return NO; }
-@end
-@interface SHDWFingerprintStore : NSObject
-+ (instancetype)sharedStore;
-- (NSDictionary *)profileForBundleIdentifier:(NSString *)bundle;
-@end
-@implementation SHDWFingerprintStore
-+ (instancetype)sharedStore { return [self new]; }
-- (NSDictionary *)profileForBundleIdentifier:(NSString *)bundle { (void)bundle; return @{@"VendorIdentifier":@"active"}; }
 @end
 @interface Service : NSObject
 @property(copy) void (^pageCompletion)(NSDictionary *, NSError *);
@@ -155,7 +147,7 @@ static void Check(BOOL value, NSString *message) {
     if (!value) { fprintf(stderr,"FAIL: %s\n",message.UTF8String); failures++; }
 }
 static NSDictionary *Page(NSArray *items, NSUInteger next, BOOL more) {
-    return @{@"items":items,@"total":@2,@"nextOffset":@(next),@"hasMore":@(more),@"currentSnapshot":@{@"idfv":@"active"},@"restorePending":@NO};
+    return @{@"items":items,@"total":@2,@"nextOffset":@(next),@"hasMore":@(more),@"currentIDFV":@"active",@"currentSnapshot":@{@"idfv":@"active"},@"restorePending":@NO};
 }
 static Controller *Fixture(void) {
     Controller *c=[Controller new]; c.service=[Service new];
@@ -255,6 +247,17 @@ int main(void) { @autoreleasepool {
     Check([c.emptyIcon.accessibilityLabel isEqual:@"No matching backups"],@"empty search keeps an accessibility description");
     c.searchField.text=@""; [c loadCatalog]; [s finishPage:Page(@[],0,NO) error:nil];
     Check(!c.emptyIcon.hidden && [c.emptyIcon.accessibilityLabel isEqual:@"No backups yet"],@"empty catalog displays the icon");
+    NSMutableDictionary *page = [Page(@[first],1,NO) mutableCopy];
+    page[@"currentIDFV"] = @"unbacked";
+    page[@"currentSnapshot"] = @{};
+    [c loadCatalog]; [s finishPage:page error:nil];
+    Check([c.liveIDFV isEqual:@"unbacked"] && !c.currentSnapshot,@"active identity is independent of a saved backup");
+    page[@"currentIDFV"] = @"restored";
+    [c loadCatalog]; [s finishPage:page error:nil];
+    Check([c.liveIDFV isEqual:@"restored"],@"refresh directly applies the helper identity");
+    page[@"currentIDFV"] = @"";
+    [c loadCatalog]; [s finishPage:page error:nil];
+    Check(!c.liveIDFV,@"absent identity clears prior state");
     if(failures)return 1;
     puts("backup pagination: real scroll callbacks, bounded auto paging, spinner, retry, query recovery and operation messages passed");
 } return 0; }

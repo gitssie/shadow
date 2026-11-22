@@ -10,6 +10,10 @@ BOOL SHDWLocalizationIsWebContentService(const char *service) {
     return service && !strcmp(service, "com.apple.WebKit.WebContent");
 }
 
+BOOL SHDWLocalizationIsNetworkingService(const char *service) {
+    return service && !strcmp(service, "com.apple.WebKit.Networking");
+}
+
 BOOL SHDWLocalizationBootstrapHasPayload(xpc_object_t bootstrap) {
     if (!bootstrap || xpc_get_type(bootstrap) != XPC_TYPE_DICTIONARY) return NO;
     xpc_object_t payload = xpc_dictionary_get_value(bootstrap, payloadKey);

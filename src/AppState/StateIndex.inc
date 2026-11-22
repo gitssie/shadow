@@ -355,22 +355,24 @@
                       exclusive:NO
                         missing:&missing
                           error:error];
-    if (!directory)
-      return missing ? @{
-        @"items" : @[],
-        @"total" : @0,
-        @"nextOffset" : @0,
-        @"hasMore" : @NO,
-        @"currentSnapshot" : @{},
-        @"restorePending" : @NO
-      }
-                     : nil;
-    NSDictionary *pending = [self pending:directory error:error];
-    if (!pending)
+    if (!directory && !missing)
       return nil;
     NSString *current = self.currentIdentityProvider
                             ? UUIDValue(self.currentIdentityProvider(bundleID))
                             : nil;
+    if (missing)
+      return @{
+        @"items" : @[],
+        @"total" : @0,
+        @"nextOffset" : @0,
+        @"hasMore" : @NO,
+        @"currentIDFV" : current ?: @"",
+        @"currentSnapshot" : @{},
+        @"restorePending" : @NO
+      };
+    NSDictionary *pending = [self pending:directory error:error];
+    if (!pending)
+      return nil;
     NSDictionary *page = [index queryBundle:bundleID
                                       query:query
                                 currentIDFV:current
@@ -384,6 +386,7 @@
                                       directory:directory]];
     NSMutableDictionary *result = [page mutableCopy];
     result[@"items"] = items;
+    result[@"currentIDFV"] = current ?: @"";
     NSDictionary *active =
         current ? [index entryForBundle:bundleID idfv:current error:error]
                 : nil;

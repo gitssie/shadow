@@ -17,6 +17,9 @@ BOOL shdw_fingerprint_sysctl_mib_query(const int *mib, u_int count, void *value,
     void *newp, size_t newlen, const void *caller, int *result);
 void shdw_universal_fingerprint(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_localization(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_advertising(SHDWHookSession *hooks, NSString *bundleID);
+void shdw_universal_fingerprint_resources(SHDWHookSession *hooks, NSDictionary *resolved);
+void *shdw_sym_policy_lookup_resources(const char *name);
 void shdw_universal_fingerprint_identity(SHDWHookSession *hooks, NSString *bundleID);
 void shdw_universal_fingerprint_identity_prepare(SHDWHookSession *hooks);
 void shdw_universal_fingerprint_receipts(SHDWHookSession *hooks);

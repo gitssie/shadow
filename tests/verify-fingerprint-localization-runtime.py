@@ -166,6 +166,7 @@ CFBUNDLE_HARNESS = r'''
 #include <string.h>
 static BOOL external = YES, denied, nestedBatch, missingExport;
 static BOOL isCallerExternal(void) { return external; }
+static void *shdw_sym_policy_lookup_resources(const char *name) { (void)name; return NULL; }
 static BOOL shdw_cfbundle_denied(CFBundleRef bundle) { (void)bundle; return denied; }
 static void KnownNative(void) {}
 static void HiddenNative(void) {}

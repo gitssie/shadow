@@ -55,9 +55,10 @@ assert "shdw_sym_policy_lookup_syscall(symbol)" in dyld_source
 assert "shdw_sym_policy_lookup_syscall(name)" in dyld_source
 prefix = r'''
 #import <Foundation/Foundation.h>
+static NSString *configuredRegion = @"FR";
 NSDictionary *SHDWFingerprintConfig(NSString *bundleID) {
     (void)bundleID;
-    return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES}};
+    return @{@"Version":@1,@"System":@{@"Mode":@"profile",@"ProfileID":@"iphone14-5_ios18.7.1_22H31"},@"Network":@{@"RadioTechnologies":@[@"4g",@"5g"]},@"Receipts":@{@"InterceptEnabled":@YES},@"Localization":@{@"Region":configuredRegion,@"Language":@"native",@"TimeZone":@"native"}};
 }
 
 #import <Shadow/FingerprintConfiguration.h>
@@ -583,10 +584,10 @@ int main(void) { @autoreleasepool {
     candidate.superview = [NSObject new]; verify_center(candidate, 51, 9); candidate.superview = nil;
     candidate.window = [NSObject new]; verify_center(candidate, 51, 9); candidate.window = nil;
     verify_center(candidate, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
-    for(NSValue *frame in @[[NSValue valueWithRect:NSMakeRect(0, 0, 100, 100)],
+    for(NSValue *frame in @[[NSValue valueWithRect:NSZeroRect], [NSValue valueWithRect:NSMakeRect(0, 0, 100, 100)],
         [NSValue valueWithRect:NSMakeRect(0, 0, -1, 100)], [NSValue valueWithRect:NSMakeRect(0, 0, 100, -1)]]) {
         MKMapView *normal = [[MKMapView alloc] initWithFrame:NSRectToCGRect(frame.rectValue)];
-        verify_center(normal, 51, 9);
+        verify_center(normal, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
     }
     for(NSString *selector in @[@"setCenterCoordinate:", @"setCenterCoordinate:animated:",
         @"setRegion:", @"setRegion:animated:", @"setCamera:", @"setCamera:animated:",
@@ -604,6 +605,16 @@ int main(void) { @autoreleasepool {
     callerPath = "/System/Library/Frameworks/MapKit.framework/MapKit";
     [candidate setCenterCoordinate:(CLLocationCoordinate2D){1, 2}];
     callerPath = "/Apps/Probe.app/Probe"; verify_center(candidate, SHDWFingerprintCountryCenter().latitude, SHDWFingerprintCountryCenter().longitude);
+    for(NSString *region in @[@"FR", @"GB", @"US"]) {
+        configuredRegion = region;
+        MKMapView *map = [[MKMapView alloc] initWithFrame:CGRectZero];
+        verify_center(map, SHDWFingerprintCountryCenterForCode(region).latitude,
+            SHDWFingerprintCountryCenterForCode(region).longitude);
+    }
+    configuredRegion = @"native";
+    verify_center(candidate, 12, 34);
+    MKMapView *nativeMap = [[MKMapView alloc] initWithFrame:CGRectZero];
+    verify_center(nativeMap, 51, 9);
     verify_radio_cases();
     verify_resource_values();
     verify_sim_attributes();

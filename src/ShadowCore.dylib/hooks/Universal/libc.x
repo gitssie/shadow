@@ -3,6 +3,7 @@
 #import "../../policy/EnvironmentPolicy.h"
 #import "../../policy/PathPolicy.h"
 #import "../../policy/ProcessPolicy.h"
+#import "../../policy/FingerprintPreferences.h"
 
 #import <string.h>
 #import <stdlib.h>
@@ -1869,31 +1870,60 @@ static BOOL shdw_cf_suite_restricted(CFStringRef applicationID) {
 
 static CFPropertyListRef (*original_CFPreferencesCopyAppValue)(CFStringRef key, CFStringRef applicationID);
 static CFPropertyListRef replaced_CFPreferencesCopyAppValue(CFStringRef key, CFStringRef applicationID) {
-    if(isCallerExternal() && shdw_cf_suite_restricted(applicationID)) {
+    int saved = errno;
+    BOOL external = isCallerExternal();
+    if(external && shdw_cf_suite_restricted(applicationID)) {
         shdw_detector_detected("nsuserdefaults");
+        errno = saved;
         return NULL;
     }
+    NSDictionary *overrides = external ? SHDWFingerprintPreferenceOverrides(applicationID,
+        kCFPreferencesCurrentUser, kCFPreferencesAnyHost) : nil;
+    id value = key ? overrides[(__bridge NSString *)key] : nil;
+    errno = saved;
+    if(value) return CFRetain((__bridge CFTypeRef)value);
     return original_CFPreferencesCopyAppValue(key, applicationID);
 }
 
 static CFPropertyListRef (*original_CFPreferencesCopyValue)(CFStringRef key, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName);
 static CFPropertyListRef replaced_CFPreferencesCopyValue(CFStringRef key, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName) {
-    if(isCallerExternal() && shdw_cf_suite_restricted(applicationID)) {
+    int saved = errno;
+    BOOL external = isCallerExternal();
+    if(external && shdw_cf_suite_restricted(applicationID)) {
         shdw_detector_detected("nsuserdefaults");
+        errno = saved;
         return NULL;
     }
+    NSDictionary *overrides = external ? SHDWFingerprintPreferenceOverrides(applicationID, userName, hostName) : nil;
+    id value = key ? overrides[(__bridge NSString *)key] : nil;
+    errno = saved;
+    if(value) return CFRetain((__bridge CFTypeRef)value);
     return original_CFPreferencesCopyValue(key, applicationID, userName, hostName);
 }
 
 static CFDictionaryRef (*original_CFPreferencesCopyMultiple)(CFArrayRef keysToFetch, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName);
 static CFDictionaryRef replaced_CFPreferencesCopyMultiple(CFArrayRef keysToFetch, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName) {
-    if(isCallerExternal() && shdw_cf_suite_restricted(applicationID)) {
+    int saved = errno;
+    BOOL external = isCallerExternal();
+    if(external && shdw_cf_suite_restricted(applicationID)) {
         shdw_detector_detected("nsuserdefaults");
         // Stock empty-dict shape: +1 dictionary the caller owns (Copy
         // rule); never a shared singleton a caller could mutate.
-        return CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
+        CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
+        errno = saved;
+        return empty;
     }
-    return original_CFPreferencesCopyMultiple(keysToFetch, applicationID, userName, hostName);
+    NSDictionary *overrides = external ? SHDWFingerprintPreferenceOverrides(applicationID, userName, hostName) : nil;
+    errno = saved;
+    CFDictionaryRef native = original_CFPreferencesCopyMultiple(keysToFetch, applicationID, userName, hostName);
+    if(!overrides.count) return native;
+    saved = errno;
+    NSDictionary *updated = SHDWFingerprintPreferencesByApplying((__bridge NSDictionary *)native,
+        (__bridge NSArray *)keysToFetch, overrides);
+    CFDictionaryRef result = updated ? (CFDictionaryRef)CFRetain((__bridge CFTypeRef)updated) : NULL;
+    if(native) CFRelease(native);
+    errno = saved;
+    return result;
 }
 
 static Boolean (*original_CFPreferencesAppSynchronize)(CFStringRef applicationID);

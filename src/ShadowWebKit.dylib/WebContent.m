@@ -34,9 +34,15 @@ static void SetHandler(xpc_connection_t connection, xpc_handler_t handler) {
         if (snapshot) {
             static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
             static BOOL applied;
+            static BOOL timeZoneAttempted;
+            static NSDictionary *configuration;
             pthread_mutex_lock(&lock);
-            if (!applied && SHDWLocalizationInstallWebTimeZone(snapshot))
-                applied = SHDWLocalizationApplyEnvironment(snapshot);
+            if (!configuration) configuration = [snapshot copy];
+            if (!timeZoneAttempted) {
+                timeZoneAttempted = YES;
+                SHDWLocalizationInstallWebTimeZone(configuration);
+            }
+            if (!applied) applied = SHDWLocalizationApplyEnvironment(configuration);
             pthread_mutex_unlock(&lock);
         }
         errno = eventErrno;

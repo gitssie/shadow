@@ -21,7 +21,7 @@ assert len(sys.argv) == 5 and sys.argv[1] == "state"
 assert sys.argv[2] == "local.fixture.app"
 request = plistlib.loads(base64.b64decode(sys.argv[4], validate=True))
 assert isinstance(request, dict)
-if request and sys.argv[3] != "queryCatalog":
+if request and sys.argv[3] not in ("queryCatalog", "catalog"):
     assert request["nested"]["unicode"] == "中文 🗃"
     assert request["binary"] == b"\x00\xff\x01\x00"
     assert request["expectedAction"] == sys.argv[3]
@@ -35,19 +35,25 @@ def payload(value):
 result = ({"fixture": scenario, "request": request, "verified": True}
           if sys.argv[3] != "catalog" else
           [{"idfv": "11111111-1111-4111-8111-111111111111", "title": "Fixture", "note": "中文", "date": datetime.datetime(2020, 1, 2)}])
+if sys.argv[3] == "catalog" and scenario == "catalog-identity":
+    assert request == {"includeCurrentIDFV": True}, request
+    result = {"items": result, "currentIDFV": "22222222-2222-4222-8222-222222222222"}
 if sys.argv[3] == "queryCatalog":
     if scenario == "typed-query":
         assert type(request["refresh"]) is bool, request
         assert request["limit"] == 100 and request["offset"] in (0, 100)
         assert request["search"] in ("", "French 中文")
+        assert request["dateOrder"] == ("asc" if request["offset"] else "desc")
     else:
         assert request == {"search": "missing", "offset": 0, "limit": 100}
     result = {"items": [], "total": 0, "nextOffset": 0, "hasMore": False,
-              "currentSnapshot": {"idfv": "11111111-1111-4111-8111-111111111111", "owner": "rv"}, "restorePending": True}
+              "currentIDFV": "11111111-1111-4111-8111-111111111111", "currentSnapshot": {"idfv": "11111111-1111-4111-8111-111111111111", "owner": "rv"}, "restorePending": True}
     if scenario == "typed-query":
         result["request"] = request
     if scenario == "wrong-page":
         result["currentSnapshot"] = []
+    if scenario == "wrong-identity":
+        result["currentIDFV"] = "22222222-2222-4222-8222-222222222222"
 terminal = {"ok": True, "result": payload(result)}
 if scenario == "malformed":
     os.write(1, b"{bad json}\n")
@@ -231,7 +237,7 @@ static void TypedQuery(NSUInteger index, void (^done)(void)) {
     NSUInteger offset = index == 2 ? 100 : 0;
     BOOL refresh = index == 0 || index == 3;
     TestBackup *service = Service(@"typed-query");
-    [service loadCatalogForSearch:search offset:offset refresh:refresh completion:^(NSDictionary *page, NSError *error) {
+    [service loadCatalogForSearch:search offset:offset refresh:refresh ascending:offset != 0 completion:^(NSDictionary *page, NSError *error) {
         Check(page && !error && NSThread.isMainThread && !service.running, @"typed catalog callback");
         NSDictionary *request = page[@"request"];
         Check([request[@"search"] isEqual:search] && [request[@"offset"] unsignedIntegerValue] == offset &&
@@ -251,6 +257,22 @@ static void Next(void) {
     case 25:{TestBackup *service=Service(@"wrong-catalog");[service loadCatalog:^(NSArray *items,NSError *error){Check(!items&&error&&!service.running,@"catalog accepted dictionary result");Next();}];break;}
     case 26:case 27:{BOOL malformed=index==28;TestBackup *service=Service(malformed?@"wrong-page":@"valid");NSError *gateError=nil;Check([SHDWOperationCoordinator beginOperation:&gateError],@"query gate fixture");[service queryCatalog:@{@"search":@"missing",@"offset":@0,@"limit":@100} completion:^(NSDictionary *page,NSError *error){Check(NSThread.isMainThread&&!service.running&&[SHDWOperationCoordinator isRunning],@"query main callback or readonly gate");if(malformed)Check(!page&&error,@"malformed page accepted");else Check(page&&!error&&![page[@"items"]count]&&[page[@"currentSnapshot"][@"owner"]isEqual:@"rv"]&&[page[@"restorePending"]boolValue],@"filtered page lost current/pending state");[SHDWOperationCoordinator endOperation];Next();}];break;}
     case 28:TypedQuery(0, ^{ Next(); });break;
+    case 29:{
+        TestBackup *service=Service(@"wrong-identity");
+        [service queryCatalog:@{@"search":@"missing",@"offset":@0,@"limit":@100}
+                   completion:^(NSDictionary *page,NSError *error){
+            Check(!page&&error,@"mismatched current IDFV and backup snapshot accepted");
+            Next();
+        }];
+        break;
+    }
+    case 30:{
+        [Service(@"catalog-identity") loadCatalogWithIdentity:^(NSDictionary *catalog,NSError *error){
+            Check(!error&&[catalog[@"items"]count]==1&&[catalog[@"currentIDFV"]isEqual:@"22222222-2222-4222-8222-222222222222"],@"catalog lost independent identity");
+            Next();
+        }];
+        break;
+    }
     default:Check(notifications>0,@"operation notifications missing");printf("backup service: %lu transport cases, NDJSON bounds, main callbacks, timeout/reaping and shared operation gates passed\n",(unsigned long)completedCases);exit(0);
     }
 }
@@ -283,7 +305,7 @@ Check(!SHDWBackupCanRestore(@{@"unavailable":@YES,@"recoverySource":@YES,@"final
 def main():
     if sys.platform != "darwin":
         raise SystemExit("This optional check requires macOS Foundation")
-    names = ["valid", "split", "stream", "malformed", "truncated", "missing", "failure", "invalid-base64", "invalid-plist", "numeric-ok", "bad-progress", "too-many-progress-keys", "duplicate", "after-result", "oversized", "timeout", "bad-exit", "hold", "wrong-catalog", "wrong-page", "typed-query"]
+    names = ["valid", "split", "stream", "malformed", "truncated", "missing", "failure", "invalid-base64", "invalid-plist", "numeric-ok", "bad-progress", "too-many-progress-keys", "duplicate", "after-result", "oversized", "timeout", "bad-exit", "hold", "wrong-catalog", "wrong-page", "typed-query", "wrong-identity", "catalog-identity"]
     with tempfile.TemporaryDirectory(prefix="shadow-backup-service-") as directory:
         temp = Path(directory).resolve()
         for name in names:

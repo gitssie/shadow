@@ -130,6 +130,10 @@ verify-fingerprint:
 	python3 verify-fingerprint-localization-config.py
 	python3 verify-fingerprint-localization-selection.py
 	python3 verify-fingerprint-localization-runtime.py
+	python3 verify-fingerprint-contacts.py
+	python3 verify-fingerprint-advertising.py
+	python3 verify-fingerprint-resources.py
+	python3 verify-fingerprint-preferences.py
 	python3 verify-localization-bootstrap.py
 	HOOKKIT_INCLUDE="$(patsubst -I%,%,$(SHADOW_HOOKKIT_CFLAGS))" python3 verify-localization-function-hook.py
 	python3 verify-fingerprint-localization-webkit.py

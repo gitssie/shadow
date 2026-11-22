@@ -128,6 +128,23 @@ Xcode command-line tools, and HookKit headers installed under `$THEOS` as
 resolved by `build-support/hookkit.mk`. It includes strict localization configuration and
 central native-value resolution, process-local environment changes, calendar
 consistency, and the native WebContent bootstrap, ownership checks, and function entrypoint adapter with HookKit doubles.
+Region selection supplies the language and timezone together, including normalization
+of older mixed configurations. Contacts checks exercise default-country getters,
+late class loading, ABI refusal, and native/internal reads with runtime doubles.
+Advertising checks exercise configuration-derived IDFA, ATT status and request
+callbacks, legacy tracking state, late classes/selectors, concrete and inherited
+manager implementations, native/internal reads, and UUID string/byte/Swift
+representations. They do not change system authorization settings.
+Map checks cover ordinary and zero-size views, selected-country centers, and
+preservation of explicit positions and system defaults.
+Bundle checks use real localized resources and prewarmed caches, including
+development-language and nonlocalized-table fallbacks, explicit language
+preferences, Foundation paths/URLs and CF Copy ownership. Preference checks
+cover single and batch reads in current-app/global domains, native/internal
+reads, unrelated domains and unchanged persistent data.
+Web bootstrap checks compile both TLS-enabled and transport-free paths;
+Networking localization remains available without the TLS module, and a refused
+WebContent host-timezone hook does not prevent language/locale application.
 Localization behavior checks use AddressSanitizer and UndefinedBehaviorSanitizer.
 They cover typed XPC payloads, missing and mismatched host identities, native
 pass-through, prepared continuation publication, safe provider fallback, hook activation failures, and isolation from persistent system preferences. These checks do not
