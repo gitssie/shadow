@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build committed source locally, then push the static Sileo source to gh-pages."""
+"""Build committed source locally and validate generated Sileo indexes."""
 import argparse
 import hashlib
 import json
@@ -37,6 +37,8 @@ def validate_immutable_packages(repository, metadata):
 
 
 def publish(lane, enabled, hookkit_package=None):
+    if enabled:
+        raise ValueError("Public package distribution is disabled for this fork; build locally instead.")
     if lane == 'rootless' and hookkit_package is None:
         raise ValueError('rootless publication requires --hookkit-package for the self-hosted dependency')
     if hookkit_package is not None:
@@ -87,7 +89,7 @@ def publish(lane, enabled, hookkit_package=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lane', default='rootless')
-    parser.add_argument('--publish', action='store_true')
+    parser.add_argument('--publish', action='store_true', help='disabled: public package distribution is retired')
     parser.add_argument('--hookkit-package', type=Path, help='locally built HookKit dependency .deb')
     args = parser.parse_args()
     publish(args.lane, args.publish, args.hookkit_package)

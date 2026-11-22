@@ -132,4 +132,13 @@ with tempfile.TemporaryDirectory(prefix="shadow-pages-test-") as temporary:
     (combined / "publication.json").write_text(json.dumps(legacy))
     publisher.validate_immutable_packages(combined, combined_metadata)
     rejected(lambda: publisher.publish("rootless", False))
+    original_run = publisher.run
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("disabled publishing invoked a build or remote operation")
+    publisher.run = unexpected_run
+    try:
+        rejected(lambda: publisher.publish("rootless", True, hookkit))
+        rejected(lambda: publisher.publish("rootful-modern", True))
+    finally:
+        publisher.run = original_run
 print("GitHub Pages source: package/dependency identity, versions, indexes, hashes and immutable publication passed")

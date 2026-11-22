@@ -1,79 +1,52 @@
 # Shadow
 
-A modern jailbreak detection bypass, based on [jjolano/Shadow](https://github.com/jjolano/shadow).
+A modern jailbreak detection bypass.
 
-## Versions
-
-`master` is the rootless TLS mainline, starting at 4.1.0. `stable` retains the
-pre-TLS 4.0.6-11 code, also fixed by the annotated tag `v4.0.6-11`.
-Rootful development remains on the stable history.
+If Shadow is useful to you, consider [sponsoring](https://github.com/sponsors/jjolano) or [buying me a coffee](https://ko-fi.com/jjolano).
 
 ## Install
 
-Install locally built rootless packages using Sileo or `dpkg`. This mainline
-requires AltList, libSandy and exactly `me.jjolano.fmwk.hookkit (= 3.0.6-1)`.
-Use the maintained [gitssie/HookKit](https://github.com/gitssie/HookKit) build
-selected by `.github/workflows/build.yml`; an upstream build with the same
-version number is not a substitute. Injection Foundation is recommended.
+Add `https://ios.jjolano.me` to your package manager and install `me.jjolano.shadow`. Or grab the [latest release](https://github.com/jjolano/shadow/releases/latest).
 
-Finished packages may be published to this fork's `gh-pages` Sileo source.
-GitHub Actions performs source and host checks; packages are built locally.
+Needs `AltList` + `libSandy` (opa334) and `HookKit >= 3.0.4` (jjolano; `>= 2.5.0` on rootful legacy). `Injection Foundation` (PoomSmart) recommended.
 
 ## Use
 
-Settings app → Shadow → global defaults or per-app config. `shdw -d` keeps the
-app ruleset in sync. TLS profile selection follows the saved system fingerprint
-version. Versions below iOS 17 keep native TLS and HTTP/2; newer supported
-profiles use the configured curl TLS engine and native HTTP/2 configuration.
+Settings app → Shadow → global defaults or per-app config. `shdw -d` keeps the app ruleset in sync.
 
 ## Compatibility
 
-This mainline supports rootless (`iphoneos-arm64`) only, with the deployment
-range declared in `build-support/lanes.sh`. Package compatibility checks do not
-establish device behavior across every iOS release. Runtime TLS and HTTP/2
-adaptation also requires compatible system interfaces.
+| Package | iOS |
+| --- | --- |
+| Rootful legacy (`iphoneos-arm`) | 9–13 |
+| Rootful modern (`iphoneos-arm`) | 14+ |
+| Rootless (`iphoneos-arm64`) | 15+ |
+| RootHide (`iphoneos-arm64e`) | 15–17 |
 
-## Building
+No guarantee every app/detection SDK works everywhere.
 
-Requires macOS/Xcode 12+, upstream [Theos](https://github.com/theos/theos),
-Python 3, CMake, Ninja, `dpkg` and `ldid`. The SDK and architecture fields come
-from `build-support/lanes.sh`.
-
-```sh
-export THEOS=/path/to/theos
-.github/scripts/install-hookkit-theos.sh rootless
-.github/scripts/build-deps.sh rootless
-scripts/prepare-curl-impersonate.sh
-./build.sh
-```
-
-The HookKit installer reads its exact source revision and repository from
-`.github/workflows/build.yml`, applies the build adapter, installs into the
-same Theos, and records the source revision and installed binary hash.
-Shadow checks both this receipt and the exact package/framework version before
-compiling. A missing or stale receipt requires rerunning the installer.
-To use local dependency sources, provide `$DEPS_SOURCE_ROOT/HookKit`; that
-checkout must contain the pinned commit. `HOOKKIT_PACKAGE_OUTPUT` can retain
-the matching HookKit `.deb` produced by the installer.
-
-Dependencies are stored under `PREBUILT_ROOT` (default `../prebuilt`). If they
-already match, run `./build.sh` directly. `./build.sh rootless` is equivalent;
-`./build.sh quick` compiles the rootless framework and dylibs without packaging.
-Other build lanes are rejected on this mainline.
-
-Tests: `make -C tests test` and `sh tests/MaintainerScriptTests.sh`.
-See [tests/README.md](tests/README.md) for optional host and device checks.
+These are declared package ranges, not a device-tested version matrix. CI builds
+all four lanes and checks package metadata and Mach-O compatibility; public host
+tests do not verify hook installation or behavior on each iOS version. An open-ended
+range does not establish compatibility with future releases.
 
 ## Troubleshooting
 
-* Disable other tweaks per-app with Choicy.
-* Downgrade the app; avoid stacking multiple bypass tweaks.
-* Test in the stock jailed state to isolate jailbreak effects.
+* Disable other tweaks per-app (Choicy).
+* Downgrade the app; don't stack multiple bypass tweaks.
+* Rootless/semi-untethered: test in stock jailed state to isolate.
 
-## Credits and legal
+## Building
 
-Upstream authors: [jjolano](https://github.com/jjolano),
-[HookKit contributors](https://github.com/jjolano/HookKit), and the dependency
-projects. Support upstream through [GitHub Sponsors](https://github.com/sponsors/jjolano).
+Requires [Theos](https://theos.dev). One lane at a time:
+
+```sh
+.github/scripts/build-deps.sh rootful-modern
+./build.sh rootful-modern
+```
+
+Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See `build-support/lanes.sh` for the matrix. Tests: `make -C tests test` ([details](tests/README.md)).
+
+## Legal
 
 *Copyright Act*, RSC 1985, c C-42, s 41.12.
