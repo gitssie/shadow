@@ -37,6 +37,7 @@ static char factsKey;
 static NSObject *lock;
 static NSMapTable *sessions;
 static NSString *configuredProfile, *configuredLibrary, *configuredCA;
+static SHDWNativeTLSProfileResolver configuredResolver;
 static BOOL adapterEnabled, installationAttempted;
 static void *appleLibrary;
 static uint64_t (*isServerMode)(nw_parameters_t);
@@ -483,6 +484,18 @@ static BOOL clientInfo(SHDWNativeSessionState *s) {
   s.port = port;
   return s.host.length > 0;
 }
+static BOOL selectSessionProfile(SHDWNativeSessionState *s, id parameters) {
+  SHDWNativeTLSProfileResolver resolver;
+  @synchronized(lock) {
+    resolver = configuredResolver;
+    s.profile = resolver ? nil : configuredProfile;
+    s.library = configuredLibrary;
+    s.ca = configuredCA;
+  }
+  if(resolver) s.profile = [resolver(parameters) copy];
+  return [@[@"safari172_ios", @"safari180_ios", @"safari184_ios", @"safari187_ios"] containsObject:s.profile];
+}
+
 static uint64_t observeHandshake(void *legacy) {
   SHDWNativeSessionState *s = lookup(legacy);
   if (!s)
@@ -511,10 +524,9 @@ static uint64_t observeHandshake(void *legacy) {
       s.declined = YES;
       return s.originalHandshake(legacy);
     }
-    @synchronized(lock) {
-      s.profile = configuredProfile;
-      s.library = configuredLibrary;
-      s.ca = configuredCA;
+    if(!selectSessionProfile(s, object_getIvar(owner, parametersIvar))) {
+      s.declined = YES;
+      return s.originalHandshake(legacy);
     }
     s.plaintext = [NSMutableData new];
     CURLcode error = CURLE_OK;
@@ -628,6 +640,14 @@ static uint64_t observeSetBIO(void *legacy, void *readBIO, void *writeBIO) {
 
   return result;
 }
+BOOL SHDWNativeTLSSetProfileResolver(SHDWNativeTLSProfileResolver resolver) {
+  @synchronized(SHDWNativeSessionState.class) {
+    if(adapterEnabled || installationAttempted) return NO;
+    configuredResolver = [resolver copy];
+    return YES;
+  }
+}
+
 BOOL SHDWNativeTLSInstall(NSString *profile, NSString *libraryPath,
                           NSString *CAPath, SHDWHookSession *hooks) {
   @synchronized(SHDWNativeSessionState.class) {
@@ -756,6 +776,10 @@ BOOL SHDWNativeTLSInstall(NSString *profile, NSString *libraryPath,
   }
 }
 #else
+BOOL SHDWNativeTLSSetProfileResolver(SHDWNativeTLSProfileResolver resolver) {
+  (void)resolver;
+  return NO;
+}
 BOOL SHDWNativeTLSInstall(NSString *profile, NSString *libraryPath,
                           NSString *CAPath, SHDWHookSession *hooks) {
   (void)profile;

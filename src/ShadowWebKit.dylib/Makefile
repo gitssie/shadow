@@ -13,9 +13,10 @@ ShadowWebKit_CFLAGS = -fobjc-arc -fvisibility=hidden $(SHADOW_HOOKKIT_CFLAGS)
 ShadowWebKit_CFLAGS += -DSHADOW_CURL_IMPERSONATE=$(SHADOW_CURL_IMPERSONATE)
 ShadowWebKit_LDFLAGS = -Wl,-x $(SHADOW_HOOKKIT_LDFLAGS) -rpath /Library/Frameworks -rpath /var/jb/Library/Frameworks
 ifeq ($(SHADOW_CURL_IMPERSONATE),1)
-ShadowWebKit_FILES += Sessions.m CurlEngine.m HookSession.m CookieDiagnostics.m
-ShadowWebKit_FILES += ../Transport/Bootstrap.m ../Transport/NetworkDiagnostics.m ../Transport/NativeTLS.m ../Transport/ExternalTLS.c ../Transport/NativeHTTP2.m
+ShadowWebKit_FILES += Sessions.m Background.m CookieDiagnostics.m $(abspath ../ShadowCore.dylib/policy/CurlTransport.m) $(abspath ../ShadowCore.dylib/SHDWHookSession.m)
+ShadowWebKit_FILES += ../Transport/Bootstrap.m ../Transport/NetworkDiagnostics.m ../Transport/NativeTLS.m ../Transport/ExternalTLS.c ../Transport/NativeHTTP2.m ../Transport/ProfileConfiguration.m ../Transport/BackgroundAttribution.m ../Transport/BackgroundDiscovery.m
 ShadowWebKit_FRAMEWORKS += CFNetwork Security Network
+ShadowWebKit_LIBRARIES += sandy
 ShadowWebKit_EXTRA_FRAMEWORKS += Shadow
 ShadowWebKit_CFLAGS += -I$(SHADOW_CURL_ROOT)/include -I../Shadow.framework/Headers
 ShadowWebKit_LDFLAGS += -F../ -rpath /usr/lib -rpath /var/jb/usr/lib

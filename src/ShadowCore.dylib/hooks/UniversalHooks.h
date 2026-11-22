@@ -82,6 +82,7 @@ NSString *shdw_fingerprint_cfnetwork_bundle_version(NSBundle *bundle, const void
 NSURLRequest *shdw_fingerprint_network_request(NSURLSession *session, NSURLRequest *request, const void *caller);
 void shdw_universal_nsthread(SHDWHookSession *hooks);
 void shdw_universal_nstask(SHDWHookSession *hooks);
+void shdw_universal_fingerprint_preferences(SHDWHookSession *hooks);
 void shdw_universal_user_defaults(SHDWHookSession *hooks);
 
 void shdw_universal_rebind_image(SHDWHookSession *hooks,

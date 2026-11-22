@@ -134,6 +134,7 @@ verify-fingerprint:
 	python3 verify-fingerprint-advertising.py
 	python3 verify-fingerprint-resources.py
 	python3 verify-fingerprint-preferences.py
+	python3 verify-preference-installation.py
 	python3 verify-localization-bootstrap.py
 	HOOKKIT_INCLUDE="$(patsubst -I%,%,$(SHADOW_HOOKKIT_CFLAGS))" python3 verify-localization-function-hook.py
 	python3 verify-fingerprint-localization-webkit.py
@@ -254,6 +255,10 @@ image-header-index:
 rebind-image-scheduler:
 	python3 verify-validated-entry.py
 	python3 verify-native-http2-runtime.py
+	python3 verify-native-tls-profile-selection.py
+	python3 verify-background-attribution.py
+	python3 verify-background-owner.py
+	python3 verify-background-discovery.py
 	python3 verify-native-http2-discovery.py
 	python3 verify-rebind-image-scheduler.py
 	python3 verify-rebind-session.py

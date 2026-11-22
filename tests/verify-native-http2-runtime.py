@@ -16,12 +16,15 @@ setup = r'''
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include "NativeHTTP2Policy.h"
+#include "NativeHTTP2.h"
 #undef ptrauth_strip
 #undef ptrauth_sign_unauthenticated
 #define ptrauth_strip(p,k) (p)
 #define ptrauth_sign_unauthenticated(p,k,d) (p)
 static const char *callerImage;
+static BOOL refuseAllocation;
+static void *testCalloc(size_t count,size_t size) { return refuseAllocation ? NULL : calloc(count,size); }
+#define calloc testCalloc
 static int mockDladdr(const void *pc, Dl_info *image) {
   (void)pc; image->dli_fname=callerImage; return callerImage != NULL;
 }
@@ -31,6 +34,20 @@ static void SHDWCurlTrace(NSString *stage,id request,NSDictionary *details) {
 }
 '''
 tests = r'''
+static BOOL tracked(void *session) { return sessionConfiguration(session, YES, NULL, NULL); }
+static SHDWH2Priority savedPriorityValue;
+static SHDWH2Configuration profiles[2];
+static int profileUsers[3];
+static unsigned resolverCalls;
+static BOOL resolveProfile(void *user, SHDWH2Configuration *out) {
+  resolverCalls++;
+  for(unsigned i=0;i<3;i++) if(user==&profileUsers[i]) {
+    if(i==2) { memset(out,0,sizeof(*out)); return YES; }
+    *out=profiles[i]; return YES;
+  }
+  return NO;
+}
+
 static unsigned settingCalls,windowCalls,absoluteCalls,requestCalls,headerCalls,priorityCalls,deleteCalls;
 static int settingsResult,allowed=1,constructorResult;
 static unsigned constructorCalls,constructorKind;
@@ -50,7 +67,7 @@ static SHDWH2Setting savedSettings[128];
 static size_t savedSettingCount,savedHeaderCount;
 static SHDWH2Header savedHeaders[16];
 static const SHDWH2Header *savedHeaderPointer;
-static const void *savedPriority,*savedBody;
+static const void *savedPriority,*savedBody,*nativePriority;
 static void *savedUser,*savedSession;
 static uint8_t savedFlags;
 static int32_t savedStream,savedWindow;
@@ -66,7 +83,7 @@ static int originalAbsolute(void *session,uint8_t flags,int32_t stream,int32_t s
   absoluteCalls++; savedSession=session; savedFlags=flags; savedStream=stream; savedWindow=size; return 18;
 }
 static void recordHeaders(void *session,const void *priority,const SHDWH2Header *headers,size_t count,void *user) {
-  savedSession=session; savedPriority=priority; savedUser=user; savedHeaderCount=count;
+  savedSession=session; savedPriority=priority; if(priority && priority!=nativePriority) savedPriorityValue=*(const SHDWH2Priority *)priority; savedUser=user; savedHeaderCount=count;
   savedHeaderPointer=headers; assert(count<=16); memcpy(savedHeaders,headers,count*sizeof(*headers));
 }
 static int32_t originalRequest(void *session,const void *priority,const SHDWH2Header *headers,
@@ -103,13 +120,13 @@ static void initial(void *session) {
 int main(void) { @autoreleasepool {
   (void)library; (void)installed;
   assert(SHDWH2ConfigurationParse(&configuration,"2:0;3:100;4:2097152;9:1","msap",10420225,256,0,1));
-  requestPriority=(SHDWH2Priority){0,configuration.weight,configuration.exclusive};
   originals[0]=(void *)originalSettings; originals[1]=(void *)originalWindow;
   originals[2]=(void *)originalAbsolute; originals[3]=(void *)originalRequest;
   originals[4]=(void *)originalHeaders; originals[5]=(void *)originalPriority; originals[6]=(void *)originalDelete;
   originals[7]=(void *)originalNew2;
   clientAllowed=allowClient;
   int sessionToken=0,unknownToken=0,priorityToken=0,bodyToken=0,userToken=0;
+  nativePriority=&priorityToken;
   void *session=&sessionToken,*unknown=&unknownToken;
   SHDWH2Setting baseline[]={{4,2097152},{3,100}};
   SHDWH2Header headers[]={h(":path","/",6),h(":authority","example.test",2),h(":method","POST",4),
@@ -231,8 +248,7 @@ int main(void) { @autoreleasepool {
   for(unsigned profile=0;profile<4;profile++) {
     assert(SHDWH2ConfigurationParse(&configuration,settings[profile],profile ? "msap" : "mspa",
                                     profile ? 10420225 : 10485760,profile ? 256 : 255,0,profile==3));
-    requestPriority=(SHDWH2Priority){0,configuration.weight,configuration.exclusive};
-    nextSession=session; void *output=NULL;
+      nextSession=session; void *output=NULL;
     assert(createSession2(&output,NULL,NULL,NULL)==0 && output==session);
     assert(setSettings(session,0,baseline,2)==0 && tracked(session));
     assert(savedSettingCount==configuration.count &&
@@ -242,20 +258,20 @@ int main(void) { @autoreleasepool {
     assert(submitRequest(session,&priorityToken,headers,6,&bodyToken,&userToken)==23);
     if(profile==3) assert(!savedPriority);
     else {
-      assert(savedPriority==&requestPriority);
-      const SHDWH2Priority *p=savedPriority;
+      assert(savedPriority && savedPriority!=nativePriority);
+      const SHDWH2Priority *p=&savedPriorityValue;
       assert(p->stream==0 && p->weight==(profile ? 256 : 255) && !p->exclusive);
     }
     same(savedHeaders[0],headers[2]); same(savedHeaders[1],headers[3]);
     same(savedHeaders[2],headers[profile ? 1 : 0]); same(savedHeaders[3],headers[profile ? 0 : 1]);
     assert(submitHeaders(session,0x25,7,&priorityToken,headers,6,&userToken)==25);
     assert(savedFlags==(profile==3 ? 5 : 0x25));
-    assert(savedPriority==(profile==3 ? NULL : &requestPriority));
+    assert(profile==3 ? !savedPriority : savedPriority && savedPriority!=nativePriority);
     unsigned priorities=priorityCalls;
     assert(submitPriority(session,0,1,&priorityToken)==0 && priorityCalls==priorities);
     assert(submitPriority(session,0,7,&priorityToken)==(profile==3 ? 0 : 19));
     assert(priorityCalls==priorities+(profile!=3));
-    if(profile!=3) assert(savedPriority==&requestPriority);
+    if(profile!=3) assert(savedPriority && savedPriority!=nativePriority);
     // Trailers retain their original flags and priority argument.
     assert(submitHeaders(session,1,7,NULL,&headers[4],2,&userToken)==25);
     assert(savedHeaderPointer==&headers[4] && savedFlags==1 && !savedPriority);
@@ -267,6 +283,71 @@ int main(void) { @autoreleasepool {
     assert(absoluteWindow(session,0,0,1234)==18 && savedWindow==1234);
     deleteSession(session);
   }
+
+  // A resolver owns selection completely; an unknown/invalid client stays native.
+  assert(SHDWH2ConfigurationParse(&profiles[0],"2:0;3:111;4:2222222","mspa",777777,55,1,0));
+  assert(SHDWH2ConfigurationParse(&profiles[1],"2:0;3:222;4:3333333;9:1","msap",888888,99,0,1));
+  assert(SHDWNativeHTTP2SetConfigurationResolver(resolveProfile));
+  int connectionTokens[5];
+  void *connections[5];
+  for(unsigned i=0;i<5;i++) {
+    connections[i]=&connectionTokens[i]; nextSession=connections[i];
+    void *out=NULL;
+    refuseAllocation=i==4;
+    assert(createSession2(&out,&callbacks,i<3 ? &profileUsers[i] : i==4 ? &profileUsers[0] : NULL,&options)==0);
+    assert(out==connections[i] && savedCallbacks==&callbacks && savedOptions==&options);
+    refuseAllocation=NO;
+  }
+  SHDWH2Configuration expected[2]={profiles[0],profiles[1]};
+  memset(profiles,0,sizeof(profiles)); // live connections own immutable copies
+  for(unsigned i=0;i<5;i++) {
+    assert(setSettings(connections[i],0,baseline,2)==0);
+    assert(tracked(connections[i])==(i<2));
+    assert(savedSettingCount==(i<2 ? expected[i].count : 2));
+    if(i<2) assert(!memcmp(savedSettings,expected[i].settings,savedSettingCount*sizeof(*savedSettings)));
+  }
+  // Interleave operations after both SETTINGS have completed.
+  for(unsigned round=0;round<2;round++) for(unsigned j=0;j<5;j++) {
+    unsigned i=round ? 4-j : j;
+    assert(updateWindow(connections[i],0,0,123456)==17);
+    assert(savedWindow==(!round && i<2 ? expected[i].windowUpdate : 123456));
+    assert(submitRequest(connections[i],nativePriority,headers,6,&bodyToken,&userToken)==23);
+    if(i>=2) assert(savedHeaderPointer==headers && savedPriority==nativePriority);
+    else {
+      assert(savedHeaderPointer!=headers);
+      same(savedHeaders[0],headers[2]); same(savedHeaders[1],headers[3]);
+      same(savedHeaders[2],headers[i ? 1 : 0]); same(savedHeaders[3],headers[i ? 0 : 1]);
+      if(i) assert(!savedPriority);
+      else assert(savedPriority && savedPriorityValue.weight==55 && savedPriorityValue.exclusive==1);
+    }
+    assert(submitHeaders(connections[i],0x25,7,nativePriority,headers,6,&userToken)==25);
+    assert(savedFlags==(i==1 ? 5 : 0x25));
+    if(i>=2) assert(savedHeaderPointer==headers && savedPriority==nativePriority);
+    unsigned previous=priorityCalls;
+    assert(submitPriority(connections[i],0,7,nativePriority)==(i==1 ? 0 : 19));
+    assert(priorityCalls==previous+(i!=1));
+    if(i==0) assert(savedPriorityValue.weight==55 && savedPriorityValue.exclusive==1);
+  }
+  profiles[0]=expected[0]; profiles[1]=expected[1];
+  // SETTINGS refusal on one client cannot clear another client's selected profile.
+  nextSession=connections[0]; void *replacement=NULL;
+  assert(createSession2(&replacement,NULL,&profileUsers[0],NULL)==0 && !tracked(connections[0]));
+  settingsResult=-901;
+  assert(setSettings(connections[0],0,baseline,2)==-901 && !tracked(connections[0]));
+  settingsResult=0;
+  assert(tracked(connections[1]));
+  assert(submitRequest(connections[1],nativePriority,headers,6,NULL,NULL)==23 && !savedPriority);
+  // Allocation failure on a reused pointer also discards its old profile.
+  refuseAllocation=YES; nextSession=connections[1];
+  assert(createSession2(&replacement,NULL,&profileUsers[0],NULL)==0 && !tracked(connections[1]));
+  refuseAllocation=NO;
+  assert(setSettings(connections[1],0,baseline,2)==0 && savedSettingCount==2);
+  assert(submitRequest(connections[1],nativePriority,headers,6,NULL,NULL)==23);
+  assert(savedHeaderPointer==headers && savedPriority==nativePriority);
+  for(unsigned i=0;i<5;i++) deleteSession(connections[i]);
+  assert(!sessions && resolverCalls==7);
+  preparationStarted=YES;
+  assert(!SHDWNativeHTTP2SetConfigurationResolver(NULL) && configurationResolver==resolveProfile);
   assert(constructorCalls);
   assert(settingCalls && windowCalls && absoluteCalls && requestCalls && headerCalls && priorityCalls);
 } return 0; }

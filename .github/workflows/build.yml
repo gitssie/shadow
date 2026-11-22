@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  HOOKKIT: df15b2bae39b3602478d12b90e8537db90945a36
+  HOOKKIT: b35189e1b3db30483d39d3b9c3fc875b9538233f
   HOOKKIT_REPOSITORY: gitssie/HookKit
 
 jobs:

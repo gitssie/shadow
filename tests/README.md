@@ -140,8 +140,14 @@ preservation of explicit positions and system defaults.
 Bundle checks use real localized resources and prewarmed caches, including
 development-language and nonlocalized-table fallbacks, explicit language
 preferences, Foundation paths/URLs and CF Copy ownership. Preference checks
-cover single and batch reads in current-app/global domains, native/internal
-reads, unrelated domains and unchanged persistent data.
+cover single and batch reads and key enumeration in current-app/global domains,
+native/internal reads, unrelated domains, unchanged persistent data, and shared
+domain-hook initialization in either feature installation order. Production
+preference installation checks cover both group orders, refusal, late exports,
+original continuations and isolation from unrelated functions.
+Network configuration checks preserve background-session identifiers, scheduling
+options and explicit headers through copying and host secure-coding round trips;
+they do not establish device background-request headers or TLS behavior.
 Web bootstrap checks compile both TLS-enabled and transport-free paths;
 Networking localization remains available without the TLS module, and a refused
 WebContent host-timezone hook does not prevent language/locale application.

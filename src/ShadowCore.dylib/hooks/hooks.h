@@ -499,6 +499,7 @@ typedef enum {
   SHADW_HOOK_GROUP_LOWLEVEL = 1 << 2,
   SHADW_HOOK_GROUP_ANTIDEBUG = 1 << 3,
   SHADW_HOOK_GROUP_FEATURE_METADATA = 1 << 4,
+  SHADW_HOOK_GROUP_PREFERENCES = 1 << 5,
 } shdw_hook_group_t;
 
 void shdw_libc_install_group(SHDWHookSession *hooks, uint32_t group);

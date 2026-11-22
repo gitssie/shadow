@@ -115,7 +115,8 @@ case "$1" in
 
         for inject_dir in "$DPKG_ROOT/Library/MobileSubstrate/DynamicLibraries" "$DPKG_ROOT/usr/lib/TweakInject"; do
             rm -f "$inject_dir/ShadowWebContent.dylib" "$inject_dir/ShadowWebContent.plist" \
-                  "$inject_dir/ShadowNetworking.dylib" "$inject_dir/ShadowNetworking.plist"
+                  "$inject_dir/ShadowNetworking.dylib" "$inject_dir/ShadowNetworking.plist" \
+                  "$inject_dir/ShadowBackground.dylib" "$inject_dir/ShadowBackground.plist"
         done
 
         rm -f "$DPKG_ROOT/Library/MobileSubstrate/DynamicLibraries/ShadowCore.dylib" \

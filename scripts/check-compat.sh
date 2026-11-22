@@ -68,11 +68,12 @@ if [ "$PROFILE" != rootful-legacy ]; then
     python3 - "$WEBKIT_FILTER" <<'PYFILTER'
 import plistlib, sys
 with open(sys.argv[1], 'rb') as stream:
-    bundles = plistlib.load(stream)['Filter']['Bundles']
-if sorted(bundles) != ['com.apple.WebKit.Networking', 'com.apple.WebKit.WebContent']:
-    raise SystemExit('ShadowWebKit must target both WebKit services')
+    filters = plistlib.load(stream)['Filter']
+expected = ['com.apple.WebKit.Networking', 'com.apple.WebKit.WebContent', 'nsurlsessiond']
+if set(filters) != {'Executables'} or sorted(filters['Executables']) != sorted(expected):
+    raise SystemExit('ShadowWebKit must target exactly the three supported services')
 PYFILTER
-    OBSOLETE=$(find "$TMP/root" -type f \( -name 'ShadowWebContent.dylib' -o -name 'ShadowWebContent.plist' -o -name 'ShadowNetworking.dylib' -o -name 'ShadowNetworking.plist' \) -print)
+    OBSOLETE=$(find "$TMP/root" -type f \( -name 'ShadowWebContent.dylib' -o -name 'ShadowWebContent.plist' -o -name 'ShadowNetworking.dylib' -o -name 'ShadowNetworking.plist' -o -name 'ShadowBackground.dylib' -o -name 'ShadowBackground.plist' \) -print)
     [ -z "$OBSOLETE" ] || { echo "package contains obsolete WebKit modules: $OBSOLETE" >&2; exit 1; }
     [ -u "$CLEANER" ] || { echo "cleanup helper privilege bit is missing" >&2; exit 1; }
     [ -s "$APP_INFO" ] || { echo "manager app metadata is empty" >&2; exit 1; }

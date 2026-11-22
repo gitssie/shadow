@@ -5,21 +5,11 @@
 #if SHADOW_CURL_IMPERSONATE
 #import "../../Transport/NativeTLS.h"
 #import "../../Transport/NativeHTTP2.h"
-#include "../../Transport/CurlReference.h"
-#include "../../Transport/CurlHTTP2.h"
+#import "../../Transport/ProfileConfiguration.h"
 #include "../../Transport/CurlDiagnostics.h"
-#include <dlfcn.h>
 
 static unsigned transportReady;
 static NSString *transportProfile;
-static struct {
-    CURLcode (*initialize)(long);
-    CURL *(*create)(void);
-    CURLcode (*impersonate)(CURL *, const char *, int);
-    CURLcode (*set)(CURL *, CURLoption, ...);
-    SHDWCurlHTTP2ConfigFunction readHTTP2;
-    void (*destroy)(CURL *);
-} engine;
 
 void SHDWCurlTransportPrepareProfile(NSString *profile) {
     if (!SHDWTransportProfileIsSupported(profile)) return;
@@ -30,32 +20,8 @@ void SHDWCurlTransportPrepareProfile(NSString *profile) {
     if (!__atomic_compare_exchange_n(&attempted, &expected, 1, NO, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
     transportProfile = selectedProfile;
     NSString *library = JBPath(@"/usr/lib/shadow/curl/libcurl-impersonate.4.dylib");
-    void *image = dlopen(library.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
-    if (!image) return;
-#define SHDW_CURL_SYMBOL(field, name) engine.field = dlsym(image, name); if (!engine.field) return
-    SHDW_CURL_SYMBOL(initialize, "curl_global_init");
-    SHDW_CURL_SYMBOL(create, "curl_easy_init");
-    SHDW_CURL_SYMBOL(impersonate, "curl_easy_impersonate");
-    SHDW_CURL_SYMBOL(set, "curl_easy_setopt");
-    SHDW_CURL_SYMBOL(readHTTP2, "curl_shadow_get_http2_config");
-    SHDW_CURL_SYMBOL(destroy, "curl_easy_cleanup");
-#undef SHDW_CURL_SYMBOL
-    const char *required[] = {
-        "curl_shadow_connect_only_enable_external_io",
-        "curl_shadow_connect_only_set_native_verify", "curl_shadow_connect_only_get_verification_snapshot",
-        "curl_shadow_connect_only_set_transport", "curl_shadow_connect_only_get_io_state",
-        "curl_shadow_connect_only_shutdown"
-    };
-    for (size_t index = 0; index < sizeof(required) / sizeof(required[0]); index++)
-        if (!dlsym(image, required[index])) return;
-    if (engine.initialize(CURL_GLOBAL_DEFAULT) != CURLE_OK) return;
-    CURL *probe = engine.create(); if (!probe) return;
-    BOOL available = SHDWCurlApplyProfile(probe, transportProfile.UTF8String, engine.impersonate, engine.set) == CURLE_OK;
     SHDWH2Configuration http2 = {0};
-    if (available)
-        available = SHDWCurlReadHTTP2Configuration(probe, engine.readHTTP2, &http2) == CURLE_OK;
-    engine.destroy(probe);
-    if (!available) return;
+    if (!SHDWTransportCopyHTTP2Configuration(transportProfile, &http2)) return;
     BOOL http2Installed = SHDWNativeHTTP2Prepare(&http2);
     SHDWCurlTrace(@"transport.nativeHTTP2.install", nil, @{@"installed":@(http2Installed), @"profile":transportProfile});
     if (!http2Installed) return;

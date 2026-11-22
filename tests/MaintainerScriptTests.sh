@@ -126,7 +126,7 @@ fi
 
 for inject_dir in "$clean_pkg/Library/MobileSubstrate/DynamicLibraries" "$clean_pkg/usr/lib/TweakInject"; do
     mkdir -p "$inject_dir"
-    for module in ShadowWebContent ShadowNetworking ShadowWebKit OtherTweak; do
+    for module in ShadowWebContent ShadowNetworking ShadowBackground ShadowWebKit OtherTweak; do
         touch "$inject_dir/$module.dylib" "$inject_dir/$module.plist"
     done
 done
@@ -141,7 +141,7 @@ env DPKG_MAINTSCRIPT_ARCH=iphoneos-arm64 SHADOW_DPKG_ROOT="$clean_pkg" SHADOW_RO
     SHADOW_UICACHE_BIN="$tmp/bin/uicache" sh "$root/packaging/layout/DEBIAN/postinst" configure
 assert grep -F -q -- "-p $clean_pkg/Applications/ShadowManager.app" "$tmp/log"
 for inject_dir in "$clean_pkg/Library/MobileSubstrate/DynamicLibraries" "$clean_pkg/usr/lib/TweakInject"; do
-    for module in ShadowWebContent ShadowNetworking; do
+    for module in ShadowWebContent ShadowNetworking ShadowBackground; do
         assert test ! -e "$inject_dir/$module.dylib"
         assert test ! -e "$inject_dir/$module.plist"
     done

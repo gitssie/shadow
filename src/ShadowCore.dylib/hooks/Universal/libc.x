@@ -1868,11 +1868,13 @@ static BOOL shdw_cf_suite_restricted(CFStringRef applicationID) {
     return shdw_nsuserdefaults_suite_restricted((__bridge NSString*)applicationID);
 }
 
+static BOOL shdw_cf_preferences_restrictions_enabled;
+
 static CFPropertyListRef (*original_CFPreferencesCopyAppValue)(CFStringRef key, CFStringRef applicationID);
 static CFPropertyListRef replaced_CFPreferencesCopyAppValue(CFStringRef key, CFStringRef applicationID) {
     int saved = errno;
     BOOL external = isCallerExternal();
-    if(external && shdw_cf_suite_restricted(applicationID)) {
+    if(external && __atomic_load_n(&shdw_cf_preferences_restrictions_enabled, __ATOMIC_ACQUIRE) && shdw_cf_suite_restricted(applicationID)) {
         shdw_detector_detected("nsuserdefaults");
         errno = saved;
         return NULL;
@@ -1889,7 +1891,7 @@ static CFPropertyListRef (*original_CFPreferencesCopyValue)(CFStringRef key, CFS
 static CFPropertyListRef replaced_CFPreferencesCopyValue(CFStringRef key, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName) {
     int saved = errno;
     BOOL external = isCallerExternal();
-    if(external && shdw_cf_suite_restricted(applicationID)) {
+    if(external && __atomic_load_n(&shdw_cf_preferences_restrictions_enabled, __ATOMIC_ACQUIRE) && shdw_cf_suite_restricted(applicationID)) {
         shdw_detector_detected("nsuserdefaults");
         errno = saved;
         return NULL;
@@ -1905,7 +1907,7 @@ static CFDictionaryRef (*original_CFPreferencesCopyMultiple)(CFArrayRef keysToFe
 static CFDictionaryRef replaced_CFPreferencesCopyMultiple(CFArrayRef keysToFetch, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName) {
     int saved = errno;
     BOOL external = isCallerExternal();
-    if(external && shdw_cf_suite_restricted(applicationID)) {
+    if(external && __atomic_load_n(&shdw_cf_preferences_restrictions_enabled, __ATOMIC_ACQUIRE) && shdw_cf_suite_restricted(applicationID)) {
         shdw_detector_detected("nsuserdefaults");
         // Stock empty-dict shape: +1 dictionary the caller owns (Copy
         // rule); never a shared singleton a caller could mutate.
@@ -1926,9 +1928,32 @@ static CFDictionaryRef replaced_CFPreferencesCopyMultiple(CFArrayRef keysToFetch
     return result;
 }
 
+static CFArrayRef (*original_CFPreferencesCopyKeyList)(CFStringRef applicationID, CFStringRef userName, CFStringRef hostName);
+static CFArrayRef replaced_CFPreferencesCopyKeyList(CFStringRef applicationID, CFStringRef userName, CFStringRef hostName) {
+    int saved = errno;
+    BOOL external = isCallerExternal();
+    if(external && __atomic_load_n(&shdw_cf_preferences_restrictions_enabled, __ATOMIC_ACQUIRE) && shdw_cf_suite_restricted(applicationID)) {
+        shdw_detector_detected("nsuserdefaults");
+        errno = saved;
+        return NULL;
+    }
+    NSDictionary *overrides = external ? SHDWFingerprintPreferenceOverrides(applicationID, userName, hostName) : nil;
+    errno = saved;
+    CFArrayRef native = original_CFPreferencesCopyKeyList(applicationID, userName, hostName);
+    if(!overrides.count) return native;
+    saved = errno;
+    NSMutableArray *keys = native ? [(__bridge NSArray *)native mutableCopy] : [NSMutableArray new];
+    for(NSString *key in overrides)
+        if(![keys containsObject:key]) [keys addObject:key];
+    CFArrayRef result = (CFArrayRef)CFBridgingRetain([keys copy]);
+    if(native) CFRelease(native);
+    errno = saved;
+    return result;
+}
+
 static Boolean (*original_CFPreferencesAppSynchronize)(CFStringRef applicationID);
 static Boolean replaced_CFPreferencesAppSynchronize(CFStringRef applicationID) {
-    if(isCallerExternal() && shdw_cf_suite_restricted(applicationID)) {
+    if(isCallerExternal() && __atomic_load_n(&shdw_cf_preferences_restrictions_enabled, __ATOMIC_ACQUIRE) && shdw_cf_suite_restricted(applicationID)) {
         return false;
     }
     return original_CFPreferencesAppSynchronize(applicationID);
@@ -3573,6 +3598,7 @@ typedef struct {
 #define LOW    SHADW_HOOK_GROUP_LOWLEVEL
 #define ANTIDBG SHADW_HOOK_GROUP_ANTIDEBUG
 #define METADATA SHADW_HOOK_GROUP_FEATURE_METADATA
+#define PREFS SHADW_HOOK_GROUP_PREFERENCES
 
 static const shdw_hook_desc_t shdw_libc_hooks[] = {
     // The narrow metadata feature owns these overlap symbols through the rebind lane.
@@ -3693,9 +3719,10 @@ static const shdw_hook_desc_t shdw_libc_hooks[] = {
     // Phase 4 CFPreferences: same suite gate as NSUserDefaults (predicate
     // lives in AppEnvironment.x). Reads denied, sync fails closed, writes
     // pass through (unobservable).
-    { "CFPreferencesCopyAppValue", (void*)&replaced_CFPreferencesCopyAppValue, (void**)&original_CFPreferencesCopyAppValue, LIBC, LIBC },
-    { "CFPreferencesCopyValue", (void*)&replaced_CFPreferencesCopyValue, (void**)&original_CFPreferencesCopyValue, LIBC, LIBC },
-    { "CFPreferencesCopyMultiple", (void*)&replaced_CFPreferencesCopyMultiple, (void**)&original_CFPreferencesCopyMultiple, LIBC, LIBC },
+    { "CFPreferencesCopyAppValue", (void*)&replaced_CFPreferencesCopyAppValue, (void**)&original_CFPreferencesCopyAppValue, LIBC | PREFS, LIBC | PREFS },
+    { "CFPreferencesCopyValue", (void*)&replaced_CFPreferencesCopyValue, (void**)&original_CFPreferencesCopyValue, LIBC | PREFS, LIBC | PREFS },
+    { "CFPreferencesCopyMultiple", (void*)&replaced_CFPreferencesCopyMultiple, (void**)&original_CFPreferencesCopyMultiple, LIBC | PREFS, LIBC | PREFS },
+    { "CFPreferencesCopyKeyList", (void*)&replaced_CFPreferencesCopyKeyList, (void**)&original_CFPreferencesCopyKeyList, LIBC | PREFS, LIBC | PREFS },
     { "CFPreferencesAppSynchronize", (void*)&replaced_CFPreferencesAppSynchronize, (void**)&original_CFPreferencesAppSynchronize, LIBC, 0 },
     { "getfsstat",              (void*)&replaced_getfsstat,                (void**)&original_getfsstat,                LIBC,   LIBC, SHDW_HOOK_FALLBACK_REBIND},
     { "fstat",                  (void*)&replaced_fstat,                    (void**)&original_fstat,                    LIBC,   LIBC, SHDW_HOOK_FALLBACK_REBIND},
@@ -3773,6 +3800,7 @@ static const shdw_hook_desc_t shdw_libc_hooks[] = {
 #undef LOW
 #undef ANTIDBG
 #undef METADATA
+#undef PREFS
 
 // Fills a NULL-original row's continuation cell from the pre-hook dlsym at
 // install (wait family). Defined below, next to the dlsym policy.
@@ -3827,6 +3855,7 @@ void shdw_libc_install_group(SHDWHookSession* hooks, uint32_t group) {
     // observed on-device). Mark the install as an internal read so those
     // replacements short-circuit to their originals.
     [Shadow shdwEnterInternalRead];
+    static unsigned preferenceAttempts[sizeof(shdw_libc_hooks) / sizeof(shdw_libc_hooks[0])];
     void *accessx_np_target = NULL;
     for(size_t i = 0; i < sizeof(shdw_libc_hooks) / sizeof(shdw_libc_hooks[0]); i++) {
         const shdw_hook_desc_t* d = &shdw_libc_hooks[i];
@@ -3842,6 +3871,11 @@ void shdw_libc_install_group(SHDWHookSession* hooks, uint32_t group) {
 
         if(!target) {
             continue;
+        }
+        if(d->installGroups & SHADW_HOOK_GROUP_PREFERENCES) {
+            unsigned expected = 0;
+            if(!__atomic_compare_exchange_n(&preferenceAttempts[i], &expected, 1, NO,
+                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;
         }
         if(strcmp(d->symbol, "accessx_np") == 0) {
             accessx_np_target = target;
@@ -3920,6 +3954,11 @@ void shdw_libc_install_group(SHDWHookSession* hooks, uint32_t group) {
             [hooks hookRebindSymbol:@"getppid" withReplacement:d->replacement outOldPtr:NULL];
         } else {
             BOOL installed = [hooks hookFunction:target withReplacement:d->replacement outOldPtr:d->original];
+            if(!installed && d->original &&
+               (d->installGroups & SHADW_HOOK_GROUP_PREFERENCES)) {
+                installed = [hooks hookRebindSymbol:[NSString stringWithUTF8String:d->symbol]
+                    withReplacement:d->replacement outOldPtr:d->original];
+            }
             // iOS 15's shared-cache directory entrypoints can be too short or
             // unaligned for a safe entry patch. Rebind their existing imports
             // instead; this leaves the target text untouched and still covers
@@ -4017,6 +4056,7 @@ void shdw_libc_install_group(SHDWHookSession* hooks, uint32_t group) {
 }
 
 void shdw_universal_filesystem_c(SHDWHookSession* hooks) {
+    __atomic_store_n(&shdw_cf_preferences_restrictions_enabled, YES, __ATOMIC_RELEASE);
     shdw_libc_install_group(hooks, SHADW_HOOK_GROUP_LIBC);
 }
 

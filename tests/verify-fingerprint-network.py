@@ -146,6 +146,51 @@ int main(void) { @autoreleasepool {
     shdw_universal_fingerprint_network_prepare(session);assert(installCalls==3);
     nativeValue=@"Vinted/30260 CFNetwork/1404.0.5 Darwin/22.3.0";
     NSString *expected=@"Vinted/30260 CFNetwork/3826.600.41 Darwin/24.6.0";
+
+    NSURLSessionConfiguration *background=[NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:@"local.shadow.network.background-test"];
+    background.sharedContainerIdentifier=@"group.local.shadow.network.background-test";
+    background.allowsCellularAccess=NO;
+    background.discretionary=YES;
+    background.sessionSendsLaunchEvents=NO;
+    background.timeoutIntervalForRequest=73;
+    background.timeoutIntervalForResource=811;
+    background.HTTPAdditionalHeaders=@{@"Accept-Language":@"fr-FR",@"X-Custom":@"background-preserved"};
+    shdw_network_session(NSURLSession.class,@selector(sessionWithConfiguration:),background);
+    NSURLSessionConfiguration *backgroundUpdated=received;
+    assert(backgroundUpdated!=background);
+    assert([backgroundUpdated.identifier isEqual:background.identifier]);
+    assert([backgroundUpdated.sharedContainerIdentifier isEqual:background.sharedContainerIdentifier] && !backgroundUpdated.allowsCellularAccess);
+    assert(backgroundUpdated.isDiscretionary && !backgroundUpdated.sessionSendsLaunchEvents);
+    assert(backgroundUpdated.timeoutIntervalForRequest==73 && backgroundUpdated.timeoutIntervalForResource==811);
+    assert([backgroundUpdated.HTTPAdditionalHeaders[@"User-Agent"] isEqual:expected]);
+    assert([backgroundUpdated.HTTPAdditionalHeaders[@"Accept-Language"] isEqual:@"fr-FR"]);
+    assert([backgroundUpdated.HTTPAdditionalHeaders[@"X-Custom"] isEqual:@"background-preserved"]);
+    assert(!background.HTTPAdditionalHeaders[@"User-Agent"]);
+    if([backgroundUpdated conformsToProtocol:@protocol(NSSecureCoding)] &&
+       [(id)backgroundUpdated.class supportsSecureCoding]) {
+        NSError *archiveError=nil;
+        NSData *encoded=[NSKeyedArchiver archivedDataWithRootObject:backgroundUpdated requiringSecureCoding:YES error:&archiveError];
+        assert(encoded && !archiveError);
+        NSURLSessionConfiguration *decoded=[NSKeyedUnarchiver unarchivedObjectOfClass:NSURLSessionConfiguration.class fromData:encoded error:&archiveError];
+        assert(decoded && !archiveError);
+        assert([decoded.identifier isEqual:background.identifier]);
+        assert([decoded.sharedContainerIdentifier isEqual:background.sharedContainerIdentifier] && !decoded.allowsCellularAccess);
+        assert(decoded.isDiscretionary && !decoded.sessionSendsLaunchEvents);
+        assert(decoded.timeoutIntervalForRequest==73 && decoded.timeoutIntervalForResource==811);
+        assert([decoded.HTTPAdditionalHeaders isEqual:backgroundUpdated.HTTPAdditionalHeaders]);
+        puts("background configuration secure-coding round trip passed (host only; no request sent)");
+    } else {
+        puts("background configuration secure coding unavailable on this host; device serialization remains unverified");
+    }
+    background.HTTPAdditionalHeaders=@{@"User-Agent":@"ExplicitBackground/1",@"Accept-Language":@"fr-FR"};
+    shdw_network_session(NSURLSession.class,@selector(sessionWithConfiguration:),background);
+    assert(received==background && [received.HTTPAdditionalHeaders[@"User-Agent"] isEqual:@"ExplicitBackground/1"]);
+    background.HTTPAdditionalHeaders=@{@"X-Custom":@"background-preserved"};
+    external=NO;
+    shdw_network_session(NSURLSession.class,@selector(sessionWithConfiguration:),background);
+    assert(received==background && !background.HTTPAdditionalHeaders[@"User-Agent"]);
+    external=YES;
+
     NSURLSessionConfiguration *configuration=NSURLSessionConfiguration.ephemeralSessionConfiguration;
     configuration.HTTPAdditionalHeaders=@{@"X-Custom":@"preserved"};
     for(unsigned mode=0;mode<4;mode++) {
@@ -276,7 +321,7 @@ int main(void) { @autoreleasepool {
     shdw_universal_fingerprint_network_prepare(session);
     assert(shdw_network_user_agent_state==3 && installCalls==6);
     shdw_universal_fingerprint_network_prepare(session);assert(installCalls==6);
-    puts("fingerprint network: default-UA session boundary, explicit headers, caller scope and configuration copy passed");
+    puts("fingerprint network: default-UA session boundary, explicit headers, caller scope, background configuration preservation and configuration copy passed");
 } }
 """
 with tempfile.TemporaryDirectory(prefix="shadow-fingerprint-network-") as tmp:

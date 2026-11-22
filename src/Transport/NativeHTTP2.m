@@ -94,9 +94,24 @@ static unsigned enabled;
 static BOOL installed;
 static void *library;
 static SHDWH2Configuration configuration;
-static SHDWH2Priority requestPriority;
+static SHDWNativeHTTP2ConfigurationResolver configurationResolver;
+static BOOL preparationStarted;
+static pthread_mutex_t preparationLock = PTHREAD_MUTEX_INITIALIZER;
+BOOL SHDWNativeHTTP2SetConfigurationResolver(SHDWNativeHTTP2ConfigurationResolver resolver) {
+    pthread_mutex_lock(&preparationLock);
+    BOOL accepted = !preparationStarted;
+    if (accepted) configurationResolver = resolver;
+    pthread_mutex_unlock(&preparationLock);
+    return accepted;
+}
 static pthread_mutex_t sessionsLock = PTHREAD_MUTEX_INITIALIZER;
-typedef struct H2Session { void *session; BOOL windowSet, configured, settingsSeen; struct H2Session *next; } H2Session;
+typedef struct H2Session {
+    void *session;
+    BOOL windowSet, configured, settingsSeen;
+    SHDWH2Configuration configuration;
+    SHDWH2Priority priority;
+    struct H2Session *next;
+} H2Session;
 static H2Session *sessions;
 
 static BOOL nativeCaller(const void *caller) {
@@ -107,22 +122,28 @@ static BOOL nativeCaller(const void *caller) {
     return strstr(image.dli_fname, "/CFNetwork.framework/") ||
         strstr(image.dli_fname, "/Network.framework/") || strstr(image.dli_fname, "/libnetwork.dylib");
 }
-static BOOL tracked(void *session) {
+static BOOL sessionConfiguration(void *session, BOOL configured,
+    SHDWH2Configuration *selected, SHDWH2Priority *priority) {
     BOOL found = NO;
     pthread_mutex_lock(&sessionsLock);
-    for (H2Session *s = sessions; s; s = s->next) if (s->session == session) { found = s->configured; break; }
+    for (H2Session *s = sessions; s; s = s->next) if (s->session == session) {
+        if (!configured || s->configured) {
+            if (selected) *selected = s->configuration;
+            if (priority) *priority = s->priority;
+            found = YES;
+        }
+        break;
+    }
     pthread_mutex_unlock(&sessionsLock);
     return found;
 }
-static BOOL beginSession(void *session) {
+static BOOL beginSession(void *session, const SHDWH2Configuration *selected) {
     H2Session *fresh = calloc(1, sizeof(*fresh));
     if (!fresh) return NO;
     fresh->session = session;
+    fresh->configuration = *selected;
+    fresh->priority = (SHDWH2Priority){0, selected->weight, selected->exclusive};
     pthread_mutex_lock(&sessionsLock);
-    for (H2Session *s = sessions; s; s = s->next) if (s->session == session) {
-        s->windowSet = s->configured = s->settingsSeen = NO;
-        pthread_mutex_unlock(&sessionsLock); free(fresh); return YES;
-    }
     fresh->next = sessions; sessions = fresh;
     pthread_mutex_unlock(&sessionsLock);
     return YES;
@@ -137,21 +158,21 @@ static void forgetSession(void *session) {
     }
     pthread_mutex_unlock(&sessionsLock);
 }
-static BOOL claimWindow(void *session) {
+static BOOL claimWindow(void *session, int32_t *windowUpdate) {
     BOOL claimed = NO;
     pthread_mutex_lock(&sessionsLock);
     for (H2Session *s = sessions; s; s = s->next) if (s->session == session) {
-        if (s->configured && !s->windowSet) { s->windowSet = YES; claimed = YES; }
+        if (s->configured && !s->windowSet) { s->windowSet = YES; *windowUpdate = s->configuration.windowUpdate; claimed = YES; }
         break;
     }
     pthread_mutex_unlock(&sessionsLock);
     return claimed;
 }
-static BOOL claimSettings(void *session) {
+static BOOL claimSettings(void *session, SHDWH2Configuration *selected) {
     BOOL claimed = NO;
     pthread_mutex_lock(&sessionsLock);
     for (H2Session *s = sessions; s; s = s->next) if (s->session == session) {
-        if (!s->settingsSeen) { s->settingsSeen = YES; claimed = YES; }
+        if (!s->settingsSeen) { s->settingsSeen = YES; *selected = s->configuration; claimed = YES; }
         break;
     }
     pthread_mutex_unlock(&sessionsLock);
@@ -166,16 +187,26 @@ static void configureSession(void *session) {
 static int createSession2(void **out, const void *callbacks, void *user, const void *options) {
     BOOL native = nativeCaller(__builtin_return_address(0));
     int result = H2_ORIGINAL(7, New2Function)(out, callbacks, user, options);
-    if (!result && native && out && *out) beginSession(*out);
+    if (!result && out && *out) {
+        forgetSession(*out);
+        if (native) {
+            SHDWH2Configuration selected = {0};
+            BOOL selectedProfile = YES;
+            if (configurationResolver) selectedProfile = configurationResolver(user, &selected);
+            else selected = configuration;
+            if (selectedProfile && SHDWH2ConfigurationValid(&selected)) beginSession(*out, &selected);
+        }
+    }
     return result;
 }
 static int setSettings(void *session, uint8_t flags, const SHDWH2Setting *settings, size_t count) {
     SettingsFunction original = H2_ORIGINAL(0, SettingsFunction);
-    BOOL first = !(flags & 1u) && claimSettings(session);
+    SHDWH2Configuration selected;
+    BOOL first = !(flags & 1u) && claimSettings(session, &selected);
     if (!first || !nativeCaller(__builtin_return_address(0)) || flags || count > 120 ||
         !clientAllowed(session)) return original(session, flags, settings, count);
     SHDWH2Setting updated[128];
-    size_t length = SHDWH2Settings(&configuration, settings, count, updated, 128);
+    size_t length = SHDWH2Settings(&selected, settings, count, updated, 128);
     if (!length) return original(session, flags, settings, count);
     configureSession(session);
     int result = original(session, flags, updated, length);
@@ -185,36 +216,39 @@ static int setSettings(void *session, uint8_t flags, const SHDWH2Setting *settin
 }
 static int updateWindow(void *session, uint8_t flags, int32_t stream, int32_t increment) {
     WindowFunction original = H2_ORIGINAL(1, WindowFunction);
-    if (stream || flags || increment <= 0 || !nativeCaller(__builtin_return_address(0)) || !claimWindow(session))
+    int32_t updated;
+    if (stream || flags || increment <= 0 || !nativeCaller(__builtin_return_address(0)) || !claimWindow(session, &updated))
         return original(session, flags, stream, increment);
-    int32_t updated = configuration.windowUpdate;
     int result = original(session, flags, stream, updated);
     SHDWCurlTrace(@"http2.window.applied", nil, @{@"result":@(result), @"original":@(increment), @"increment":@(updated)});
     return result;
 }
 static int absoluteWindow(void *session, uint8_t flags, int32_t stream, int32_t size) {
     AbsoluteWindowFunction original = H2_ORIGINAL(2, AbsoluteWindowFunction);
-    if (stream || flags || size <= 0 || !nativeCaller(__builtin_return_address(0)) || !claimWindow(session))
+    int32_t updated;
+    if (stream || flags || size <= 0 || !nativeCaller(__builtin_return_address(0)) || !claimWindow(session, &updated))
         return original(session, flags, stream, size);
-    int32_t updated = 65535 + configuration.windowUpdate;
+    updated += 65535;
     int result = original(session, flags, stream, updated);
     SHDWCurlTrace(@"http2.window.applied", nil, @{@"result":@(result), @"original":@(size), @"absolute":@(updated)});
     return result;
 }
-static SHDWH2Header *orderedHeaders(const SHDWH2Header *headers, size_t count) {
+static SHDWH2Header *orderedHeaders(const SHDWH2Configuration *selected, const SHDWH2Header *headers, size_t count) {
     if (!headers || !count || count > 4096) return NULL;
     SHDWH2Header *copy = malloc(count * sizeof(*copy));
-    if (copy && !SHDWH2Headers(&configuration, headers, count, copy, count)) { free(copy); copy = NULL; }
+    if (copy && !SHDWH2Headers(selected, headers, count, copy, count)) { free(copy); copy = NULL; }
     return copy;
 }
 static int32_t submitRequest(void *session, const void *priority, const SHDWH2Header *headers,
                              size_t count, const void *body, void *user) {
     RequestFunction original = H2_ORIGINAL(3, RequestFunction);
-    if (!nativeCaller(__builtin_return_address(0)) || !tracked(session))
+    SHDWH2Configuration selected;
+    SHDWH2Priority priorityValue;
+    if (!nativeCaller(__builtin_return_address(0)) || !sessionConfiguration(session, YES, &selected, &priorityValue))
         return original(session, priority, headers, count, body, user);
-    SHDWH2Header *copy = orderedHeaders(headers, count);
+    SHDWH2Header *copy = orderedHeaders(&selected, headers, count);
     if (!copy) return original(session, priority, headers, count, body, user);
-    int32_t result = original(session, configuration.noPriority ? NULL : &requestPriority,
+    int32_t result = original(session, selected.noPriority ? NULL : &priorityValue,
                               copy, count, body, user);
     free(copy);
     return result;
@@ -222,20 +256,24 @@ static int32_t submitRequest(void *session, const void *priority, const SHDWH2He
 static int32_t submitHeaders(void *session, uint8_t flags, int32_t stream, const void *priority,
                              const SHDWH2Header *headers, size_t count, void *user) {
     HeadersFunction original = H2_ORIGINAL(4, HeadersFunction);
-    if (!nativeCaller(__builtin_return_address(0)) || !tracked(session))
+    SHDWH2Configuration selected;
+    SHDWH2Priority priorityValue;
+    if (!nativeCaller(__builtin_return_address(0)) || !sessionConfiguration(session, YES, &selected, &priorityValue))
         return original(session, flags, stream, priority, headers, count, user);
-    SHDWH2Header *copy = orderedHeaders(headers, count);
+    SHDWH2Header *copy = orderedHeaders(&selected, headers, count);
     if (!copy) return original(session, flags, stream, priority, headers, count, user);
-    int32_t result = original(session, configuration.noPriority ? flags & ~0x20u : flags,
-                              stream, configuration.noPriority ? NULL : &requestPriority,
+    int32_t result = original(session, selected.noPriority ? flags & ~0x20u : flags,
+                              stream, selected.noPriority ? NULL : &priorityValue,
                               copy, count, user);
     free(copy);
     return result;
 }
 static int submitPriority(void *session, uint8_t flags, int32_t stream, const void *priority) {
-    if (nativeCaller(__builtin_return_address(0)) && tracked(session)) {
-        if (configuration.noPriority || stream == 1) return 0;
-        return H2_ORIGINAL(5, PriorityFunction)(session, flags, stream, &requestPriority);
+    SHDWH2Configuration selected;
+    SHDWH2Priority priorityValue;
+    if (nativeCaller(__builtin_return_address(0)) && sessionConfiguration(session, YES, &selected, &priorityValue)) {
+        if (selected.noPriority || stream == 1) return 0;
+        return H2_ORIGINAL(5, PriorityFunction)(session, flags, stream, &priorityValue);
     }
     return H2_ORIGINAL(5, PriorityFunction)(session, flags, stream, priority);
 }
@@ -245,10 +283,12 @@ static void deleteSession(void *session) {
 }
 BOOL SHDWNativeHTTP2Prepare(const SHDWH2Configuration *selected) {
     if (!SHDWH2ConfigurationValid(selected)) return NO;
+    pthread_mutex_lock(&preparationLock);
+    preparationStarted = YES;
+    pthread_mutex_unlock(&preparationLock);
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         configuration = *selected;
-        requestPriority = (SHDWH2Priority){0, configuration.weight, configuration.exclusive};
         library = dlopen("/usr/lib/libapple_nghttp2.dylib", RTLD_NOW | RTLD_LOCAL);
         if (!library) return;
         const H2Version *(*version)(int) = dlsym(library, "nghttp2_version");
@@ -299,6 +339,7 @@ void SHDWNativeHTTP2Activate(void) {
     if (installed) __atomic_store_n(&enabled, 1, __ATOMIC_RELEASE);
 }
 #else
+BOOL SHDWNativeHTTP2SetConfigurationResolver(SHDWNativeHTTP2ConfigurationResolver resolver) { (void)resolver; return NO; }
 void SHDWNativeHTTP2Activate(void) {}
 BOOL SHDWNativeHTTP2Prepare(const SHDWH2Configuration *selected) { (void)selected; return YES; }
 #endif

@@ -129,6 +129,9 @@ BOOL shdw_nsuserdefaults_suite_restricted(NSString* suitename) {
     return NO;
 }
 
+static BOOL shdw_defaults_restrictions_enabled;
+static unsigned shdw_defaults_domain_attempted;
+
 %group shadowhook_NSUserDefaults
 %hook NSUserDefaults
 - (instancetype)initWithSuiteName:(NSString *)suitename __attribute__((annotate("hookkit:allow_inherited"))) {
@@ -145,10 +148,15 @@ BOOL shdw_nsuserdefaults_suite_restricted(NSString* suitename) {
     return %orig;
 }
 
+%end
+%end
+
+%group shadowhook_NSUserDefaultsDomain
+%hook NSUserDefaults
 - (NSDictionary *)persistentDomainForName:(NSString *)domainName __attribute__((annotate("hookkit:allow_inherited"))) {
     int saved = errno;
     BOOL external = isCallerExternal();
-    if(external && shdw_nsuserdefaults_suite_restricted(domainName)) {
+    if(external && __atomic_load_n(&shdw_defaults_restrictions_enabled, __ATOMIC_ACQUIRE) && shdw_nsuserdefaults_suite_restricted(domainName)) {
         shdw_detector_detected("nsuserdefaults");
         errno = saved;
         return nil;
@@ -162,8 +170,23 @@ BOOL shdw_nsuserdefaults_suite_restricted(NSString* suitename) {
 %end
 %end
 
+static void shdw_install_defaults_domain(void) {
+    unsigned expected = 0;
+    if(__atomic_compare_exchange_n(&shdw_defaults_domain_attempted, &expected, 1, NO,
+            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        %init(shadowhook_NSUserDefaultsDomain);
+    }
+}
+
+void shdw_universal_fingerprint_preferences(SHDWHookSession *hooks) {
+    shdw_libc_install_group(hooks, SHADW_HOOK_GROUP_PREFERENCES);
+    shdw_install_defaults_domain();
+}
+
 void shdw_universal_user_defaults(SHDWHookSession* hooks) {
+    __atomic_store_n(&shdw_defaults_restrictions_enabled, YES, __ATOMIC_RELEASE);
     %init(shadowhook_NSUserDefaults);
+    shdw_install_defaults_domain();
 }
 #import "../../policy/EnvironmentPolicy.h"
 

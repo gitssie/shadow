@@ -21,8 +21,10 @@ source = r'''
 #include <stdarg.h>
 #include "CurlTransport.h"
 #include "CurlHTTP2.h"
+#include "ProfileConfiguration.h"
 static unsigned loads,lookups,initializations,creates,probes,destroys,reentries;
-static unsigned sets,failAt;
+static unsigned sets,failAt,profileReentries;
+static BOOL sharedMode;
 static const char *mode="success",*missing,*expectedProfile="safari184_ios";
 static NSMutableString *callerProfile;
 static CURLcode initialize(long flags) {
@@ -31,6 +33,11 @@ static CURLcode initialize(long flags) {
 }
 static CURL *create(void) {
     assert(!SHDWCurlTransportReady());creates++;
+    if(sharedMode) {
+        SHDWH2Configuration nested={0};nested.count=777;
+        assert(!SHDWTransportCopyHTTP2Configuration(@(expectedProfile),&nested) && nested.count==777);
+        profileReentries++;
+    }
     return !strcmp(mode,"create") ? NULL : (CURL *)1;
 }
 static CURLcode impersonate(CURL *curl,const char *profile,int defaultHeaders) {
@@ -73,7 +80,7 @@ static CURLcode set(CURL *curl,CURLoption option,...) {
 }
 static CURLcode readHTTP2(CURL *curl,char *settings,size_t capacity,char *order,size_t orderCapacity,
                          long *window,long *weight,long *exclusive,long *noPriority) {
-    assert(curl==(CURL *)1 && !SHDWCurlTransportReady() && !destroys);
+    assert(curl==(CURL *)1 && !SHDWCurlTransportReady() && destroys<creates);
     if(!strcmp(mode,"snapshot")) return CURLE_NOT_BUILT_IN;
     const char *preset=!strcmp(expectedProfile,"safari172_ios") ? "2:0;4:2097152;3:100" :
                        !strcmp(expectedProfile,"safari180_ios") ? "2:0;3:100;4:2097152;8:1;9:1" :
@@ -92,8 +99,10 @@ static void *openImage(const char *path,int flags) {
     assert(loads==1);
     // A blocking dispatch_once guard deadlocks here, inside the first load.
     [callerProfile setString:@"changed-after-snapshot"];
-    for (NSString *profile in @[@"safari172_ios",@"safari180_ios",@"safari184_ios",@"safari187_ios"])
-        SHDWCurlTransportPrepareProfile(profile);
+    for (NSString *profile in @[@"safari172_ios",@"safari180_ios",@"safari184_ios",@"safari187_ios"]) {
+        if(sharedMode) { SHDWH2Configuration nested={0};assert(!SHDWTransportCopyHTTP2Configuration(profile,&nested)); }
+        else SHDWCurlTransportPrepareProfile(profile);
+    }
     reentries++;
     assert(loads==1 && !SHDWCurlTransportReady() && !lookups && !initializations);
     return !strcmp(mode,"load") ? NULL : (void *)2;
@@ -112,6 +121,7 @@ static void *lookup(void *image,const char *name) {
 }
 #define dlopen openImage
 #define dlsym lookup
+#include "ProfileConfiguration.m"
 #include "CurlTransport.m"
 static unsigned http2Activations, tlsAttempts;
 void SHDWNativeHTTP2Activate(void) { http2Activations++; }
@@ -138,6 +148,32 @@ BOOL SHDWNativeTLSPrepare(NSString *profile, NSString *library, NSString *CAPath
 NSString *JBPath(NSString *path) { return path; }
 int main(int argc,char **argv) { @autoreleasepool {
     if(argc>1) mode=argv[1];
+    sharedMode=!strcmp(mode,"shared");
+    if(sharedMode) {
+        SHDWH2Configuration value={0};value.count=777;
+        assert(!SHDWTransportCopyHTTP2Configuration(@"safari172_ios",NULL));
+        for(id invalid in @[NSNull.null,@"native",@"unknown",@"",@"safari184_ios\n"])
+            assert(!SHDWTransportCopyHTTP2Configuration(invalid,&value) && !loads && value.count==777);
+        mode="preset";expectedProfile="safari172_ios";
+        assert(!SHDWTransportCopyHTTP2Configuration(@"safari172_ios",&value) && value.count==777);
+        assert(creates==1 && probes==1 && destroys==1 && initializations==1);
+        mode="success";expectedProfile="safari180_ios";
+        assert(SHDWTransportCopyHTTP2Configuration(@"safari180_ios",&value));
+        assert(value.count==5 && creates==2 && destroys==2);
+        for(NSString *profile in @[@"safari172_ios",@"safari180_ios",@"safari184_ios",@"safari187_ios"]) {
+            expectedProfile=profile.UTF8String;
+            assert(SHDWTransportCopyHTTP2Configuration(profile,&value));
+            assert(SHDWNativeHTTP2Prepare(&value));
+            SHDWH2Configuration saved=value;
+            value.count=0;value.settings[0].value=999;
+            unsigned count=creates;
+            assert(SHDWTransportCopyHTTP2Configuration(profile,&value) && !memcmp(&value,&saved,sizeof(value)) && creates==count);
+        }
+        assert(loads==1 && lookups==12 && initializations==1 && creates==5 && probes==5 && destroys==5 && profileReentries==5);
+        assert(!SHDWCurlTransportReady() && !http2Activations && !tlsAttempts);
+        puts("shared profile configuration: one engine, profile isolation, probe-failure isolation, immutable copies and loader/probe reentry passed");
+        return 0;
+    }
     if(argc>2 && *argv[2]) missing=argv[2];
     if(argc>3) expectedProfile=argv[3];
     if(argc>4) failAt=(unsigned)strtoul(argv[4],NULL,10);
@@ -181,6 +217,7 @@ with tempfile.TemporaryDirectory(prefix="shadow-curl-initialization-") as tempor
                     "-framework", "Security", "-I", str(dependency / "include"),
                     "-I", str(root / "src/Shadow.framework/Headers"),
                     "-I", str(root / "src/ShadowCore.dylib/policy"), "-I", str(root / "src/Transport"), str(test), "-o", str(binary)], check=True)
+    subprocess.run([str(binary), "shared"], check=True, timeout=20)
     for profile in ("safari172_ios", "safari180_ios", "safari184_ios", "safari187_ios"):
         for mode in ("success", "load", "init", "create", "preset", "tls", "http2", "snapshot", "malformed"):
             subprocess.run([str(binary), mode, "", profile], check=True, timeout=20)
