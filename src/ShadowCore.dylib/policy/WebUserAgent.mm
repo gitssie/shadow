@@ -43,6 +43,14 @@ BOOL SHDWWebUserAgentInstall(NSString *version) {
         return NO;
     }
     NSString *snapshot = [version copy];
+    NSUInteger components[3] = {0};
+    if (!SHDWFingerprintParseSystemVersion(snapshot, components)) {
+        errno = saved;
+        return NO;
+    }
+    // WebKit freezes the OS token in its default mobile UA for iOS 26+.
+    NSString *userAgentVersion = components[0] >= 26 ? @"18_7" :
+        [snapshot stringByReplacingOccurrencesOfString:@"." withString:@"_"];
     unsigned state = __atomic_load_n(&installState, __ATOMIC_ACQUIRE);
     if (state) {
         BOOL ready = state == 2 && [versionStorage isEqualToString:snapshot];
@@ -65,7 +73,7 @@ BOOL SHDWWebUserAgentInstall(NSString *version) {
     }
     versionStorage = snapshot;
     static NSString *underscoredVersion;
-    underscoredVersion = [snapshot stringByReplacingOccurrencesOfString:@"." withString:@"_"];
+    underscoredVersion = userAgentVersion;
     __atomic_store_n(&stringFromUTF8, factory, __ATOMIC_RELEASE);
     __atomic_store_n(&versionPointer, (uintptr_t)(__bridge void *)underscoredVersion, __ATOMIC_RELEASE);
     BOOL installed = SHDWLocalizationHookFunction(symbol, target, (void *)&MarketingVersion, (void **)&nativeMarketingVersion);

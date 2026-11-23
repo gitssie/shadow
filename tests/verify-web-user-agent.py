@@ -130,6 +130,22 @@ int main(int argc,char **argv) { @autoreleasepool {
         [input setString:@"17.7.2"];
         consume(replacement,"18_4");assert(!nativeCalls && factoryCalls==2);
         assert(install(@"18.4") && !install(input) && hooks==1 && lookups==2);
+    } else if(!strncmp(argv[1],"frozen-",7)) {
+        NSMutableString *input=[@(argv[1]+7) mutableCopy];
+        NSString *requested=[input copy];
+        assert(install(input));
+        [input setString:@"16.3"];
+        consume(replacement,"18_7");
+        assert([versionStorage isEqual:requested]);
+        assert(install(requested) && hooks==1 && lookups==2);
+        assert(!install([requested isEqual:@"27.1"]?@"26.5":@"27.1"));
+        consume(replacement,"18_7");
+    } else if(!strcmp(argv[1],"legacy")) {
+        assert(install(@"18.7.8"));
+        consume(replacement,"18_7_8");
+    } else if(!strcmp(argv[1],"below-freeze")) {
+        assert(install(@"25.9"));
+        consume(replacement,"25_9");
     } else if(!strcmp(argv[1],"terminal")) {
         backendSucceeds=NO;
         assert(!install(@"18.4") && hooks==1 && lookups==2);
@@ -165,6 +181,6 @@ with tempfile.TemporaryDirectory(prefix="shadow-web-user-agent-") as directory:
         "-fsanitize=address,undefined", "-fno-sanitize=function", "-framework", "Foundation", "-I",
         str(root / "src/ShadowCore.dylib/policy"), "-I", str(root / "src/Shadow.framework/Headers"), str(source_path), "-o", str(binary),
     ], check=True)
-    for scenario in ("validation", "retry", "missing-factory", "snapshot", "terminal", "fallback", "without-original"):
+    for scenario in ("validation", "retry", "missing-factory", "snapshot", "frozen-26.0", "frozen-26.5", "frozen-27.1", "legacy", "below-freeze", "terminal", "fallback", "without-original"):
         subprocess.run([str(binary), scenario], check=True, timeout=10)
 print("WebCore UA source: native nontrivial sret slot/ownership, underscored factory output, validation, immutable snapshot, reentrant install, missing-target/factory retry, terminal idempotence, conflict and errno/fallback passed")
