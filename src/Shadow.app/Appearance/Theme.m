@@ -1,6 +1,7 @@
 #import "Theme.h"
 #include <math.h>
 #import "Services/Language.h"
+#import "Services/RegionPresentation.h"
 #import "Views/SheetViewController.h"
 UIColor *SHDWBackground(void) { return [UIColor colorWithRed:245/255.0 green:246/255.0 blue:243/255.0 alpha:1]; }
 UIColor *SHDWInk(void) { return [UIColor colorWithRed:32/255.0 green:41/255.0 blue:45/255.0 alpha:1]; }
@@ -31,6 +32,23 @@ UIImage *SHDWIPSwitchSymbol(CGFloat size) {
         CGSize text = [@"IP" sizeWithAttributes:attributes]; [@"IP" drawAtPoint:CGPointMake((size - text.width) / 2, (size - text.height) / 2) withAttributes:attributes];
     }];
     return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+UIImage *SHDWRegionFilterSymbol(NSString *region) {
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(24, 24)];
+    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        (void)context;
+        [[SHDWSymbol(@"globe", 17) imageWithTintColor:SHDWAccent() renderingMode:UIImageRenderingModeAlwaysOriginal] drawInRect:CGRectMake(1, 1, 18, 18)];
+        [SHDWBackground() setFill]; [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(9, 11, 15, 13) cornerRadius:3] fill];
+        NSString *indicator = SHDWRegionIndicator(region);
+        if (indicator.length) {
+            NSDictionary *attributes = @{NSFontAttributeName:[UIFont systemFontOfSize:12], NSForegroundColorAttributeName:SHDWAccent()};
+            CGSize text = [indicator sizeWithAttributes:attributes];
+            [indicator drawAtPoint:CGPointMake(16.5 - text.width / 2, 17 - text.height / 2) withAttributes:attributes];
+        } else {
+            [[SHDWSymbol(@"line.3.horizontal.decrease", 10) imageWithTintColor:SHDWAccent() renderingMode:UIImageRenderingModeAlwaysOriginal] drawInRect:CGRectMake(11, 14, 12, 8)];
+        }
+    }];
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
 }
 void SHDWShowError(UIViewController *controller, NSError *error) {
     SHDWPresentMessageSheet(controller, SHDWText(@"Operation failed"), error.localizedDescription ?: SHDWText(@"Try again"));

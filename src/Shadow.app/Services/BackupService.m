@@ -58,9 +58,9 @@ static BOOL ValidCurrentIDFV(id value) {
         completion(result, error);
     }];
 }
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending
+- (void)loadCatalogForSearch:(NSString *)search region:(NSString *)region offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending
                   completion:(void (^)(NSDictionary *, NSError *))completion {
-    NSMutableDictionary *query = [SHDWAppStateCatalogQuery(search, nil, offset, SHDWAppStateCatalogPageSize, refresh) mutableCopy];
+    NSMutableDictionary *query = [SHDWAppStateCatalogQuery(search, region, offset, SHDWAppStateCatalogPageSize, refresh) mutableCopy];
     query[@"dateOrder"] = ascending ? @"asc" : @"desc";
     [self queryCatalog:query completion:completion];
 }

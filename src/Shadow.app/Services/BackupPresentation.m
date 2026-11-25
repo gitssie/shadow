@@ -1,4 +1,5 @@
 #import "BackupPresentation.h"
+#import "RegionPresentation.h"
 #import "Language.h"
 #import <Shadow/FingerprintConfiguration.h>
 #import "../../AppState/BackupStatus.h"
@@ -9,6 +10,10 @@ static NSString *Display(id value) { return String(value) ?: SHDWLocalizedText(@
 static NSString *Choice(id value) { return [value isEqual:@"native"] ? SHDWLocalizedText(@"Follow system") : Display(value); }
 static NSDictionary *Row(NSString *label, id value) {
     return @{@"label":SHDWLocalizedText(label), @"value":Display(value)};
+}
+NSString *SHDWBackupRegionIndicator(NSDictionary *snapshot) {
+    NSDictionary *config = Dictionary(snapshot[@"Fingerprint_Config"]);
+    return SHDWRegionIndicator(String(Dictionary(config[@"Localization"])[@"Region"]));
 }
 NSString *SHDWBackupStatusTitle(NSString *status) {
     if (!String(status)) return nil;

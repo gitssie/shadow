@@ -43,7 +43,8 @@ if sys.argv[3] == "queryCatalog":
         assert type(request["refresh"]) is bool, request
         assert request["limit"] == 100 and request["offset"] in (0, 100)
         assert request["search"] in ("", "French 中文")
-        assert request["dateOrder"] == ("asc" if request["offset"] else "desc")
+        assert request["dateOrder"] in ("asc", "desc")
+        assert request.get("region") in (None, "FR", "GB", "US")
     else:
         assert request == {"search": "missing", "offset": 0, "limit": 100}
     result = {"items": [], "total": 0, "nextOffset": 0, "hasMore": False,
@@ -232,17 +233,21 @@ static void Preflight(NSUInteger index,void (^done)(void)) {
     [service performAction:action request:request progress:nil completion:^(id result,NSError *error){Check(!result&&error&&!service.running&&![SHDWOperationCoordinator isRunning],@"preflight/spawn failure gate leak");if(index==0)Check(service.validations==0,@"unknown action invoked transport");if(index<4)Preflight(index+1,done);else done();}];
 }
 static void TypedQuery(NSUInteger index, void (^done)(void)) {
-    if (index == 4) { done(); return; }
-    NSString *search = index == 0 ? @"" : @"French 中文";
-    NSUInteger offset = index == 2 ? 100 : 0;
-    BOOL refresh = index == 0 || index == 3;
+    if (index == 16) { done(); return; }
+    NSString *region = index / 4 == 0 ? nil : @[@"FR",@"GB",@"US"][index / 4 - 1];
+    NSString *search = index % 2 == 0 ? @"" : @"French 中文";
+    NSUInteger offset = index % 3 == 2 ? 100 : 0;
+    BOOL refresh = !offset && index % 2 == 0;
+    BOOL ascending = (index / 2) % 2 != 0;
     TestBackup *service = Service(@"typed-query");
-    [service loadCatalogForSearch:search offset:offset refresh:refresh ascending:offset != 0 completion:^(NSDictionary *page, NSError *error) {
+    [service loadCatalogForSearch:search region:region offset:offset refresh:refresh ascending:ascending completion:^(NSDictionary *page, NSError *error) {
         Check(page && !error && NSThread.isMainThread && !service.running, @"typed catalog callback");
         NSDictionary *request = page[@"request"];
+        Check(region ? [request[@"region"] isEqual:region] : !request[@"region"], @"typed catalog request lost region filter");
         Check([request[@"search"] isEqual:search] && [request[@"offset"] unsignedIntegerValue] == offset &&
             [request[@"refresh"] boolValue] == refresh &&
             CFGetTypeID((__bridge CFTypeRef)request[@"refresh"]) == CFBooleanGetTypeID(), @"typed catalog request lost its boolean or paging fields");
+        Check([request[@"dateOrder"] isEqual:ascending ? @"asc" : @"desc"], @"typed catalog request lost date order");
         TypedQuery(index + 1, done);
     }];
 }

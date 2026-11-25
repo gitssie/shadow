@@ -14,6 +14,16 @@ static NSString *value(NSArray *fields, NSString *label) {
  abort();
 }
 int main(void) { @autoreleasepool {
+ for (NSString *region in @[@"FR",@"GB",@"US",@"DE",@"fr"]) {
+  NSDictionary *entry=@{@"Fingerprint_Config":@{@"Localization":@{@"Region":region}}};
+  NSDictionary *expected=@{@"FR":@"🇫🇷",@"GB":@"🇬🇧",@"US":@"🇺🇸",@"DE":@"DE",@"fr":@"🇫🇷"};
+  assert([SHDWBackupRegionIndicator(entry) isEqual:expected[region]]);
+ }
+ assert(!SHDWBackupRegionIndicator(@{}));
+ for (id region in @[@"",@"native",@"F1",@"法国",NSNull.null,@1,@[]])
+  assert(!SHDWBackupRegionIndicator(@{@"Fingerprint_Config":@{@"Localization":@{@"Region":region}}}));
+ for (id malformed in @[NSNull.null,@1,@[],@{@"Localization":NSNull.null}])
+  assert(!SHDWBackupRegionIndicator(@{@"Fingerprint_Config":malformed}));
  NSMutableDictionary *config=[@{@"System":@{@"Mode":@"profile",@"ProfileID":@"unknown-profile"},@"Localization":[SHDWFingerprintConfiguration localizationForRegion:@"FR"],@"Network":@{@"Transport":@"native",@"RadioTechnologies":@[@"5g",@"ignored",@"4g"]}} mutableCopy];
  NSMutableDictionary *snapshot=[@{@"title":@"Saved name",@"note":@"Saved note: a complete multiline description which must remain available in full without ellipsis, including every trailing character.\nSecond line: preserved end.",@"version":@"1.2.3",@"build":@"99",@"date":[NSDate dateWithTimeIntervalSince1970:0],@"idfv":@"ABCDEF12-3456-7890-ABCD-1234567890AB",@"digest":@"saved-digest",@"owner":@"rv",@"size":@1024,@"status":@"backed_up",@"Fingerprint_Config":config} mutableCopy];
  NSDictionary *before=[NSPropertyListSerialization propertyListWithData:[NSPropertyListSerialization dataWithPropertyList:snapshot format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL] options:0 format:NULL error:NULL];
@@ -246,5 +256,5 @@ code = code.replace(" NSMutableDictionary *config=", " verifyToggle(); verifyDet
 with tempfile.TemporaryDirectory(prefix="shadow-backup-details-") as directory:
     path = Path(directory)
     (path / "test.m").write_text(code)
-    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-framework", "Foundation", "-I"+str(ROOT/"src/Shadow.framework/Headers"), "-I"+str(ROOT/"src/Shadow.app/Services"), str(path/"test.m"), str(ROOT/"src/Shadow.app/Services/BackupPresentation.m"), str(ROOT/"src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(path/"test")], check=True)
+    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-framework", "Foundation", "-I"+str(ROOT/"src/Shadow.framework/Headers"), "-I"+str(ROOT/"src/Shadow.app/Services"), str(path/"test.m"), str(ROOT/"src/Shadow.app/Services/BackupPresentation.m"), str(ROOT/"src/Shadow.app/Services/RegionPresentation.m"), str(ROOT/"src/Shadow.framework/Fingerprint/Configuration.m"), "-o", str(path/"test")], check=True)
     subprocess.run([str(path/"test")], check=True)

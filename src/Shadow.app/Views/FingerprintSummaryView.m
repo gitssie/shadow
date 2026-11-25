@@ -1,5 +1,6 @@
 #import "FingerprintSummaryView.h"
 #import "Appearance/Theme.h"
+#import "Services/RegionPresentation.h"
 #include <math.h>
 @interface SHDWFingerprintSummaryView ()
 @property(nonatomic, strong) UILabel *updatedAt;
@@ -46,7 +47,8 @@
     } return self;
 }
 - (void)showSystemVersion:(NSString *)version region:(NSString *)region tlsEnabled:(BOOL)tlsEnabled {
-    self.value.text = [NSString stringWithFormat:@"%@ · %@", version, region];
+    NSString *indicator = SHDWRegionIndicator(region);
+    self.value.text = indicator.length ? [NSString stringWithFormat:@"%@ · %@", version, indicator] : version;
     self.tlsIcon.hidden = !tlsEnabled;
     self.details.accessibilityValue = tlsEnabled ? SHDWText(@"TLS fingerprint") : nil;
     self.details.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", self.value.text, self.updatedAt.text ?: @"—"];

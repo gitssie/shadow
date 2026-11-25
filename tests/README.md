@@ -228,6 +228,10 @@ simulates older iOS JSON1 function flags. Shared query tests exercise Manager's
 boolean encoding across property-list IPC and reject malformed query options.
 Controller checks execute automatic scroll pagination, concurrent-request guards,
 footer loading, failed-page retries and query-error recovery with view doubles.
+Region filtering checks cover the flag cycle, query gates and search/order/paging
+preservation; service checks verify the region reaches the catalog request.
+Selection checks execute shared home/backup selection reloads and stale home
+operation notifications, including deferred reloads and removed applications.
 
 This target
 does not verify UIKit rendering or device entitlements and is not in `test` or CI.

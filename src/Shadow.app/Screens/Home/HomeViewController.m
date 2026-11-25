@@ -154,7 +154,7 @@ static NSString *const SHDWSelectedApplicationKey = @"SelectedApplicationBundleI
         });
     });
 }
-- (void)activityChanged { if (self.isViewLoaded) [self renderSelection]; }
+- (void)activityChanged { if (self.isViewLoaded) [self reloadApplications]; }
 - (void)presentCleanupForApplication:(SHDWInstalledApplication *)application { [self presentCleanupForApplication:application automatically:NO]; }
 - (void)presentCleanupForApplication:(SHDWInstalledApplication *)application automatically:(BOOL)automatically {
     if ([SHDWOperationCoordinator isRunning] || !self.view.window || self.tabBarController.selectedViewController != self.navigationController) return;

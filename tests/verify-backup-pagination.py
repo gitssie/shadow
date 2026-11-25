@@ -24,11 +24,13 @@ def method(source, signature):
 PRELUDE = r'''
 #import <Foundation/Foundation.h>
 #import "Services/BackupPolicy.h"
+#import "Services/RegionPresentation.h"
 #include <stdio.h>
 #include <stdlib.h>
 enum { UIControlStateNormal, UIAccessibilityAnnouncementNotification };
 static void UIAccessibilityPostNotification(int value, id message) { (void)value; (void)message; }
 static NSString *SHDWText(NSString *value) { return value; }
+static id __attribute__((unused)) SHDWRegionFilterSymbol(NSString *region) { return [@"region-filter-" stringByAppendingString:region ?: @"none"]; }
 static id SHDWAccent(void) { return @"accent"; }
 static NSString *CanonicalIDFV(NSString *value) { return value.length ? value : nil; }
 static NSString *ProgressTitle(NSDictionary *event) { return event[@"stage"]; }
@@ -48,8 +50,9 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @property CGRect bounds;
 @property CGSize contentSize;
 @property UIEdgeInsets adjustedContentInset;
-@property(copy) NSString *text, *bundleIdentifier, *accessibilityLabel;
+@property(copy) NSString *text, *bundleIdentifier, *accessibilityLabel, *accessibilityValue, *title;
 @property(strong) id textColor, tableFooterView, image, tintColor;
+- (void)setImage:(id)image forState:(NSInteger)state;
 - (void)setWorking:(BOOL)value;
 - (void)setTitle:(NSString *)title forState:(NSInteger)state;
 - (void)reloadData;
@@ -58,6 +61,7 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 - (void)stopAnimating;
 @end
 @implementation UIView
+- (void)setImage:(id)image forState:(NSInteger)state { (void)state; self.image=image; }
 - (void)setWorking:(BOOL)value { (void)value; }
 - (void)setTitle:(NSString *)title forState:(NSInteger)state { (void)state; self.text=title; }
 - (void)reloadData {}
@@ -77,17 +81,17 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @property(copy) void (^operationCompletion)(id, NSError *);
 @property(copy) void (^operationProgress)(NSDictionary *);
 @property NSUInteger offset, requests;
-@property(copy) NSString *search;
+@property(copy) NSString *search, *region;
 @property BOOL refresh, ascending;
 @property BOOL running;
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending completion:(void (^)(NSDictionary *, NSError *))completion;
+- (void)loadCatalogForSearch:(NSString *)search region:(NSString *)region offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending completion:(void (^)(NSDictionary *, NSError *))completion;
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(void (^)(NSDictionary *))progress completion:(void (^)(id, NSError *))completion;
 - (void)finishPage:(NSDictionary *)page error:(NSError *)error;
 @end
 @implementation Service
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending completion:(void (^)(NSDictionary *, NSError *))completion {
+- (void)loadCatalogForSearch:(NSString *)search region:(NSString *)region offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending completion:(void (^)(NSDictionary *, NSError *))completion {
     NSCAssert(!self.pageCompletion, @"overlapping requests");
-    self.ascending=ascending; self.search=search; self.offset=offset; self.refresh=refresh; self.requests++; self.pageCompletion=completion;
+    self.ascending=ascending; self.region=region; self.search=search; self.offset=offset; self.refresh=refresh; self.requests++; self.pageCompletion=completion;
 }
 - (void)performAction:(NSString *)action request:(NSDictionary *)request progress:(void (^)(NSDictionary *))progress completion:(void (^)(id, NSError *))completion {
     (void)action; (void)request; self.operationProgress=progress; self.operationCompletion=completion;
@@ -99,14 +103,15 @@ typedef struct { CGFloat top, left, bottom, right; } UIEdgeInsets;
 @end
 @interface Controller : NSObject
 @property(strong) Service *service;
-@property(strong) UIView *searchField, *status, *table, *tableHeight, *selector, *action, *pagingSpinner, *listBackground, *listSpinner, *selected, *emptyIcon, *sortButton;
+@property(strong) UIView *regionButton, *searchField, *status, *table, *tableHeight, *selector, *action, *pagingSpinner, *listBackground, *listSpinner, *selected, *emptyIcon, *sortButton;
 @property(nonatomic,copy) NSArray *catalog, *visibleCatalog;
 @property(copy) NSDictionary *currentBackup;
-@property(copy) NSString *liveIDFV;
+@property(copy) NSString *liveIDFV, *regionFilter;
 @property BOOL loading, loadingMore, working, queryPending, catalogFailed, refreshCatalog, reloadPending, restorePending, hasMore, catalogErrorVisible, dateAscending;
 @property NSUInteger loadGeneration, nextOffset;
 - (void)loadCatalog;
 - (void)toggleDateOrder;
+- (void)toggleRegion;
 - (void)loadMore;
 - (void)loadMoreIfNeeded;
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView;
@@ -222,6 +227,41 @@ int main(void) { @autoreleasepool {
     [s finishPage:Page(@[second],2,NO) error:nil]; [c toggleDateOrder];
     Check(!c.dateAscending && !s.ascending && s.offset==0 && [c.sortButton.image isEqual:@"clock"] && [c.sortButton.tintColor isEqual:SHDWAccent()],@"second toggle returns to descending first page");
     [s finishPage:Page(@[second],1,NO) error:nil];
+    // Region filtering cycles directly like sorting, preserves search/order and resets paging.
+    c.regionButton=[UIView new];
+    for (NSString *code in @[@"FR",@"GB",@"US",@""]) {
+        [c toggleRegion];
+        Check([(c.regionFilter ?: @"") isEqual:code] && [(s.region ?: @"") isEqual:code],@"region cycle reaches the service");
+        Check(s.offset==0 && [s.search isEqual:@"sort search"] && !s.ascending,@"region change resets page while preserving search and order");
+        Check(!c.regionButton.enabled,@"region button disabled during query");
+        Check([c.regionButton.image isEqual:SHDWRegionFilterSymbol(code.length ? code : nil)] && !c.regionButton.title,@"region selection always uses an image without switching to a title");
+        NSString *selected=c.regionFilter; [c toggleRegion];
+        Check(c.regionFilter==selected,@"in-flight request blocks region change");
+        [s finishPage:Page(@[first],1,YES) error:nil]; [c loadMore];
+        Check(s.offset==1 && [(s.region ?: @"") isEqual:code],@"pagination retains selected region");
+        [s finishPage:Page(@[second],2,NO) error:nil];
+    }
+    c.working=YES; NSUInteger beforeRegionRequests=s.requests; [c toggleRegion];
+    Check(!c.regionFilter && s.requests==beforeRegionRequests,@"backup operation blocks region change"); c.working=NO;
+    for (NSString *region in @[@"",@"FR",@"GB",@"US"]) {
+        if (![(c.regionFilter ?: @"") isEqual:region]) { [c toggleRegion]; [s finishPage:Page(@[],0,NO) error:nil]; }
+        for (NSString *search in @[@"",@"combined search"]) {
+            c.searchField.text=search;
+            for (NSNumber *ascending in @[@NO,@YES]) {
+                if (c.dateAscending!=ascending.boolValue) [c toggleDateOrder]; else [c loadCatalog];
+                Check([(s.region ?: @"") isEqual:region] && [s.search isEqual:search] && s.ascending==ascending.boolValue && s.offset==0,@"combined first page retains region, search and order");
+                [s finishPage:Page(@[first],1,YES) error:nil]; [c loadMore];
+                Check([(s.region ?: @"") isEqual:region] && [s.search isEqual:search] && s.ascending==ascending.boolValue && s.offset==1,@"combined next page retains all three conditions");
+                [s finishPage:Page(@[second],2,NO) error:nil];
+            }
+        }
+    }
+    [c loadCatalog]; c.searchField.text=@"new search during region query"; c.queryPending=YES;
+    [s finishPage:Page(@[first],1,YES) error:nil];
+    Check([s.region isEqual:@"US"] && s.ascending && [s.search isEqual:c.searchField.text] && s.offset==0,@"pending search restarts with current region and order instead of accepting stale results");
+    [s finishPage:Page(@[],0,NO) error:nil];
+    [c toggleRegion]; [s finishPage:Page(@[first],1,NO) error:nil];
+    Check(!s.region && [s.search isEqual:c.searchField.text] && s.ascending,@"clearing country preserves search and sort");
     // A restore can change identity after the controller sampled preferences.
     c.liveIDFV=@"previous";
     [c loadCatalog]; [s finishPage:Page(@[first],1,NO) error:nil];
@@ -269,7 +309,7 @@ def main():
         raise SystemExit("This optional check requires macOS Foundation")
     source = SOURCE.read_text()
     signatures = [
-        "- (void)setCatalog:", "- (void)toggleDateOrder {", "- (void)loadCatalog {", "- (void)loadMore {",
+        "- (void)setCatalog:", "- (void)toggleDateOrder {", "- (void)toggleRegion {", "- (void)loadCatalog {", "- (void)loadMore {",
         "- (void)loadMoreIfNeeded {", "- (void)scrollViewDidScroll:",
         "- (void)scrollViewWillBeginDragging:",
         "- (void)loadPage:", "- (NSDictionary *)currentSnapshot",
@@ -286,7 +326,7 @@ def main():
         subprocess.run(["xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-O1",
                         "-framework", "Foundation", "-framework", "CoreGraphics", "-I" + str(ROOT / "src/Shadow.app"),
-                        str(harness), "-o", str(binary)], check=True)
+                        str(harness), str(ROOT / "src/Shadow.app/Services/RegionPresentation.m"), "-o", str(binary)], check=True)
         env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:abort_on_error=1",
                    UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1")
         subprocess.run([str(binary)], env=env, check=True, timeout=30)

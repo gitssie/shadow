@@ -58,6 +58,16 @@ int main(int argc,char **argv){@autoreleasepool{
  page=[index queryBundle:@"app.one" query:@{@"dateOrder":@"asc",@"offset":@1,@"limit":@1} currentIDFV:@"C" error:&error];assert([page[@"items"][0][@"idfv"]isEqual:@"A"]);
  for(id order in @[@"ASC",@"invalid",@1])assert(![index queryBundle:@"app.one" query:@{@"dateOrder":order} currentIDFV:nil error:NULL]);
  page=[index queryBundle:@"app.one" query:@{@"region":@"FR"} currentIDFV:nil error:&error];assert([page[@"total"]intValue]==2);
+ for(NSString *region in @[@"",@"FR",@"GB",@"US"])for(NSString *search in @[@"",@"ÉTÉ"])for(NSString *order in @[@"asc",@"desc"]){
+  NSArray *ordered=[order isEqual:@"asc"]?@[a,b,c]:@[c,b,a];NSMutableArray *expectedIDs=[NSMutableArray new];
+  for(NSDictionary *entry in ordered)if((!region.length||[entry[@"Fingerprint_Config"][@"Localization"][@"Region"]isEqual:region])&&(!search.length||[entry[@"idfv"]isEqual:@"A"]))[expectedIDs addObject:entry[@"idfv"]];
+  for(NSUInteger offset=0;offset<=expectedIDs.count;offset++){
+   NSMutableDictionary *query=[@{@"search":search,@"dateOrder":order,@"limit":@1,@"offset":@(offset)}mutableCopy];if(region.length)query[@"region"]=region;
+   NSDictionary *combined=[index queryBundle:@"app.one" query:query currentIDFV:nil error:&error];assert(combined&&[combined[@"total"]unsignedIntegerValue]==expectedIDs.count);
+   if(offset<expectedIDs.count){assert([combined[@"items"]count]==1);assert([combined[@"items"][0][@"idfv"]isEqual:expectedIDs[offset]]);assert([combined[@"hasMore"]boolValue]==(offset+1<expectedIDs.count));}
+   else assert([combined[@"items"]count]==0);
+  }
+ }
  for(NSString *search in @[@"ÉTÉ",@"100%_",@"café",@"  ÉTÉ \n"]){page=[index queryBundle:@"app.one" query:@{@"search":search} currentIDFV:nil error:&error];assert([page[@"total"]intValue]==([search containsString:@"ÉTÉ"]?1:3));}
  assert([index setStatus:@"restored" bundle:@"app.one" idfv:@"A" error:&error]);assert([[index entryForBundle:@"app.one" idfv:@"A" error:&error][@"status"]isEqual:@"restored"]);
  assert((![index replaceEntries:@[b,@{}] forBundle:@"app.one" error:&error]));assert([index identifiersForBundle:@"app.one" error:NULL].count==3);assert([index identifiersForBundle:@"app.two" error:NULL].count==1);

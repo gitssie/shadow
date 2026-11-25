@@ -7,7 +7,7 @@ typedef void (^SHDWBackupCompletion)(id _Nullable result, NSError * _Nullable er
 - (instancetype)initWithBundleIdentifier:(NSString *)bundleIdentifier;
 - (void)loadCatalog:(void (^)(NSArray * _Nullable items, NSError * _Nullable error))completion;
 - (void)loadCatalogWithIdentity:(void (^)(NSDictionary * _Nullable catalog, NSError * _Nullable error))completion;
-- (void)loadCatalogForSearch:(NSString *)search offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending
+- (void)loadCatalogForSearch:(NSString *)search region:(nullable NSString *)region offset:(NSUInteger)offset refresh:(BOOL)refresh ascending:(BOOL)ascending
                   completion:(void (^)(NSDictionary * _Nullable page, NSError * _Nullable error))completion;
 - (void)setDeleteLocked:(BOOL)locked forIDFV:(NSString *)idfv completion:(SHDWBackupCompletion)completion;
 - (void)performAction:(NSString *)action request:(NSDictionary *)request
